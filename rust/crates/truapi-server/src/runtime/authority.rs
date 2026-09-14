@@ -273,6 +273,16 @@ pub(crate) enum ProductDeviceChatAuthorityRequest {
         product_account_id: ProductAccountId,
         payload: Vec<u8>,
     },
+    Identity {
+        calling_product_id: String,
+    },
+    VerifyPeerDevice {
+        calling_product_id: String,
+        peer_identity_account_id: [u8; 32],
+        peer_chat_public_key: [u8; 32],
+        peer_device_account_id: [u8; 32],
+        proof: [u8; 32],
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -552,7 +562,18 @@ pub(super) fn execute_product_device_chat(
         | ProductDeviceChatAuthorityRequest::Open {
             peer_chat_public_key,
             ..
+        }
+        | ProductDeviceChatAuthorityRequest::VerifyPeerDevice {
+            peer_chat_public_key,
+            ..
         } => *peer_chat_public_key,
+        ProductDeviceChatAuthorityRequest::Identity { .. } => {
+            return Ok(HostProductDeviceChatResponse::Identity {
+                identity_account_id,
+                chat_public_key: PublicKey::from(&StaticSecret::from(*identity_chat_private_key))
+                    .to_bytes(),
+            });
+        }
         ProductDeviceChatAuthorityRequest::SignRequestProof { .. } => {
             return Err(ProductDeviceChatAuthorityError::Unavailable(
                 "Chat request proof signing must be handled by the product signing authority"
@@ -578,16 +599,11 @@ pub(super) fn execute_product_device_chat(
             peer_identity_account_id,
             ..
         } => {
-            let context = b"mds-chat-request";
-            let mut payload = Vec::with_capacity(65 + context.len());
-            payload.extend_from_slice(&identity_account_id);
-            payload.extend_from_slice(&device_account_id);
-            payload.push((context.len() as u8) << 2);
-            payload.extend_from_slice(context);
-            let proof = blake2b_simd::Params::new()
-                .hash_length(32)
-                .key(shared_secret.as_ref())
-                .hash(&payload);
+            let proof = chat_device_identity_proof(
+                &shared_secret,
+                &identity_account_id,
+                &device_account_id,
+            );
             let mut proof_bytes = [0; 32];
             proof_bytes.copy_from_slice(proof.as_bytes());
             let wallet_own_session_id = chat_identity_session_id(
@@ -617,6 +633,22 @@ pub(super) fn execute_product_device_chat(
                 peer_own_session_id,
                 wallet_outgoing_channel_id,
                 wallet_incoming_channel_id,
+            })
+        }
+        ProductDeviceChatAuthorityRequest::VerifyPeerDevice {
+            peer_identity_account_id,
+            peer_device_account_id,
+            proof,
+            ..
+        } => {
+            let expected = chat_device_identity_proof(
+                &shared_secret,
+                &peer_identity_account_id,
+                &peer_device_account_id,
+            );
+            // Hash's slice comparison is constant-time for this fixed length.
+            Ok(HostProductDeviceChatResponse::PeerDeviceVerified {
+                valid: expected.eq(proof.as_slice()),
             })
         }
         ProductDeviceChatAuthorityRequest::Seal {
@@ -687,6 +719,9 @@ pub(super) fn execute_product_device_chat(
                 .map_err(|_| ProductDeviceChatAuthorityError::InvalidCiphertext)?;
             Ok(HostProductDeviceChatResponse::Opened { plaintext })
         }
+        ProductDeviceChatAuthorityRequest::Identity { .. } => {
+            unreachable!("public identity returns before shared-key derivation")
+        }
         ProductDeviceChatAuthorityRequest::SignRequestProof { .. } => {
             Err(ProductDeviceChatAuthorityError::Unavailable(
                 "Chat request proof signing must be handled by the product signing authority"
@@ -694,6 +729,23 @@ pub(super) fn execute_product_device_chat(
             ))
         }
     };
+
+    fn chat_device_identity_proof(
+        shared_secret: &[u8; 32],
+        identity: &[u8; 32],
+        device: &[u8; 32],
+    ) -> blake2b_simd::Hash {
+        const CONTEXT: &[u8] = b"mds-chat-request";
+        let mut payload = [0; 65 + CONTEXT.len()];
+        payload[..32].copy_from_slice(identity);
+        payload[32..64].copy_from_slice(device);
+        payload[64] = (CONTEXT.len() as u8) << 2;
+        payload[65..].copy_from_slice(CONTEXT);
+        blake2b_simd::Params::new()
+            .hash_length(32)
+            .key(shared_secret)
+            .hash(&payload)
+    }
 
     fn product_device_chat_aead_material(
         shared_secret: &[u8; 32],
@@ -906,6 +958,44 @@ mod tests {
             wallet_incoming_channel_id,
             hex32("19de8cf16554a8463d0f8af7ad23717f4106463af331ee33f297b7367c8fe9fa")
         );
+    }
+
+    #[test]
+    fn peer_device_binding_verifies_reciprocally_and_rejects_substitution() {
+        let sender_key =
+            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([0x11; 32])).to_bytes();
+        // Independent iOS-compatible binding vector from the sender test above.
+        let proof = hex32("0263d1995da865e34e06de38b4f4c0c88524e2e591b1ae6714578219bffad333");
+        let verify = |identity, device, binding| {
+            execute_product_device_chat(
+                &[0x22; 32],
+                [0x55; 32],
+                ProductDeviceChatAuthorityRequest::VerifyPeerDevice {
+                    calling_product_id: "egui-chat.paseo".to_string(),
+                    peer_identity_account_id: identity,
+                    peer_chat_public_key: sender_key,
+                    peer_device_account_id: device,
+                    proof: binding,
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            verify([0x33; 32], [0x44; 32], proof),
+            HostProductDeviceChatResponse::PeerDeviceVerified { valid: true }
+        );
+        let mut corrupted = proof;
+        corrupted[31] ^= 1;
+        for (identity, device, binding) in [
+            ([0x34; 32], [0x44; 32], proof),
+            ([0x33; 32], [0x45; 32], proof),
+            ([0x33; 32], [0x44; 32], corrupted),
+        ] {
+            assert_eq!(
+                verify(identity, device, binding),
+                HostProductDeviceChatResponse::PeerDeviceVerified { valid: false }
+            );
+        }
     }
 
     #[test]

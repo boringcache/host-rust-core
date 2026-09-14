@@ -554,6 +554,24 @@ impl PairingHost {
                     payload,
                 },
             ),
+            ProductDeviceChatAuthorityRequest::Identity { calling_product_id } => {
+                (calling_product_id, SsoProductDeviceChatOperation::Identity)
+            }
+            ProductDeviceChatAuthorityRequest::VerifyPeerDevice {
+                calling_product_id,
+                peer_identity_account_id,
+                peer_chat_public_key,
+                peer_device_account_id,
+                proof,
+            } => (
+                calling_product_id,
+                SsoProductDeviceChatOperation::VerifyPeerDevice {
+                    peer_identity_account_id,
+                    peer_chat_public_key,
+                    peer_device_account_id,
+                    proof,
+                },
+            ),
         };
         self.call(
             cx,

@@ -611,6 +611,21 @@ impl SigningHostSsoService {
                 calling_product_id,
                 payload,
             },
+            SsoProductDeviceChatOperation::Identity => {
+                ProductDeviceChatAuthorityRequest::Identity { calling_product_id }
+            }
+            SsoProductDeviceChatOperation::VerifyPeerDevice {
+                peer_identity_account_id,
+                peer_chat_public_key,
+                peer_device_account_id,
+                proof,
+            } => ProductDeviceChatAuthorityRequest::VerifyPeerDevice {
+                calling_product_id,
+                peer_identity_account_id,
+                peer_chat_public_key,
+                peer_device_account_id,
+                proof,
+            },
         };
         self.signing_host
             .product_device_chat(&cx.call, &cx.session, authority_request)

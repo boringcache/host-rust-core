@@ -373,6 +373,19 @@ pub enum SsoProductDeviceChatOperation {
         /// Canonical SCALE-encoded Chat request proof payload.
         payload: Vec<u8>,
     },
+    /// Read the authorized wallet's public Chat identity.
+    Identity,
+    /// Verify an incoming peer's identity-to-device binding.
+    VerifyPeerDevice {
+        /// Peer wallet identity account.
+        peer_identity_account_id: [u8; 32],
+        /// Peer's independently resolved X25519 Chat public key.
+        peer_chat_public_key: [u8; 32],
+        /// Device account authenticated by the signed request.
+        peer_device_account_id: [u8; 32],
+        /// Keyed identity binding from the request.
+        proof: [u8; 32],
+    },
 }
 
 /// Product-device Chat v2 response returned by the Account Holder.

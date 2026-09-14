@@ -345,6 +345,12 @@ impl Account for ProductRuntimeHost {
             }
             | v01::HostProductDeviceChatRequest::SignRequestProof {
                 product_account_id, ..
+            }
+            | v01::HostProductDeviceChatRequest::Identity {
+                product_account_id, ..
+            }
+            | v01::HostProductDeviceChatRequest::VerifyPeerDevice {
+                product_account_id, ..
             } => product_account_id.clone(),
         };
         let product_account_id =
@@ -425,6 +431,24 @@ impl Account for ProductRuntimeHost {
                     payload,
                 }
             }
+            v01::HostProductDeviceChatRequest::Identity { .. } => {
+                ProductDeviceChatAuthorityRequest::Identity {
+                    calling_product_id: self.product_id(),
+                }
+            }
+            v01::HostProductDeviceChatRequest::VerifyPeerDevice {
+                peer_identity_account_id,
+                peer_chat_public_key,
+                peer_device_account_id,
+                proof,
+                ..
+            } => ProductDeviceChatAuthorityRequest::VerifyPeerDevice {
+                calling_product_id: self.product_id(),
+                peer_identity_account_id,
+                peer_chat_public_key,
+                peer_device_account_id,
+                proof,
+            },
         };
         remote_authority_call(
             &cx,
