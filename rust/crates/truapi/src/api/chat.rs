@@ -5,8 +5,7 @@ use crate::versioned::chat::{
     HostChatActionSubscribeItem, HostChatCreateRoomError, HostChatCreateRoomRequest,
     HostChatCreateRoomResponse, HostChatListSubscribeItem, HostChatPostMessageError,
     HostChatPostMessageRequest, HostChatPostMessageResponse, HostChatRegisterBotError,
-    HostChatRegisterBotRequest, HostChatRegisterBotResponse, ProductChatCustomMessageRenderItem,
-    ProductChatCustomMessageRenderRequest,
+    HostChatRegisterBotRequest, HostChatRegisterBotResponse,
 };
 use crate::{CallContext, CallError, Subscription};
 use crate::{wire, wire_trait};
@@ -123,19 +122,5 @@ pub trait Chat: Send + Sync {
         Subscription::interrupted(CallError::unavailable())
     }
 
-    /// Streams renderer trees for one stored custom message.
-    ///
-    /// ```ts
-    /// truapi.chat.onCustomMessageRender(({ messageType, payload }, send) => {
-    ///   send({ tag: "String", value: { text: `${messageType}: ${payload}` } });
-    /// });
-    /// ```
-    #[wire(host_initiated, id = 5)]
-    fn custom_message_render(
-        &self,
-        _cx: &CallContext,
-        _request: ProductChatCustomMessageRenderRequest,
-    ) -> Subscription<ProductChatCustomMessageRenderItem, CallError<GenericError>> {
-        Subscription::interrupted(CallError::unavailable())
-    }
+    // Id 5 is spent and must never be reassigned; the next method takes 6.
 }
