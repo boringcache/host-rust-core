@@ -54,6 +54,7 @@ pub(crate) use signing_host::{
     LocalActivation, SigningHost as SigningHostRole, SigningHostSsoService, establish_pairing,
     respond_to_pairing, resume_pairing,
 };
+pub use signing_host::{LocalIdentity, LocalIdentityContext};
 pub use signing_host::{PairedSsoPeer, ResponderExit};
 use tracing::{instrument, warn};
 use truapi::api::Chat;

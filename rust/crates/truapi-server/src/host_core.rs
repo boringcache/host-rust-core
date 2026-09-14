@@ -805,6 +805,54 @@ impl SigningHostRuntime {
             })
     }
 
+    /// Capture the local activation fence for a multi-step identity operation.
+    pub fn local_identity_context(
+        &self,
+    ) -> Result<crate::runtime::LocalIdentityContext, v01::GenericError> {
+        self.signing_host.local_identity_context()
+    }
+
+    /// Sign a backend challenge as the active UID account, with the exact `{}` token body.
+    pub fn local_identity_auth_proof(
+        &self,
+        activation_id: &str,
+        challenge: &[u8],
+    ) -> Result<Vec<u8>, v01::GenericError> {
+        self.signing_host
+            .local_identity_auth_proof(activation_id, challenge)
+    }
+
+    /// Build the backend registration JSON using native proofs and Asset Hub time.
+    pub async fn local_lite_registration_body(
+        &self,
+        activation_id: &str,
+        username_base: &str,
+        verifier: [u8; 32],
+    ) -> Result<String, v01::GenericError> {
+        self.signing_host
+            .local_lite_registration_body(activation_id, username_base, verifier)
+            .await
+    }
+
+    /// Refresh authoritative metadata, rejecting a result for a replaced activation.
+    pub async fn refresh_local_identity_for(
+        &self,
+        activation_id: &str,
+    ) -> Result<crate::runtime::LocalIdentity, v01::GenericError> {
+        self.signing_host
+            .refresh_local_identity(activation_id)
+            .await
+    }
+
+    /// Resolve and install the active local UID account's on-chain identity.
+    pub async fn refresh_local_identity(
+        &self,
+    ) -> Result<crate::runtime::LocalIdentity, v01::GenericError> {
+        let context = self.local_identity_context()?;
+        self.refresh_local_identity_for(&context.activation_id)
+            .await
+    }
+
     /// Answer a pairing host's handshake deeplink and serve the resulting SSO
     /// session until it ends.
     #[instrument(skip_all, fields(runtime.method = "signing_host_runtime.respond_to_pairing"))]
