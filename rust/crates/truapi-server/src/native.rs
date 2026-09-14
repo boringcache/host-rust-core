@@ -36,6 +36,7 @@ use crate::host_logic::sso::messages::{
     RemoteMessage, RemoteMessageData, SsoRequestOutcome as CoreSsoRequestOutcome,
     decode_remote_message, v1,
 };
+use crate::host_logic::worker::WorkerTransition;
 #[cfg(feature = "ws-bridge")]
 use crate::native_renderer::observe_renderer;
 use crate::native_renderer::{NativeCustomRendererObserver, NativeCustomRendererSubscription};
@@ -519,6 +520,23 @@ pub trait HostCallbacks: Send + Sync {
     /// promptly.
     fn supported_chains(&self) -> Result<truapi_platform::HostChainSet, HostRejection>;
 
+    /// Observe demand on a product's worker crossing zero. `Start` means the
+    /// host runs the worker now, `Stop` that nothing wants it any more. Every
+    /// transition arrives here, in ledger order: the ones the host asks for
+    /// through [`NativeTrUApiHostRuntime::acquire_worker`] and
+    /// [`NativeTrUApiHostRuntime::release_worker`], and the ones the core
+    /// causes on a product's behalf, such as an open render stream.
+    ///
+    /// Demand is runtime-wide, so this is invoked only on the callbacks the
+    /// runtime was built with, never on the per-execution callbacks passed to
+    /// [`NativeTrUApiHostRuntime::open_product_execution`]. Can arrive on any
+    /// thread, including synchronously on the calling thread during
+    /// [`NativeTrUApiHostRuntime::acquire_worker`] and
+    /// [`NativeTrUApiHostRuntime::release_worker`], often the caller's own
+    /// thread and re-entrantly: hand the transition off rather than blocking
+    /// on another thread from inside it.
+    fn worker_demand_changed(&self, product_id: String, transition: WorkerTransition);
+
     /// Read a value from the host's scoped key-value store.
     fn local_storage_read(&self, key: String) -> Result<Option<Vec<u8>>, HostStorageError>;
     /// Write a value to the host's scoped key-value store.
@@ -574,7 +592,8 @@ pub struct NativeTrUApiHostRuntime {
     events: Arc<NativeEventBus>,
     #[cfg(feature = "ws-bridge")]
     spawner: Spawner,
-    chat_executions: Mutex<HashMap<String, Weak<NativeProductExecution>>>,
+    /// The one Worker execution per product; opening another replaces it.
+    worker_executions: Mutex<HashMap<String, Weak<NativeProductExecution>>>,
 }
 
 impl NativeTrUApiHostRuntime {
@@ -593,10 +612,14 @@ impl NativeTrUApiHostRuntime {
         });
         let spawner = native_thread_pool_spawner(&callbacks);
         let runtime = Arc::new(SigningHostRuntime::new(
-            platform,
+            platform.clone(),
             runtime_config.signing,
             spawner.clone(),
         ));
+        assert!(
+            runtime.worker_ledger().install_demand_observer(platform),
+            "a freshly built runtime installs its worker demand observer once"
+        );
         if let Some(secret) = runtime_config.local_session_secret {
             futures::executor::block_on(runtime.activate_local_session_with_identity(
                 secret,
@@ -611,7 +634,7 @@ impl NativeTrUApiHostRuntime {
             events,
             #[cfg(feature = "ws-bridge")]
             spawner,
-            chat_executions: Mutex::new(HashMap::new()),
+            worker_executions: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -658,9 +681,9 @@ impl NativeTrUApiHostRuntime {
 
         if product.execution_kind == ProductExecutionKind::Worker {
             let previous = self
-                .chat_executions
+                .worker_executions
                 .lock()
-                .expect("native Chat execution registry mutex poisoned")
+                .expect("native worker execution registry mutex poisoned")
                 .insert(product.product_id, Arc::downgrade(&execution))
                 .and_then(|previous| previous.upgrade());
             if let Some(previous) = previous {
@@ -773,6 +796,21 @@ impl NativeTrUApiHostRuntime {
     ) -> Result<Arc<NativeProductExecution>, NativeRuntimeConfigError> {
         let product: ProductContext = execution_config.try_into()?;
         Ok(self.open_product_execution_with_callbacks(callbacks, chat_callbacks, product))
+    }
+
+    /// Take one reference on the product's worker for a modality holder. The
+    /// first one reports [`WorkerTransition::Start`] to the runtime's
+    /// [`HostCallbacks::worker_demand_changed`]; pair every call with one
+    /// [`Self::release_worker`].
+    pub fn acquire_worker(&self, product_id: String) {
+        self.runtime.worker_ledger().acquire(&product_id);
+    }
+
+    /// Release one reference. The last one reports
+    /// [`WorkerTransition::Stop`], after which the host may stop the worker;
+    /// releasing with none held is a no-op.
+    pub fn release_worker(&self, product_id: String) {
+        self.runtime.worker_ledger().release(&product_id);
     }
 
     /// Core-owned logout for the process-wide authentication session.
@@ -1225,6 +1263,13 @@ fn native_thread_pool_spawner(callbacks: &Arc<dyn HostCallbacks>) -> Spawner {
 struct CallbackPlatform {
     callbacks: Arc<dyn HostCallbacks>,
     events: Arc<NativeEventBus>,
+}
+
+impl crate::host_logic::worker::WorkerDemandObserver for CallbackPlatform {
+    fn worker_demand_changed(&self, product_id: &str, transition: WorkerTransition) {
+        self.callbacks
+            .worker_demand_changed(product_id.to_string(), transition);
+    }
 }
 
 #[derive(Default)]
@@ -1915,6 +1960,8 @@ mod tests {
         chain_connects: Mutex<Vec<Vec<u8>>>,
         chain_sends: Mutex<Vec<(u32, String)>>,
         chain_closes: Mutex<Vec<u32>>,
+        /// Worker demand transitions, in arrival order.
+        worker_demand: Mutex<Vec<(String, WorkerTransition)>>,
         /// Capability this host reports as refused by the OS, if any.
         os_refused: Option<v01::HostDevicePermissionRequest>,
     }
@@ -1950,6 +1997,7 @@ mod tests {
                 chain_connects: Mutex::new(Vec::new()),
                 chain_sends: Mutex::new(Vec::new()),
                 chain_closes: Mutex::new(Vec::new()),
+                worker_demand: Mutex::new(Vec::new()),
                 os_refused: None,
             }
         }
@@ -1958,6 +2006,12 @@ mod tests {
     #[async_trait::async_trait]
     impl HostCallbacks for EventCallbacks {
         fn on_core_log(&self, _marker: String, _detail: String) {}
+        fn worker_demand_changed(&self, product_id: String, transition: WorkerTransition) {
+            self.worker_demand
+                .lock()
+                .expect("worker demand mutex poisoned")
+                .push((product_id, transition));
+        }
         async fn navigate_to(&self, _url: String) -> Result<(), HostNavigateRejection> {
             Ok(())
         }
@@ -2212,6 +2266,33 @@ mod tests {
             native_execution_config(product_id, ProductExecutionKind::App),
         )
         .expect("product execution config should be valid")
+    }
+
+    #[test]
+    fn process_runtime_counts_worker_references_per_product() {
+        let callbacks = Arc::new(EventCallbacks::new());
+        let host = NativeTrUApiHostRuntime::with_runtime_config(
+            callbacks.clone(),
+            native_host_runtime_config(),
+        )
+        .expect("host runtime config should be valid");
+        let product = || "shared.dot".to_string();
+
+        host.acquire_worker(product());
+        host.acquire_worker(product());
+        host.release_worker(product());
+        host.release_worker(product());
+
+        assert_eq!(
+            *callbacks
+                .worker_demand
+                .lock()
+                .expect("worker demand mutex poisoned"),
+            vec![
+                (product(), WorkerTransition::Start),
+                (product(), WorkerTransition::Stop),
+            ]
+        );
     }
 
     #[test]
@@ -3073,6 +3154,7 @@ mod tests {
         #[async_trait::async_trait]
         impl HostCallbacks for Noop {
             fn on_core_log(&self, _marker: String, _detail: String) {}
+            fn worker_demand_changed(&self, _product_id: String, _transition: WorkerTransition) {}
             async fn navigate_to(&self, _url: String) -> Result<(), HostNavigateRejection> {
                 Ok(())
             }
@@ -3218,6 +3300,7 @@ mod tests {
         #[async_trait::async_trait]
         impl HostCallbacks for GatedPermissionCallbacks {
             fn on_core_log(&self, _marker: String, _detail: String) {}
+            fn worker_demand_changed(&self, _product_id: String, _transition: WorkerTransition) {}
             async fn navigate_to(&self, _url: String) -> Result<(), HostNavigateRejection> {
                 Ok(())
             }

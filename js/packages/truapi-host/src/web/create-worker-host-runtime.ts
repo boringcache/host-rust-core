@@ -7,6 +7,7 @@ import type {
   ProductExecutionKind,
   RequiredHostCallbacks,
   TrUApiProductProvider,
+  WorkerDemandChange,
 } from "../index.js";
 import type {
   Bytes32,
@@ -92,6 +93,26 @@ export interface WorkerPairingHostRuntime {
     productId: string,
     timeoutMs?: number,
   ): Promise<Uint8Array | undefined>;
+  /**
+   * Take one reference on a product's worker for a modality holder that is on
+   * screen or in flight. Pair every call with one
+   * {@link WorkerPairingHostRuntime.releaseWorker}. The core counts; the
+   * resulting level reaches
+   * {@link WorkerPairingHostRuntime.subscribeWorkerDemand} listeners, and the
+   * host runs and stops the worker executable itself.
+   */
+  acquireWorker(productId: string): void;
+  /** Release one reference. Releasing with none held is a no-op. */
+  releaseWorker(productId: string): void;
+  /**
+   * Observe which product workers the host should run. The listener first
+   * receives `wanted: true` for every product wanted right now, then each
+   * change as it happens, and `wanted: false` for every remaining product
+   * when the runtime is disposed. Returns the unsubscribe.
+   */
+  subscribeWorkerDemand(
+    listener: (change: WorkerDemandChange) => void,
+  ): () => void;
   setLogLevel(level: LogLevel): void;
   dispose(): void;
 }
@@ -180,6 +201,9 @@ interface RuntimeState {
       onError: (error: Error) => void;
     }
   >;
+  /** Products whose worker the core currently wants, for late subscribers. */
+  wantedWorkers: Set<string>;
+  workerDemandListeners: Set<(change: WorkerDemandChange) => void>;
   closedError: Error | null;
   logLevel: LogLevel;
   disposed: boolean;
@@ -747,6 +771,11 @@ function teardown(state: RuntimeState, error: Error, fault: boolean): void {
     }
   }
   state.chainConnections.clear();
+  // A worker nothing can call any more is not wanted.
+  for (const productId of [...state.wantedWorkers]) {
+    handleWorkerDemandChanged(state, productId, false);
+  }
+  state.workerDemandListeners.clear();
   if (fault) {
     state.worker.terminate();
   } else {
@@ -792,6 +821,8 @@ export function createWebWorkerPairingHostRuntime(
       pendingDeviceEncryptionKeys: new Map(),
       pendingChatActions: new Map(),
       customRenders: new Map(),
+      wantedWorkers: new Set(),
+      workerDemandListeners: new Set(),
       closedError: null,
       logLevel: devLogLevelOverride ?? options.logLevel ?? "off",
       disposed: false,
@@ -859,6 +890,13 @@ export function createWebWorkerPairingHostRuntime(
           break;
         case "productSubtreePublicKeyResponse":
           handleProductSubtreePublicKeyResponse(state, msg);
+          break;
+        case "workerDemandChanged":
+          // Teardown has already reported every worker unwanted, so a level
+          // still in flight would put one back that nothing can serve.
+          if (!state.disposed) {
+            handleWorkerDemandChanged(state, msg.productId, msg.wanted);
+          }
           break;
         case "publishChatActionResponse":
           settlePending(
@@ -1148,6 +1186,24 @@ function buildRuntime(state: RuntimeState): WorkerPairingHostRuntime {
         kind: "notifySessionStoreChanged",
       } satisfies MainToWorker);
     },
+    acquireWorker(productId: string): void {
+      postUnlessDisposed(state, { kind: "acquireWorker", productId });
+    },
+    releaseWorker(productId: string): void {
+      postUnlessDisposed(state, { kind: "releaseWorker", productId });
+    },
+    subscribeWorkerDemand(listener) {
+      // Teardown cleared the listeners, so one added now would only be
+      // retained, never called.
+      if (state.disposed) return () => {};
+      state.workerDemandListeners.add(listener);
+      for (const productId of state.wantedWorkers) {
+        deliverWorkerDemand(listener, { productId, wanted: true });
+      }
+      return () => {
+        state.workerDemandListeners.delete(listener);
+      };
+    },
     activateStoredSession(): Promise<void> {
       return sendSessionActivationRequest(state, (requestId) => ({
         kind: "activateStoredSession",
@@ -1224,6 +1280,42 @@ function buildRuntime(state: RuntimeState): WorkerPairingHostRuntime {
     },
   };
   return runtime;
+}
+
+/** Post a fire-and-forget control message; a disposed runtime drops it. */
+function postUnlessDisposed(state: RuntimeState, message: MainToWorker): void {
+  if (state.disposed) return;
+  state.worker.postMessage(message);
+}
+
+/** Hand one change to one listener, keeping its throw off the caller. */
+function deliverWorkerDemand(
+  listener: (change: WorkerDemandChange) => void,
+  change: WorkerDemandChange,
+): void {
+  try {
+    listener(change);
+  } catch (err) {
+    console.warn("[truapi worker] worker demand listener threw:", err);
+  }
+}
+
+/** Record one product's wanted level and fan it out to every listener. */
+function handleWorkerDemandChanged(
+  state: RuntimeState,
+  productId: string,
+  wanted: boolean,
+): void {
+  if (wanted) state.wantedWorkers.add(productId);
+  else state.wantedWorkers.delete(productId);
+  // Delivery runs over a snapshot, and skips anyone no longer subscribed when
+  // their turn comes: a listener that subscribes from inside a listener has
+  // already had this change replayed to it, and one that unsubscribes, or
+  // disposes the runtime, must hear nothing further.
+  for (const listener of [...state.workerDemandListeners]) {
+    if (!state.workerDemandListeners.has(listener)) continue;
+    deliverWorkerDemand(listener, { productId, wanted });
+  }
 }
 
 /** Deliver a render failure without letting the sink's own throw escape. */
