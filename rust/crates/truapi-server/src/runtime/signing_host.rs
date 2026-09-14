@@ -14,6 +14,7 @@
 //! keys (native only).
 mod allowance_renewal;
 mod local_activation;
+mod local_identity;
 pub(super) mod ring_vrf;
 mod sso_replay;
 mod sso_responder;
@@ -32,6 +33,7 @@ use subxt::utils::{AccountId32, MultiSignature};
 #[cfg(not(target_arch = "wasm32"))]
 pub use allowance_renewal::StatementRenewalTarget;
 pub(crate) use local_activation::LocalActivation;
+pub use local_identity::{LocalIdentity, LocalIdentityContext};
 pub use sso_responder::{PairedSsoPeer, ResponderExit};
 pub(crate) use sso_responder::{establish_pairing, respond_to_pairing, resume_pairing};
 pub(crate) use sso_service::SigningHostSsoService;
@@ -611,6 +613,17 @@ impl SigningHost {
 #[async_trait::async_trait]
 impl ProductAuthority for SigningHost {
     fn current_session(&self) -> Option<AuthoritySession> {
+        self.current_local_session()
+    }
+
+    async fn refresh_session_identity(&self) -> Option<AuthoritySession> {
+        let context = self.local_identity_context().ok()?;
+        if let Err(error) = self.refresh_local_identity(&context.activation_id).await {
+            tracing::warn!(reason = %error.reason, "local dotNS identity refresh failed");
+        }
+        if self.local_identity_context().ok()?.activation_id != context.activation_id {
+            return None;
+        }
         self.current_local_session()
     }
 

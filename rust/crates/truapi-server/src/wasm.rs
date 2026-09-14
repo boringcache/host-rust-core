@@ -1248,6 +1248,61 @@ impl WasmSigningHostRuntime {
             .map_err(generic_error_to_js)
     }
 
+    /// Capture an opaque activation fence and its UID account.
+    #[wasm_bindgen(js_name = localIdentityContext)]
+    pub fn local_identity_context(&self) -> Result<JsValue, JsValue> {
+        let context = self
+            .runtime
+            .local_identity_context()
+            .map_err(generic_error_to_js)?;
+        let json = serde_json::to_string(&context)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        js_sys::JSON::parse(&json)
+    }
+
+    /// Return the UID public key followed by its native sr25519 backend-auth proof.
+    #[wasm_bindgen(js_name = localIdentityAuthProof)]
+    pub fn local_identity_auth_proof(
+        &self,
+        activation_id: String,
+        challenge: Vec<u8>,
+    ) -> Result<Vec<u8>, JsValue> {
+        self.runtime
+            .local_identity_auth_proof(&activation_id, &challenge)
+            .map_err(generic_error_to_js)
+    }
+
+    /// Build registration JSON without exporting entropy or implementing proofs in JavaScript.
+    #[wasm_bindgen(js_name = localLiteRegistrationBody)]
+    pub async fn local_lite_registration_body(
+        &self,
+        activation_id: String,
+        username_base: String,
+        verifier: Vec<u8>,
+    ) -> Result<String, JsValue> {
+        let verifier = verifier
+            .as_slice()
+            .try_into()
+            .map_err(|_| JsValue::from_str("attester must be 32 bytes"))?;
+        self.runtime
+            .local_lite_registration_body(&activation_id, &username_base, verifier)
+            .await
+            .map_err(generic_error_to_js)
+    }
+
+    /// Install freshly verified dotNS metadata only for the captured local activation.
+    #[wasm_bindgen(js_name = refreshLocalIdentity)]
+    pub async fn refresh_local_identity(&self, activation_id: String) -> Result<JsValue, JsValue> {
+        let identity = self
+            .runtime
+            .refresh_local_identity_for(&activation_id)
+            .await
+            .map_err(generic_error_to_js)?;
+        let json = serde_json::to_string(&identity)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        js_sys::JSON::parse(&json)
+    }
+
     /// Revoke one product's grants from the current local activation.
     #[wasm_bindgen(js_name = clearProductState)]
     pub async fn clear_product_state(&self, product_id: String) -> Result<(), JsValue> {

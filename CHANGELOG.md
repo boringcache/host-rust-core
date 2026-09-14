@@ -20,6 +20,9 @@ generated from [Conventional Commits](https://www.conventionalcommits.org/).
 - Add `account.productDeviceChat` for host-private Chat v2 identity binding and
   identity-route sealing/opening through local or paired account authorities,
   guarded by a dedicated, product-scoped Chat-authority permission.
+- expose local signing-wallet username registration and chain-verified identity
+  refresh through the browser worker, with native UID proofs and RFC-0004
+  X25519 identifier keys
 - Generate a transport-neutral `no_std` Rust client with typed request,
   subscription, result-subscription, and host-initiated Worker subscription
   codecs.
