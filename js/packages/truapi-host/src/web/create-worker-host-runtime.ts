@@ -1105,6 +1105,7 @@ function createWebWorkerHostRuntime(
           capabilities: {
             chat: host.chat !== undefined,
             permissionStatus: host.permissionStatus !== undefined,
+            pocket: host.pocket !== undefined,
           },
           debuggerUrl: debuggerEnablement.url,
         } satisfies MainToWorker);
