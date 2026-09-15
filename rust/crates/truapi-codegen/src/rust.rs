@@ -233,7 +233,6 @@ mod tests {
             .collect()
     }
 
-
     fn parse_entries(src: &str) -> Vec<(u8, String)> {
         // Each method's id is emitted as a named const, e.g.
         //   pub const PREIMAGE_SUBMIT: MethodIds = MethodIds {
