@@ -21,7 +21,7 @@ use futures::task::SpawnExt;
 use parity_scale_codec::Encode;
 use truapi::{Bytes32, latest::HostPlatform, v01};
 
-use crate::host_logic::credential::{CredentialRequestError, CredentialRequestHeaders};
+use crate::host_logic::credential::{self, CredentialHeader, CredentialRequestError};
 use truapi_platform::{
     AuthPresenter, AuthState, ChainProvider, CoreAdmin, CoreStorage, CoreStorageKey, Features,
     HostInfo, JsonRpcConnection, LocaleHost, Navigation, Notifications,
@@ -368,6 +368,17 @@ impl From<HostNavigateRejection> for v01::HostNavigateToError {
 #[uniffi::export]
 pub fn parse_navigate(input: String) -> NavigateDecision {
     dotns::parse_navigate(&input)
+}
+
+/// Whether the host reserves this header name (RFC 0025).
+///
+/// A host drops every header this answers `true` for from a product's outgoing
+/// request before attaching the identity `credential_request_headers` returns.
+/// Otherwise a product could set `X-Polkadot-Key` itself and present whatever
+/// identity it liked to the backend. Pure and stateless.
+#[uniffi::export]
+pub fn is_reserved_credential_header(name: String) -> bool {
+    credential::is_reserved_header(&name)
 }
 
 /// OS status of a device capability, as a native host reports it.
@@ -1069,10 +1080,12 @@ impl NativeProductExecution {
         method: String,
         url: String,
         body_hash: Bytes32,
-    ) -> Result<CredentialRequestHeaders, CredentialRequestError> {
-        self.admin()
+    ) -> Result<Vec<CredentialHeader>, CredentialRequestError> {
+        Ok(self
+            .admin()
             .credential_request_headers(method, url, body_hash)
-            .await
+            .await?
+            .to_headers())
     }
 
     /// Update a product-scoped permission authorization.

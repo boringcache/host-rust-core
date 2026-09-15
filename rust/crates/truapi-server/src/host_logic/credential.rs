@@ -60,6 +60,10 @@ pub enum CredentialError {
     /// reason about a set, which is what domain grants already do badly.
     #[error("credential grants take no wildcards")]
     Wildcard,
+    /// A grant is keyed by domain, so a port or userinfo in the URL would be
+    /// dropped and two distinct origins would share one grant.
+    #[error("credential grants cover the default https port, without userinfo")]
+    NotDefaultOrigin,
 }
 
 /// Why a host cannot attach an identity to an outbound request.
@@ -96,9 +100,23 @@ impl From<CredentialError> for CredentialRequestError {
     }
 }
 
-/// The identity a host attaches to one covered request.
+/// One header the host sets on the outgoing request.
+///
+/// The core hands hosts finished name/value pairs rather than raw bytes, so
+/// every host presents the identity identically. A backend verifies bytes it
+/// decodes from these strings; two hosts encoding them differently would make
+/// the same wallet verify on one platform and fail on another.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
+pub struct CredentialHeader {
+    /// Header name.
+    pub name: String,
+    /// Header value. Byte strings are lower-case hex behind `0x`.
+    pub value: String,
+}
+
+/// The identity a host attaches to one covered request.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialRequestHeaders {
     /// `X-Polkadot-Key`: the sr25519 public key a backend rate limits on.
     pub key: Vec<u8>,
@@ -111,25 +129,25 @@ pub struct CredentialRequestHeaders {
 }
 
 impl CredentialRequestHeaders {
-    /// The headers as `(name, value)` pairs, hex-encoded with a `0x` prefix
-    /// for the two byte-string fields, ready to attach to the request.
-    pub fn to_header_pairs(&self) -> Vec<(String, String)> {
-        vec![
-            (HEADER_KEY.to_string(), hex_value(&self.key)),
-            (HEADER_SIGNATURE.to_string(), hex_value(&self.signature)),
-            (HEADER_TIMESTAMP.to_string(), self.timestamp.to_string()),
-            (HEADER_NONCE.to_string(), hex_value(&self.nonce)),
+    /// The headers to set on the request, in the one encoding every host uses.
+    pub fn to_headers(&self) -> Vec<CredentialHeader> {
+        [
+            (HEADER_KEY, hex_value(&self.key)),
+            (HEADER_SIGNATURE, hex_value(&self.signature)),
+            (HEADER_TIMESTAMP, self.timestamp.to_string()),
+            (HEADER_NONCE, hex_value(&self.nonce)),
         ]
+        .into_iter()
+        .map(|(name, value)| CredentialHeader {
+            name: name.to_string(),
+            value,
+        })
+        .collect()
     }
 }
 
 fn hex_value(bytes: &[u8]) -> String {
-    let mut value = String::with_capacity(2 + bytes.len() * 2);
-    value.push_str("0x");
-    for byte in bytes {
-        value.push_str(&format!("{byte:02x}"));
-    }
-    value
+    format!("0x{}", hex::encode(bytes))
 }
 
 /// One `(domain, path, method)` triple in the canonical form the permission key
@@ -154,6 +172,13 @@ impl CredentialGrant {
         let parsed = Url::parse(url).map_err(|_| CredentialError::InvalidUrl)?;
         if parsed.scheme() != "https" {
             return Err(CredentialError::NotHttps);
+        }
+        // A grant is keyed by domain alone. Accepting a port or userinfo here
+        // would drop it and let `https://example.com:8443/session` be covered
+        // by a grant the user gave for `https://example.com/session`, which is
+        // a different origin. Refuse rather than silently widen the grant.
+        if parsed.port().is_some() || !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err(CredentialError::NotDefaultOrigin);
         }
         let domain = parsed.host_str().ok_or(CredentialError::InvalidUrl)?;
         let grant = Self::new(domain, parsed.path(), method)?;
@@ -234,12 +259,25 @@ pub fn credential_keypair(
     product_id: &str,
     grant: &CredentialGrant,
 ) -> Keypair {
-    let product_id_hash = blake2b256_keyed(product_id.as_bytes(), CREDENTIAL_DOMAIN_SEPARATOR);
-    let per_product = blake2b256_keyed(root_entropy_source, &product_id_hash);
-    let seed = blake2b256_keyed(&per_product, &grant.digest());
-    MiniSecretKey::from_bytes(&seed)
+    MiniSecretKey::from_bytes(&credential_seed(root_entropy_source, product_id, grant))
         .expect("blake2b256 yields 32 bytes, which is a valid MiniSecretKey; qed")
         .expand_to_keypair(ExpansionMode::Ed25519)
+}
+
+/// The seed [`credential_keypair`] expands.
+///
+/// Separate from the keypair because this, not the expanded secret, is the
+/// value that must stay out of a product's reach: anyone holding it can
+/// reproduce the keypair. Tests comparing against product-reachable entropy
+/// have to compare against this.
+pub fn credential_seed(
+    root_entropy_source: &[u8; 32],
+    product_id: &str,
+    grant: &CredentialGrant,
+) -> [u8; 32] {
+    let product_id_hash = blake2b256_keyed(product_id.as_bytes(), CREDENTIAL_DOMAIN_SEPARATOR);
+    let per_product = blake2b256_keyed(root_entropy_source, &product_id_hash);
+    blake2b256_keyed(&per_product, &grant.digest())
 }
 
 /// Sign a request digest under a credential key.
@@ -250,15 +288,29 @@ pub fn sign_request(keypair: &Keypair, digest: &[u8; 32]) -> [u8; 64] {
         .to_bytes()
 }
 
+/// Whether the host reserves this header name, and so must drop it from a
+/// product's request before attaching its own identity.
+///
+/// A product that could set `X-Polkadot-Key` itself would present whatever
+/// identity it liked to the backend.
+pub fn is_reserved_header(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with(HEADER_PREFIX)
+}
+
 /// Drop every header the host reserves, so only the host's own identity
 /// reaches the endpoint.
 pub fn strip_reserved_headers(headers: &mut Vec<(String, String)>) {
-    headers.retain(|(name, _)| !name.to_ascii_lowercase().starts_with(HEADER_PREFIX));
+    headers.retain(|(name, _)| !is_reserved_header(name));
 }
 
 /// Append a byte string to a preimage, length-prefixed.
+///
+/// The prefix is what keeps one field from running into the next, so a length
+/// that does not fit is a contradiction rather than something to clamp: at
+/// `u32::MAX` two different splits would share a preimage.
 fn push_field(preimage: &mut Vec<u8>, field: &[u8]) {
-    let len = u32::try_from(field.len()).unwrap_or(u32::MAX);
+    let len =
+        u32::try_from(field.len()).expect("a URL component or nonce never reaches 4 GiB; qed");
     preimage.extend_from_slice(&len.to_be_bytes());
     preimage.extend_from_slice(field);
 }
@@ -310,6 +362,25 @@ mod tests {
             CredentialGrant::new("onramp.example.com", "/session/*", "GET"),
             Err(CredentialError::Wildcard),
         );
+    }
+
+    /// A grant is keyed by domain, so anything else that distinguishes an
+    /// origin has to be refused rather than dropped: otherwise a grant for
+    /// `example.com/session` would silently cover a different service on
+    /// another port.
+    #[test]
+    fn a_grant_does_not_stretch_across_origins() {
+        for url in [
+            "https://onramp.example.com:8443/session",
+            "https://user@onramp.example.com/session",
+            "https://user:pw@onramp.example.com/session",
+        ] {
+            assert_eq!(
+                CredentialGrant::from_request("POST", url),
+                Err(CredentialError::NotDefaultOrigin),
+                "{url} is not the origin the grant names",
+            );
+        }
     }
 
     /// Literal vectors. A backend verifier has to reproduce these bytes
@@ -425,9 +496,10 @@ mod tests {
     /// credential key for an endpoint it was never granted.
     #[test]
     fn a_product_cannot_derive_its_own_credential_keys() {
-        let credential = credential_keypair(&SOURCE, "meld.dot", &grant())
-            .secret
-            .to_bytes();
+        // The seed, not the expanded secret: expansion hashes its input, so
+        // comparing against `keypair.secret` would hold even for a seed the
+        // product can reach, and the assertion would prove nothing.
+        let credential = credential_seed(&SOURCE, "meld.dot", &grant());
 
         let reachable = [
             CREDENTIAL_DOMAIN_SEPARATOR.to_vec(),
@@ -439,11 +511,29 @@ mod tests {
             let derived = derive_product_entropy_from_source(&SOURCE, "meld.dot", &key)
                 .expect("key is 1..=32 bytes");
             assert_ne!(
-                credential[..32],
-                derived[..],
+                credential, derived,
                 "product entropy must not reach the credential key tree"
             );
         }
+    }
+
+    /// Guards the guard: the comparison above has to be one that can fail.
+    /// It compares seeds because a product holding the seed reproduces the
+    /// keypair, and because expansion would mask the match.
+    #[test]
+    fn the_derivation_test_compares_a_value_that_can_collide() {
+        let reachable = derive_product_entropy_from_source(&SOURCE, "meld.dot", b"anything")
+            .expect("key is 1..=32 bytes");
+
+        assert_ne!(
+            MiniSecretKey::from_bytes(&reachable)
+                .expect("32 bytes")
+                .expand_to_keypair(ExpansionMode::Ed25519)
+                .secret
+                .to_bytes()[..32],
+            reachable[..],
+            "expansion hides a seed match, so the secret is the wrong thing to assert on"
+        );
     }
 
     #[test]
@@ -468,6 +558,32 @@ mod tests {
                 .verify_simple(SR25519_SIGNING_CONTEXT, &other, &parsed)
                 .is_err(),
             "a signature does not carry to a different request"
+        );
+    }
+
+    /// Both boundaries hand hosts these exact strings, so a backend sees the
+    /// same encoding whichever host the request came from.
+    #[test]
+    fn headers_carry_one_encoding_for_every_host() {
+        let headers = CredentialRequestHeaders {
+            key: vec![0x01, 0xAB],
+            signature: vec![0xFF, 0x00],
+            timestamp: 1_760_000_000,
+            nonce: vec![0x7F],
+        };
+
+        assert_eq!(
+            headers
+                .to_headers()
+                .into_iter()
+                .map(|header| (header.name, header.value))
+                .collect::<Vec<_>>(),
+            vec![
+                ("X-Polkadot-Key".to_string(), "0x01ab".to_string()),
+                ("X-Polkadot-Signature".to_string(), "0xff00".to_string()),
+                ("X-Polkadot-Timestamp".to_string(), "1760000000".to_string()),
+                ("X-Polkadot-Nonce".to_string(), "0x7f".to_string()),
+            ],
         );
     }
 

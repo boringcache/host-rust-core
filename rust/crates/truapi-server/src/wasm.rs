@@ -89,6 +89,17 @@ pub fn wire_schema_hash() -> String {
     crate::generated::wire_table::TRUAPI_WIRE_SCHEMA_HASH.to_string()
 }
 
+/// Whether the host reserves this header name (RFC 0025).
+///
+/// A host drops every header this answers `true` for from a product's outgoing
+/// request before attaching the identity `credentialRequestHeaders` returns.
+/// Otherwise a product could set `X-Polkadot-Key` itself and present whatever
+/// identity it liked to the backend.
+#[wasm_bindgen(js_name = isReservedCredentialHeader)]
+pub fn is_reserved_credential_header(name: String) -> bool {
+    crate::host_logic::credential::is_reserved_header(&name)
+}
+
 /// Streams tapped debug frames out to a JS `debugEmit(channelId, dir, frame)`
 /// callback so the host worker can forward them to the debugger it dials.
 /// Dev-only: installed only when the host provides the callback, and
@@ -1394,11 +1405,11 @@ impl WasmProductRuntime {
             .map_err(|err| JsValue::from_str(&err.to_string()))?;
 
         let object = Object::new();
-        for (name, value) in headers.to_header_pairs() {
+        for header in headers.to_headers() {
             Reflect::set(
                 &object,
-                &JsValue::from_str(&name),
-                &JsValue::from_str(&value),
+                &JsValue::from_str(&header.name),
+                &JsValue::from_str(&header.value),
             )?;
         }
         Ok(object.into())
