@@ -27,16 +27,21 @@ import type {
   WorkerPairingHostRuntime,
   WorkerProductRuntime,
   WorkerSigningHostRuntime,
+  WorkerTransition,
 } from "./wasm-module.js";
 import { errorMessage } from "./error.js";
 import { resolveLocalIdentity } from "./worker-local-identity.js";
 import {
-  handlePublishChatAction,
-  handleRenderCustomMessageStart,
+  CHAT_ACTION_ENTRY_POINT,
+  RENDERER_ACTION_ENTRY_POINT,
+  handlePublishAction,
+} from "./worker-actions.js";
+import {
+  handleRenderStart,
   stopRender,
   stopRendersForCore,
   type RenderSubscriptions,
-} from "./worker-chat.js";
+} from "./worker-renderer.js";
 import {
   dispatchChainResponse,
   dispatchSubscriptionError,
@@ -168,14 +173,29 @@ function chainConnect(
 
 /** Build the host-level callback object passed to the WASM runtime. */
 function buildRawCallbacks(capabilities: OptionalCapabilities) {
-  return createWorkerRawCallbacks(
-    {
-      callbackRequest,
-      startSubscription,
-      chainConnect,
+  return {
+    ...createWorkerRawCallbacks(
+      {
+        callbackRequest,
+        startSubscription,
+        chainConnect,
+      },
+      capabilities,
+    ),
+    /**
+     * Demand on a product's worker crossed zero. Every transition arrives
+     * here in ledger order, whether this thread asked for it through
+     * `acquireWorker`/`releaseWorker` or the core took the reference itself
+     * for an open render.
+     */
+    workerDemandChanged(productId: string, transition: WorkerTransition): void {
+      postToMain({
+        kind: "workerDemandChanged",
+        productId,
+        wanted: transition === "Start",
+      });
     },
-    capabilities,
-  );
+  };
 }
 
 /** Encode raw frame bytes as base64 (JSON can't carry binary over the WS). */
@@ -622,7 +642,7 @@ const cores = new Map<number, WorkerProductRuntime>();
 // core for the whole duration of an async method, so `free()` throws while one
 // is in flight. `disposeCore` aborts these then awaits them before freeing.
 const inFlightFrames = new Map<number, Set<Promise<void>>>();
-/** Live custom-message render subscriptions, keyed by main-thread render id. */
+/** Live render subscriptions, keyed by main-thread render id. */
 const renders: RenderSubscriptions = new Map();
 let wasm: WasmModuleShape | null = null;
 let identityAbort: AbortController | null = null;
@@ -792,6 +812,12 @@ ctx.addEventListener("message", (ev: MessageEvent<MainToWorker>) => {
         runtime.notifySessionStoreChanged();
       }
       break;
+    case "acquireWorker":
+      runtime?.acquireWorker(msg.productId);
+      break;
+    case "releaseWorker":
+      runtime?.releaseWorker(msg.productId);
+      break;
     case "activateStoredSession":
       void handleSessionActivation(
         msg.requestId,
@@ -929,7 +955,8 @@ ctx.addEventListener("message", (ev: MessageEvent<MainToWorker>) => {
       break;
     }
     case "publishChatAction":
-      handlePublishChatAction(
+      handlePublishAction(
+        CHAT_ACTION_ENTRY_POINT,
         cores.get(msg.coreId),
         postToMain,
         msg.coreId,
@@ -937,19 +964,27 @@ ctx.addEventListener("message", (ev: MessageEvent<MainToWorker>) => {
         msg.action,
       );
       break;
-    case "renderCustomMessageStart":
-      handleRenderCustomMessageStart(
+    case "publishRendererAction":
+      handlePublishAction(
+        RENDERER_ACTION_ENTRY_POINT,
+        cores.get(msg.coreId),
+        postToMain,
+        msg.coreId,
+        msg.requestId,
+        msg.action,
+      );
+      break;
+    case "renderStart":
+      handleRenderStart(
         cores.get(msg.coreId),
         postToMain,
         renders,
         msg.coreId,
         msg.renderId,
-        msg.messageId,
-        msg.messageType,
-        msg.payload,
+        msg.request,
       );
       break;
-    case "renderCustomMessageStop":
+    case "renderStop":
       stopRender(renders, msg.renderId);
       break;
     case "disposeCore":

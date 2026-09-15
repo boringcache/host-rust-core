@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use convert_case::{Case, Casing};
 use std::fmt::Write;
 
-use super::{module_for_trait, wire_method_name, wire_table::infer_id};
+use super::{module_for_trait, wire_method_name, wire_table};
 use crate::rustdoc::{ApiDefinition, MethodDef, MethodKind, ReturnType, TraitDef, TypeRef};
 
 pub fn generate_client(api: &ApiDefinition, schema_hash: &str) -> Result<String> {
@@ -95,42 +95,25 @@ fn emit_method(
     let kind = match method.kind {
         MethodKind::Request => "MethodKind::Request",
         MethodKind::Subscription => "MethodKind::Subscription",
-        MethodKind::ResultSubscription => "MethodKind::ResultSubscription",
     };
-    let wire = match method.kind {
-        MethodKind::Request => {
-            let request_id = method
-                .wire
-                .request_id
-                .ok_or_else(|| anyhow::anyhow!("method `{wire_name}` is missing request_id"))?;
-            let response_id = infer_id(method.wire.response_id, request_id, 1, &wire_name)?;
-            format!(
-                "MethodWire::Request(RequestFrameIds {{ request_id: {request_id}, response_id: {response_id} }})"
-            )
-        }
-        MethodKind::Subscription | MethodKind::ResultSubscription => {
-            let start_id = method
-                .wire
-                .start_id
-                .ok_or_else(|| anyhow::anyhow!("method `{wire_name}` is missing start_id"))?;
-            let stop_id = infer_id(method.wire.stop_id, start_id, 1, &wire_name)?;
-            let interrupt_id = infer_id(method.wire.interrupt_id, start_id, 2, &wire_name)?;
-            let receive_id = infer_id(method.wire.receive_id, start_id, 3, &wire_name)?;
-            format!(
-                "MethodWire::Subscription(SubscriptionFrameIds {{ start_id: {start_id}, stop_id: {stop_id}, interrupt_id: {interrupt_id}, receive_id: {receive_id} }})"
-            )
-        }
+    let trait_id = wire_table::trait_wire_id(service)?;
+    let method_id = wire_table::method_wire_id(service, method)?;
+    let wire_kind = match method.kind {
+        MethodKind::Request => "Request",
+        MethodKind::Subscription => "Subscription",
     };
+    let wire = format!(
+        "MethodWire::{wire_kind}(MethodIds {{ trait_id: {trait_id}, method_id: {method_id} }})"
+    );
     let request_name = request_type(method, &module)?;
     let (response_name, error_name) = match &method.return_type {
         ReturnType::Result { ok, err } => (
             rust_type(ok, &module)?,
             Some(rust_type(call_error_domain(err)?, &module)?),
         ),
-        ReturnType::Subscription(item) => (rust_type(item, &module)?, None),
-        ReturnType::ResultSubscription { item, err } => (
+        ReturnType::Subscription { item, interrupt } => (
             rust_type(item, &module)?,
-            Some(rust_type(call_error_domain(err)?, &module)?),
+            Some(rust_type(call_error_domain(interrupt)?, &module)?),
         ),
     };
 
@@ -157,7 +140,6 @@ fn emit_method(
     writeln!(out, "        kind: {kind},")?;
     writeln!(out, "        direction: {direction},")?;
     writeln!(out, "        required_execution: {execution},")?;
-    writeln!(out, "        sensitive: {},", method.wire.sensitive)?;
     writeln!(out, "        wire: {wire},")?;
     writeln!(out, "    }};")?;
     writeln!(out, "}}")?;
@@ -177,43 +159,21 @@ fn emit_method(
             writeln!(out, "    type Error = {error};")?;
             writeln!(
                 out,
-                "    const RESPONSE_VERSIONED: bool = {};",
-                !matches!(ok, TypeRef::Unit)
-            )?;
-            writeln!(
-                out,
                 "    const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;"
             )?;
             writeln!(out, "}}\n")?;
         }
-        (MethodKind::Subscription, ReturnType::Subscription(item), false) => {
+        (MethodKind::Subscription, ReturnType::Subscription { item, interrupt }, host_initiated) => {
             let item = rust_type(item, &module)?;
-            writeln!(out, "impl SubscriptionMethod for {marker} {{")?;
+            let error = rust_type(call_error_domain(interrupt)?, &module)?;
+            let subscription_trait = if host_initiated {
+                "HostSubscriptionMethod"
+            } else {
+                "SubscriptionMethod"
+            };
+            writeln!(out, "impl {subscription_trait} for {marker} {{")?;
             writeln!(out, "    type Request = {request};")?;
-            writeln!(out, "    type Item = {item};")?;
-            writeln!(
-                out,
-                "    const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;"
-            )?;
-            writeln!(out, "}}\n")?;
-        }
-        (MethodKind::ResultSubscription, ReturnType::ResultSubscription { item, err }, false) => {
-            let item = rust_type(item, &module)?;
-            let error = rust_type(call_error_domain(err)?, &module)?;
-            writeln!(out, "impl ResultSubscriptionMethod for {marker} {{")?;
-            writeln!(out, "    type Request = {request};")?;
-            writeln!(out, "    type Item = {item};")?;
             writeln!(out, "    type Error = {error};")?;
-            writeln!(
-                out,
-                "    const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;"
-            )?;
-            writeln!(out, "}}\n")?;
-        }
-        (MethodKind::Subscription, ReturnType::Subscription(item), true) => {
-            let item = rust_type(item, &module)?;
-            writeln!(out, "impl HostSubscriptionMethod for {marker} {{")?;
-            writeln!(out, "    type Request = {request};")?;
             writeln!(out, "    type Item = {item};")?;
             writeln!(
                 out,
@@ -260,6 +220,9 @@ fn rust_type(value: &TypeRef, module: &str) -> Result<String> {
         }
         TypeRef::Named { name, args } if name == "Infallible" && args.is_empty() => {
             "core::convert::Infallible".to_string()
+        }
+        TypeRef::Named { name, args } if name == "GenericError" && args.is_empty() => {
+            "truapi::v01::GenericError".to_string()
         }
         TypeRef::Named { name, args } if args.is_empty() => {
             format!("truapi::versioned::{module}::{name}")

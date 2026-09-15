@@ -168,12 +168,12 @@ control of quota and of whether the bytes are backed up or encrypted.
 
 ## How it works
 
-1. The protocol is defined as Rust traits in [`rust/crates/truapi/`](rust/crates/truapi/), with each method tagged `#[wire(id = N)]` for a stable byte-level dispatch table. Every method's doc comment must carry a ` ```ts ` example, which codegen extracts into the playground's EXAMPLE tab; the build fails if any method is missing one.
-2. `truapi-codegen` reads rustdoc JSON for that crate and generates the TypeScript client, Rust host dispatcher, and the transport-neutral `no_std` Rust client. The Rust client exports typed method markers plus complete App, Widget, Worker, and Worker-only catalogs from the same wire schema.
+1. The protocol is defined as Rust traits in [`rust/crates/truapi/`](rust/crates/truapi/), with each trait tagged `#[wire_trait(id = N)]` and each method tagged `#[wire(id = N)]` for a stable byte-level `(trait, method)` dispatch table. Every method's doc comment must carry a ` ```ts ` example, which codegen extracts into the playground's EXAMPLE tab; the build fails if any method is missing one.
+2. `truapi-codegen` reads rustdoc JSON for that crate and generates the TypeScript client under git-ignored paths in `js/packages/truapi/`, the Rust host dispatcher, and the transport-neutral `no_std` Rust client. The Rust client exports typed method markers plus complete App, Widget, Worker, and Worker-only catalogs from the same wire schema.
 3. Higher-level SDKs wrap the generated client; each runtime provides only its native frame transport. Browser products use `MessagePort` (or `postMessage` in iframe mode), while sandboxed runtimes such as PolkaVM supply explicit host imports.
 4. The host decodes the frame, dispatches to the matching trait method, encodes the response, and ships it back.
 
-Wire ids are append-only: existing ids never change, so deployed products stay compatible across protocol revisions. Discriminant 255 is permanently reserved for a correlated protocol error, allowing either peer to reject API messages introduced after it was released instead of leaving the caller pending.
+Wire ids are append-only per trait: a trait id is never reassigned and a method id is never renumbered or reused within its trait, so deployed products stay compatible across protocol revisions. New methods take the next free method ids in their own trait and leave every other trait untouched. Trait 255 is permanently reserved for a correlated protocol error, allowing either peer to reject API messages introduced after it was released instead of leaving the caller pending.
 
 ## Develop
 
@@ -257,7 +257,48 @@ To run the playground inside a real host instead, start it with `yarn dev` and
 open `https://dot.li/localhost:3000` in the Polkadot Desktop Host. See
 [`playground/README.md`](playground/README.md) for deployment.
 
-To build the iOS host and open the playground in Simulator:
+### Working on the iOS host
+
+`hosts/ios/` is the iOS app, and it resolves the core from this tree rather than
+from a published version. The core's bindings, xcframework and FFI headers are
+gitignored build outputs, so a fresh clone cannot load the app's package graph
+until they exist. Generate them once:
+
+```bash
+make ios-bootstrap
+```
+
+Then open `hosts/ios/polkadot-app.xcodeproj`. Rerun it after changing anything
+the bindings are generated from, which is the `truapi`, `truapi-platform`,
+`truapi-server` or `truapi-provider` crates. `SIM_ONLY=1` halves it by skipping
+the device slice, which is enough for Simulator but not for an archive.
+
+Because the app builds against the core in this tree, a core change that breaks
+it fails here rather than at the next version bump. Every pull request touching
+the app, or the crates its bindings come from, runs:
+
+- `build`, a DevCI compile, failing on any build warning the committed baseline
+  does not already have
+- `test`, the unit test suite
+- `preview`, an installable simulator `.app` attached to the run, stamped with
+  the commit it came from in `TrUAPICommit`
+
+To run a preview build from a pull request:
+
+```bash
+gh run download <run-id> --name simulator-preview-<short-sha>
+unzip polkadot-app-*.app.zip
+xcrun simctl install booted polkadot-app.app
+xcrun simctl launch booted io.parity.polkadotapp.develop
+```
+
+It is an arm64 simulator slice, so it needs an Apple Silicon Mac and cannot be
+installed on a device.
+
+### Building the standalone iOS host app
+
+The targets below build `polkadot-app-ios-v2`, a separate checkout set by
+`IOS_HOST`, not `hosts/ios`. To build the playground in Simulator against it:
 
 ```bash
 make ios-run
@@ -285,8 +326,8 @@ does not provision or pair a signer-bot user.
 To exercise the shared-core Chat path with the first-party TrUAPI Playground
 worker, build and serve the local product, install its worker into the
 simulator app's product storage, and open its native Chat application. The
-worker drives all six Chat methods, so a host without bot registration reports
-that row red:
+worker drives all five Chat methods and both Renderer methods, so a host
+without bot registration reports that row red:
 
 ```bash
 make ios-chat-run
@@ -354,6 +395,11 @@ See [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) for how to ship
 Android host artifacts alongside them. A release also opens a bump issue on each
 repository listed in [`.github/consumers.json`](.github/consumers.json) that pins
 one of the published packages.
+
+CI requires changesets for published build inputs and rejects version bumps
+with unconsumed changesets, including in the merge queue. The daily
+`Registry drift` workflow reports manifest versions missing from npm; see the
+release guide for opt-outs and recovery.
 
 ## Contributing
 
