@@ -163,7 +163,11 @@ fn emit_method(
             )?;
             writeln!(out, "}}\n")?;
         }
-        (MethodKind::Subscription, ReturnType::Subscription { item, interrupt }, host_initiated) => {
+        (
+            MethodKind::Subscription,
+            ReturnType::Subscription { item, interrupt },
+            host_initiated,
+        ) => {
             let item = rust_type(item, &module)?;
             let error = rust_type(call_error_domain(interrupt)?, &module)?;
             let subscription_trait = if host_initiated {
