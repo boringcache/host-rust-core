@@ -312,12 +312,6 @@ pub fn is_reserved_header(name: &str) -> bool {
     name.to_ascii_lowercase().starts_with(HEADER_PREFIX)
 }
 
-/// Drop every header the host reserves, so only the host's own identity
-/// reaches the endpoint.
-pub fn strip_reserved_headers(headers: &mut Vec<(String, String)>) {
-    headers.retain(|(name, _)| !is_reserved_header(name));
-}
-
 /// Append a byte string to a preimage, length-prefixed.
 ///
 /// The prefix is what keeps one field from running into the next, so a length
@@ -656,20 +650,25 @@ mod tests {
         );
     }
 
+    /// Hosts drop caller-supplied identity headers by asking this, so it has to
+    /// answer for the whole reserved prefix in any casing.
     #[test]
-    fn caller_supplied_identity_headers_are_stripped() {
-        let mut headers = vec![
-            ("content-type".to_string(), "application/json".to_string()),
-            ("X-Polkadot-Key".to_string(), "forged".to_string()),
-            ("x-polkadot-signature".to_string(), "forged".to_string()),
-            ("X-POLKADOT-Nonce".to_string(), "forged".to_string()),
-            ("x-polkadot-anything".to_string(), "forged".to_string()),
-        ];
-        strip_reserved_headers(&mut headers);
-        assert_eq!(
-            headers,
-            vec![("content-type".to_string(), "application/json".to_string())],
-            "the whole reserved prefix goes, in any casing"
-        );
+    fn every_reserved_header_spelling_is_recognized() {
+        for reserved in [
+            "X-Polkadot-Key",
+            "x-polkadot-signature",
+            "X-POLKADOT-Nonce",
+            "x-polkadot-anything",
+        ] {
+            assert!(is_reserved_header(reserved), "{reserved} is the host's");
+        }
+        for allowed in [
+            "content-type",
+            "authorization",
+            "x-polkadot",
+            "polkadot-key",
+        ] {
+            assert!(!is_reserved_header(allowed), "{allowed} is the product's");
+        }
     }
 }

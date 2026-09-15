@@ -595,22 +595,37 @@ impl ProductRuntimeHost {
         service.set_authorization_status(&request, status).await
     }
 
-    /// Whether a credential grant is worth putting to the user.
+    /// The remote-permission request to put to the user, or `None` to refuse
+    /// it without a prompt.
     ///
-    /// A grant that could never produce an identity is refused without a
-    /// prompt: there is no session to derive one from (RFC 0009), or the triple
-    /// names something a grant cannot cover. Any other permission is askable.
-    pub(super) fn credential_grant_is_askable(&self, permission: &v01::RemotePermission) -> bool {
+    /// A credential grant is refused unprompted when it could never produce an
+    /// identity: no session to derive one from (RFC 0009), or a triple naming
+    /// something a grant cannot cover.
+    ///
+    /// Otherwise it is canonicalized *before* the prompt, not only on the way
+    /// to storage. The user has to be asked about the endpoint that will
+    /// actually be granted: `/session/../../admin` reads as something beneath
+    /// `/session` and resolves to `/admin`, so prompting on the raw triple
+    /// would show one endpoint and grant another. Any other permission passes
+    /// through untouched.
+    pub(super) fn askable_remote_request(
+        &self,
+        request: v01::RemotePermissionRequest,
+    ) -> Option<v01::RemotePermissionRequest> {
         let v01::RemotePermission::Credential {
             domain,
             path,
             method,
-        } = permission
+        } = &request.permission
         else {
-            return true;
+            return Some(request);
         };
-        credential::CredentialGrant::new(domain, path, method).is_ok()
-            && self.authority.current_session().is_some()
+        self.authority.current_session()?;
+        credential::CredentialGrant::new(domain, path, method)
+            .ok()
+            .map(|grant| v01::RemotePermissionRequest {
+                permission: grant.permission(),
+            })
     }
 
     /// Identity headers for one outbound request a credential grant covers
