@@ -152,6 +152,11 @@ impl Permissions for ProductRuntimeHost {
         request: RemotePermissionRequest,
     ) -> Result<RemotePermissionResponse, CallError<RemotePermissionError>> {
         let RemotePermissionRequest::V1(inner) = request;
+        if !self.credential_grant_is_askable(&inner.permission) {
+            return Ok(RemotePermissionResponse::V1(
+                v01::RemotePermissionResponse { granted: false },
+            ));
+        }
         let product_id = self.product_id();
         let service = self.permissions_service(&product_id);
         match service.check_or_prompt_remote(inner).await {

@@ -62,6 +62,76 @@ pub enum CredentialError {
     Wildcard,
 }
 
+/// Why a host cannot attach an identity to an outbound request.
+#[derive(Debug, Error, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Error))]
+pub enum CredentialRequestError {
+    /// The URL does not parse, carries no host, is not `https`, or names a
+    /// wildcard.
+    #[error("{reason}")]
+    NotCovered {
+        /// Which of those it is.
+        reason: String,
+    },
+    /// No credential grant covers this endpoint. The product asks for one
+    /// through `request_remote_permission`; the host never prompts mid-request.
+    #[error("no credential grant covers this endpoint")]
+    NotGranted,
+    /// No session, so there is no wallet to derive an identity from.
+    #[error("no active session")]
+    NotConnected,
+    /// The identity could not be derived.
+    #[error("{reason}")]
+    Unknown {
+        /// What went wrong.
+        reason: String,
+    },
+}
+
+impl From<CredentialError> for CredentialRequestError {
+    fn from(err: CredentialError) -> Self {
+        Self::NotCovered {
+            reason: err.to_string(),
+        }
+    }
+}
+
+/// The identity a host attaches to one covered request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
+pub struct CredentialRequestHeaders {
+    /// `X-Polkadot-Key`: the sr25519 public key a backend rate limits on.
+    pub key: Vec<u8>,
+    /// `X-Polkadot-Signature`: sr25519 signature over the request digest.
+    pub signature: Vec<u8>,
+    /// `X-Polkadot-Timestamp`: Unix seconds the signature was made at.
+    pub timestamp: u64,
+    /// `X-Polkadot-Nonce`: random bytes, fresh per request.
+    pub nonce: Vec<u8>,
+}
+
+impl CredentialRequestHeaders {
+    /// The headers as `(name, value)` pairs, hex-encoded with a `0x` prefix
+    /// for the two byte-string fields, ready to attach to the request.
+    pub fn to_header_pairs(&self) -> Vec<(String, String)> {
+        vec![
+            (HEADER_KEY.to_string(), hex_value(&self.key)),
+            (HEADER_SIGNATURE.to_string(), hex_value(&self.signature)),
+            (HEADER_TIMESTAMP.to_string(), self.timestamp.to_string()),
+            (HEADER_NONCE.to_string(), hex_value(&self.nonce)),
+        ]
+    }
+}
+
+fn hex_value(bytes: &[u8]) -> String {
+    let mut value = String::with_capacity(2 + bytes.len() * 2);
+    value.push_str("0x");
+    for byte in bytes {
+        value.push_str(&format!("{byte:02x}"));
+    }
+    value
+}
+
 /// One `(domain, path, method)` triple in the canonical form the permission key
 /// is built from: domain lower-cased, method upper-cased, path verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,7 +285,10 @@ mod tests {
         assert_eq!(grant.domain, "onramp.example.com", "domain canonicalizes");
         assert_eq!(grant.method, "POST", "method canonicalizes");
         assert_eq!(grant.path, "/session", "path is verbatim");
-        assert_eq!(query, "currency=EUR&amount=10", "query is kept, not granted");
+        assert_eq!(
+            query, "currency=EUR&amount=10",
+            "query is kept, not granted"
+        );
     }
 
     #[test]
@@ -244,7 +317,13 @@ mod tests {
     /// it would pass just as well if the preimage moved.
     #[test]
     fn request_digest_is_pinned() {
-        let digest = request_digest(&grant(), "currency=EUR", 1_760_000_000, &[0xAA; 16], &[0; 32]);
+        let digest = request_digest(
+            &grant(),
+            "currency=EUR",
+            1_760_000_000,
+            &[0xAA; 16],
+            &[0; 32],
+        );
         assert_eq!(
             hex::encode(digest),
             "02c47cb7da696d605d9904c8caa93ccad52158b12892a0dd6641579a314b75a9",

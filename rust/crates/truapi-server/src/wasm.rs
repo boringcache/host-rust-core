@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::channel::mpsc;
 use futures::future::{AbortHandle, Abortable};
 use futures::stream::{self, BoxStream, Stream, StreamExt};
-use js_sys::{Array, Function, Reflect, Uint8Array};
+use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use parity_scale_codec::{Decode, Encode};
 use send_wrapper::SendWrapper;
 use truapi::latest::HostPlatform;
@@ -1364,6 +1364,44 @@ impl WasmProductRuntime {
             .await
             .map_err(generic_error_to_js)?;
         Ok(permission_authorization_status_to_js(status))
+    }
+
+    /// Identity headers for one outbound request a credential grant covers,
+    /// for the host to attach as it forwards the request (RFC 0025).
+    ///
+    /// The host strips every `X-Polkadot-*` header the caller supplied before
+    /// attaching these, so a product cannot present an identity of its own
+    /// choosing. `bodyHash` is the BLAKE2b-256 of the request body, empty body
+    /// included.
+    ///
+    /// Resolves to an object of header name to value, ready to set on the
+    /// outgoing request, and rejects when no grant covers the endpoint.
+    #[wasm_bindgen(js_name = credentialRequestHeaders)]
+    pub async fn credential_request_headers(
+        &self,
+        method: String,
+        url: String,
+        body_hash: Vec<u8>,
+    ) -> Result<JsValue, JsValue> {
+        let body_hash: [u8; 32] = body_hash
+            .try_into()
+            .map_err(|_| JsValue::from_str("bodyHash must be 32 bytes"))?;
+        let headers = self
+            .inner
+            .core
+            .credential_request_headers(method, url, body_hash)
+            .await
+            .map_err(|err| JsValue::from_str(&err.to_string()))?;
+
+        let object = Object::new();
+        for (name, value) in headers.to_header_pairs() {
+            Reflect::set(
+                &object,
+                &JsValue::from_str(&name),
+                &JsValue::from_str(&value),
+            )?;
+        }
+        Ok(object.into())
     }
 
     /// Read permission authorization statuses without prompting.

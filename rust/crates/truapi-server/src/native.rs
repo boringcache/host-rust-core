@@ -20,6 +20,8 @@ use futures::stream::{self, BoxStream, StreamExt};
 use futures::task::SpawnExt;
 use parity_scale_codec::Encode;
 use truapi::{Bytes32, latest::HostPlatform, v01};
+
+use crate::host_logic::credential::{CredentialRequestError, CredentialRequestHeaders};
 use truapi_platform::{
     AuthPresenter, AuthState, ChainProvider, CoreAdmin, CoreStorage, CoreStorageKey, Features,
     HostInfo, JsonRpcConnection, LocaleHost, Navigation, Notifications,
@@ -1053,6 +1055,24 @@ impl NativeProductExecution {
             .admin()
             .permission_authorization_status(request)
             .await?)
+    }
+
+    /// Identity headers for one outbound request a credential grant covers,
+    /// for the host to attach as it forwards the request (RFC 0025).
+    ///
+    /// The host strips every `X-Polkadot-*` header the caller supplied before
+    /// attaching these, so a product cannot present an identity of its own
+    /// choosing. `body_hash` is the BLAKE2b-256 of the request body, empty body
+    /// included.
+    pub async fn credential_request_headers(
+        &self,
+        method: String,
+        url: String,
+        body_hash: Bytes32,
+    ) -> Result<CredentialRequestHeaders, CredentialRequestError> {
+        self.admin()
+            .credential_request_headers(method, url, body_hash)
+            .await
     }
 
     /// Update a product-scoped permission authorization.
