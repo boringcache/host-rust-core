@@ -2434,6 +2434,11 @@ mod tests {
             v01::RemotePermission::ChainSubmit,
             v01::RemotePermission::PreimageSubmit,
             v01::RemotePermission::StatementSubmit,
+            v01::RemotePermission::Credential {
+                domain: "onramp.example.com".to_string(),
+                path: "/session".to_string(),
+                method: "POST".to_string(),
+            },
         ];
 
         let mut cases: Vec<PermissionAuthorizationRequest> = Vec::new();
