@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use parity_scale_codec::{Decode, Encode};
 
-use truapi::{CallError, v01};
+use truapi::{CallError, v01, versioned::account};
 
 use truapi_server::core::TrUApiCore;
 use truapi_server::frame::{
