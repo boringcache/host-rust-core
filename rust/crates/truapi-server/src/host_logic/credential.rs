@@ -169,32 +169,47 @@ impl CredentialGrant {
     /// call to it — but it is covered by the signature, so it is returned
     /// alongside rather than discarded.
     pub fn from_request(method: &str, url: &str) -> Result<(Self, String), CredentialError> {
-        let parsed = Url::parse(url).map_err(|_| CredentialError::InvalidUrl)?;
-        if parsed.scheme() != "https" {
+        Self::from_url(
+            &Url::parse(url).map_err(|_| CredentialError::InvalidUrl)?,
+            method,
+        )
+    }
+
+    /// Canonicalize a triple as a product asked for it.
+    ///
+    /// Goes through the same URL parse a live request does, so a grant and the
+    /// request it is meant to cover cannot disagree on spelling: a path is
+    /// percent-encoded and dot-resolved on both sides, and a port or userinfo
+    /// is refused on both rather than accepted here and refused there.
+    pub fn new(domain: &str, path: &str, method: &str) -> Result<Self, CredentialError> {
+        if domain.contains('*') || path.contains('*') {
+            return Err(CredentialError::Wildcard);
+        }
+        let separator = if path.starts_with('/') { "" } else { "/" };
+        let url = Url::parse(&format!("https://{domain}{separator}{path}"))
+            .map_err(|_| CredentialError::InvalidUrl)?;
+        Self::from_url(&url, method).map(|(grant, _)| grant)
+    }
+
+    /// The grant an `https` URL names, and its query string.
+    fn from_url(url: &Url, method: &str) -> Result<(Self, String), CredentialError> {
+        if url.scheme() != "https" {
             return Err(CredentialError::NotHttps);
         }
         // A grant is keyed by domain alone. Accepting a port or userinfo here
         // would drop it and let `https://example.com:8443/session` be covered
         // by a grant the user gave for `https://example.com/session`, which is
         // a different origin. Refuse rather than silently widen the grant.
-        if parsed.port().is_some() || !parsed.username().is_empty() || parsed.password().is_some() {
+        if url.port().is_some() || !url.username().is_empty() || url.password().is_some() {
             return Err(CredentialError::NotDefaultOrigin);
         }
-        let domain = parsed.host_str().ok_or(CredentialError::InvalidUrl)?;
-        let grant = Self::new(domain, parsed.path(), method)?;
-        Ok((grant, parsed.query().unwrap_or_default().to_string()))
-    }
-
-    /// Canonicalize a triple, rejecting wildcards.
-    pub fn new(domain: &str, path: &str, method: &str) -> Result<Self, CredentialError> {
-        if domain.contains('*') || path.contains('*') {
-            return Err(CredentialError::Wildcard);
-        }
-        Ok(Self {
+        let domain = url.host_str().ok_or(CredentialError::InvalidUrl)?;
+        let grant = Self {
             domain: domain.to_ascii_lowercase(),
-            path: path.to_string(),
+            path: url.path().to_string(),
             method: method.to_ascii_uppercase(),
-        })
+        };
+        Ok((grant, url.query().unwrap_or_default().to_string()))
     }
 
     /// The permission this grant is stored and prompted under.
@@ -446,9 +461,63 @@ mod tests {
     /// by running one field into the next.
     #[test]
     fn adjacent_fields_cannot_be_confused() {
-        let split = CredentialGrant::new("onramp.example.com", "/session", "POST").unwrap();
-        let joined = CredentialGrant::new("onramp.example.com/session", "", "POST").unwrap();
+        let split = CredentialGrant {
+            domain: "onramp.example.com".to_string(),
+            path: "/session".to_string(),
+            method: "POST".to_string(),
+        };
+        let joined = CredentialGrant {
+            domain: "onramp.example.com/session".to_string(),
+            path: String::new(),
+            method: "POST".to_string(),
+        };
         assert_ne!(split.digest(), joined.digest());
+    }
+
+    /// A grant and the request it covers are spelled by different callers: the
+    /// product names a triple, the host parses a live URL. They have to land on
+    /// the same value or the grant silently covers nothing.
+    #[test]
+    fn a_grant_and_its_request_agree_on_spelling() {
+        let cases = [
+            (
+                "onramp.example.com",
+                "/user profile",
+                "https://onramp.example.com/user profile",
+            ),
+            (
+                "onramp.example.com",
+                "/a/../b",
+                "https://onramp.example.com/a/../b",
+            ),
+            (
+                "Onramp.Example.com",
+                "/session",
+                "https://onramp.example.com/session",
+            ),
+            ("onramp.example.com", "", "https://onramp.example.com"),
+        ];
+        for (domain, path, url) in cases {
+            let granted = CredentialGrant::new(domain, path, "post").expect("grantable");
+            let (requested, _) = CredentialGrant::from_request("POST", url).expect("covered");
+            assert_eq!(granted, requested, "{domain}{path} must cover {url}");
+        }
+    }
+
+    /// A grant naming something no request can produce would prompt the user
+    /// for access that could never be exercised.
+    #[test]
+    fn a_grant_cannot_name_an_origin_no_request_reaches() {
+        for (domain, path) in [
+            ("onramp.example.com:8443", "/session"),
+            ("u@onramp.example.com", "/session"),
+        ] {
+            assert_eq!(
+                CredentialGrant::new(domain, path, "POST"),
+                Err(CredentialError::NotDefaultOrigin),
+                "{domain} is not an endpoint a request can match",
+            );
+        }
     }
 
     #[test]

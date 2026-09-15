@@ -71,7 +71,11 @@ Credential {
 },
 ```
 
-Appended last: `RemotePermission` is SCALE-encoded into `CoreStorageKey::PermissionAuthorization`, so amending `Remote` would re-key every stored decision, which [RFC-0002](0002-permission-model.md) requires to persist indefinitely. `Credential` narrows `Remote` rather than replacing it. One triple per grant, and a second triple is a second prompt. Hosts canonicalise `domain` to lower case and `method` to upper case before keying a stored decision. `path` is keyed verbatim.
+Appended last: `RemotePermission` is SCALE-encoded into `CoreStorageKey::PermissionAuthorization`, so amending `Remote` would re-key every stored decision, which [RFC-0002](0002-permission-model.md) requires to persist indefinitely. `Credential` narrows `Remote` rather than replacing it. One triple per grant, and a second triple is a second prompt.
+
+A grant and the request it covers are spelled by different callers — the product names a triple, the host parses a live URL — so both are canonicalised the same way, by resolving `https://<domain><path>` as a URL: `domain` lower-cased, `method` upper-cased, `path` percent-encoded and dot-resolved, with an empty path reading as `/`. A grant that canonicalises differently from the request it was meant to cover would silently cover nothing.
+
+Because the grant is keyed by domain, a URL carrying a **port or userinfo is refused** rather than accepted with those parts dropped. Accepting them would let a grant for `https://example.com/session` cover `https://example.com:8443/session`, which is a different origin running a different service. The restriction applies to the grant as well as the request, so a product cannot be prompted for an endpoint no request could ever match.
 
 A grant occupies a single storage slot of its own. The domain-bundle machinery `Remote` uses — wildcard precedence, per-domain fan-out on grant, set-shaped denial — does not apply, because a credential grant names one endpoint rather than a set. A `Remote` grant over `onramp.example.com` is not a `Credential` grant on any of its endpoints, and never becomes one.
 
@@ -79,7 +83,7 @@ A grant occupies a single storage slot of its own. The domain-bundle machinery `
 
 1. **No session.** Denied under [RFC-0009](0009-unauthenticated-product-access.md), without a prompt: there is no wallet to derive an identity from. The host does not auto-prompt login.
 2. **Covered requests would not be `https`.** Denied, without a prompt. The signature would otherwise travel in plaintext, where a proxy could lift it onto another request.
-3. **The triple names a wildcard.** Denied, without a prompt.
+3. **The triple names a wildcard, a port, or userinfo.** Denied, without a prompt.
 4. **Otherwise.** A prompt naming the method, domain, and path.
 
 A product a host treats as trusted holds `Credential` the way it holds every other `RemotePermission`, without a prompt.
@@ -124,7 +128,9 @@ with `seed` expanded to an sr25519 keypair. The separator keys the **product-id 
 
 The timestamp and nonce are minted by the core rather than by each host, so every host binds a signature the same way.
 
-The host MUST strip caller-supplied `X-Polkadot-*` headers before attaching its own.
+`X-Polkadot-Key`, `X-Polkadot-Signature` and `X-Polkadot-Nonce` are lower-case hex behind a `0x` prefix; `X-Polkadot-Timestamp` is decimal. The core hands hosts finished name/value pairs rather than raw bytes, because two hosts choosing different encodings would make the same wallet verify on one platform and fail on another.
+
+The host MUST strip caller-supplied `X-Polkadot-*` headers before attaching its own, or a product could present an identity of its choosing. The core exports the rule for which names are reserved, so every host applies the same one.
 
 The grant is the consent. It authorises these signatures without per-call confirmation: a dialog per HTTP request would be unusable. A request to an endpoint with no grant is refused rather than prompted, because an HTTP request cannot raise a dialog; the product asks through `remote_permission` instead.
 
