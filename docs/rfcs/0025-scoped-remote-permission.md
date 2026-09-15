@@ -1,6 +1,7 @@
 ---
 title: "Credential-endpoint remote permission"
 owner: "@BigTava"
+authors: ["@BigTava", "@filvecchiato"]
 status: draft
 ---
 
