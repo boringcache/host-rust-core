@@ -1611,11 +1611,7 @@ mod tests {
             PermissionAuthorizationStatus::Authorized
         );
         assert_eq!(
-            platform
-                .chat_authority_reviews
-                .lock()
-                .expect("Chat authority review list mutex poisoned")
-                .as_slice(),
+            platform.chat_authority_reviews.lock().as_slice(),
             &[ChatAuthorityReview {
                 product_id: "chat.paseo".to_string(),
             }]

@@ -584,6 +584,15 @@ impl ProductRuntimeHost {
             .map_err(|err| format!("permission storage failed: {err:?}"))
     }
 
+    #[instrument(skip_all, fields(runtime.method = "permissions.chat_authority_authorization"))]
+    async fn chat_authority_authorization(&self) -> Result<PermissionAuthorizationStatus, String> {
+        let product_id = self.product_id();
+        self.permissions_service(&product_id)
+            .check_or_prompt_chat_authority()
+            .await
+            .map_err(|err| format!("permission storage failed: {err:?}"))
+    }
+
     async fn classify_legacy_address_signer(
         &self,
         cx: &CallContext,

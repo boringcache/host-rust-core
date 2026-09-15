@@ -374,7 +374,7 @@ impl Account for ProductRuntimeHost {
             )));
         };
         if self
-            .identity_disclosure_authorization()
+            .chat_authority_authorization()
             .await
             .map_err(|reason| CallError::HostFailure { reason })?
             != PermissionAuthorizationStatus::Authorized

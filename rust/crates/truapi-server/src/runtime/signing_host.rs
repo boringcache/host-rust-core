@@ -1379,14 +1379,19 @@ mod tests {
         SR25519_SIGNING_CONTEXT, raw_payload_bytes,
     };
     use crate::host_logic::extrinsic::tests::split_v4;
+    use crate::host_logic::permissions::PermissionsService;
     use crate::host_logic::product_account::{
         derive_identity_keypair, derive_product_keypair, derive_ring_vrf_entropy,
         derive_root_keypair_from_entropy, index_bytes,
     };
-    use crate::host_logic::sso::messages::ProductRequest;
+    use crate::host_logic::sso::messages::{
+        ProductDeviceChatResponse, ProductRequest, RemoteMessage, RemoteMessageData,
+        SsoProductDeviceChatOperation, v1,
+    };
     use crate::host_logic::transaction::{
         extrinsic_payload_extensions, extrinsic_payload_preimage,
     };
+    use crate::runtime::sso_service::Dispatch;
     use crate::runtime::statement_allowance::collection::PersonhoodCollection;
     use crate::test_support::{StubPlatform, test_spawner};
     use truapi::api::{Account, Entropy, ResourceAllocation, Signing};
@@ -1394,14 +1399,20 @@ mod tests {
         HostAccountCreateProofRequest, HostAccountGetAliasRequest,
         HostAccountRegisterRingVrfKeyRequest, HostAccountRingVrfSignRequest,
     };
-    use truapi::versioned::account::{HostAccountGetError, HostAccountGetRequest};
+    use truapi::versioned::account::{
+        HostAccountGetError, HostAccountGetRequest, HostProductDeviceChatError,
+        HostProductDeviceChatRequest, HostProductDeviceChatResponse,
+    };
     use truapi::versioned::entropy::HostDeriveEntropyRequest;
     use truapi::versioned::resource_allocation::{
         HostRequestResourceAllocationRequest, HostRequestResourceAllocationResponse,
     };
     use truapi::versioned::signing::{HostSignRawError, HostSignRawRequest, HostSignRawResponse};
     use truapi::{CallContext, CallError, v01};
-    use truapi_platform::{HostInfo, Platform, PlatformInfo, ProductContext, SigningHostConfig};
+    use truapi_platform::{
+        HostInfo, PermissionAuthorizationRequest, PermissionAuthorizationStatus, Platform,
+        PlatformInfo, ProductContext, SigningHostConfig,
+    };
     use verifiable::ring::RingDomainSize;
 
     const ENTROPY: [u8; 16] = [0xAB; 16];
@@ -2689,7 +2700,7 @@ mod tests {
     #[test]
     fn product_chat_request_proof_signs_unframed_payload() {
         let (services, activation) = signing_runtime_with_platform(Arc::new(StubPlatform {
-            identity_disclosure_confirmed: true,
+            chat_authority_confirmed: true,
             ..StubPlatform::default()
         }));
         futures::executor::block_on(activation.activate_local_session(ENTROPY.to_vec()))
@@ -2735,6 +2746,359 @@ mod tests {
                 .is_err(),
             "Chat proof signing never applies wallet-message framing",
         );
+    }
+
+    #[test]
+    fn product_chat_username_grant_does_not_authorize_crypto() {
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform::default());
+            let (services, activation) = signing_runtime_with_platform(platform.clone());
+            activation
+                .activate_local_session(ENTROPY.to_vec())
+                .await
+                .unwrap();
+            let runtime = product_runtime(services, activation);
+            runtime
+                .set_permission_authorization_status(
+                    PermissionAuthorizationRequest::IdentityDisclosure,
+                    PermissionAuthorizationStatus::Authorized,
+                )
+                .await
+                .unwrap();
+            let cx = CallContext::default();
+            let request =
+                HostProductDeviceChatRequest::V1(v01::HostProductDeviceChatRequest::Bind {
+                    product_account_id: product_account(0),
+                    peer_identity_account_id: [0x33; 32],
+                    peer_chat_public_key: x25519_dalek::PublicKey::from(
+                        &x25519_dalek::StaticSecret::from([0x22; 32]),
+                    )
+                    .to_bytes(),
+                });
+
+            for _ in 0..2 {
+                assert!(matches!(
+                    runtime.product_device_chat(&cx, request.clone()).await,
+                    Err(CallError::Domain(HostProductDeviceChatError::V1(
+                        v01::HostProductDeviceChatError::Rejected
+                    )))
+                ));
+            }
+            assert_eq!(
+                platform.chat_authority_reviews.lock().len(),
+                1,
+                "Chat requires its own prompt, then respects the persisted refusal"
+            );
+            assert_eq!(
+                runtime
+                    .permission_authorization_status(PermissionAuthorizationRequest::ChatAuthority)
+                    .await
+                    .unwrap(),
+                PermissionAuthorizationStatus::Denied
+            );
+            assert_eq!(
+                runtime
+                    .permission_authorization_status(
+                        PermissionAuthorizationRequest::IdentityDisclosure,
+                    )
+                    .await
+                    .unwrap(),
+                PermissionAuthorizationStatus::Authorized
+            );
+        });
+    }
+
+    #[test]
+    fn product_chat_consent_is_cached_and_revocation_blocks_crypto() {
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform {
+                chat_authority_confirmed: true,
+                ..StubPlatform::default()
+            });
+            let (services, activation) = signing_runtime_with_platform(platform.clone());
+            activation
+                .activate_local_session(ENTROPY.to_vec())
+                .await
+                .unwrap();
+            let runtime = product_runtime(services, activation);
+            runtime
+                .set_permission_authorization_status(
+                    PermissionAuthorizationRequest::IdentityDisclosure,
+                    PermissionAuthorizationStatus::Authorized,
+                )
+                .await
+                .unwrap();
+            runtime
+                .set_permission_authorization_status(
+                    PermissionAuthorizationRequest::ChatAuthority,
+                    PermissionAuthorizationStatus::Denied,
+                )
+                .await
+                .unwrap();
+            let cx = CallContext::default();
+            let peer_chat_public_key =
+                x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([0x22; 32]))
+                    .to_bytes();
+            let bind = HostProductDeviceChatRequest::V1(v01::HostProductDeviceChatRequest::Bind {
+                product_account_id: product_account(0),
+                peer_identity_account_id: [0x33; 32],
+                peer_chat_public_key,
+            });
+            assert!(matches!(
+                runtime.product_device_chat(&cx, bind.clone()).await,
+                Err(CallError::Domain(HostProductDeviceChatError::V1(
+                    v01::HostProductDeviceChatError::Rejected
+                )))
+            ));
+            assert!(platform.chat_authority_reviews.lock().is_empty());
+
+            runtime
+                .set_permission_authorization_status(
+                    PermissionAuthorizationRequest::ChatAuthority,
+                    PermissionAuthorizationStatus::NotDetermined,
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                runtime
+                    .product_device_chat(&cx, bind.clone())
+                    .await
+                    .unwrap(),
+                HostProductDeviceChatResponse::V1(
+                    v01::HostProductDeviceChatResponse::IdentityBinding { .. }
+                )
+            ));
+            let plaintext = b"Chat consent protects private messages".to_vec();
+            let seal = HostProductDeviceChatRequest::V1(v01::HostProductDeviceChatRequest::Seal {
+                product_account_id: product_account(0),
+                peer_chat_public_key,
+                cipher_suite: v01::HostProductDeviceChatCipherSuite::LegacyV2,
+                plaintext: plaintext.clone(),
+            });
+            let HostProductDeviceChatResponse::V1(v01::HostProductDeviceChatResponse::Sealed {
+                combined_ciphertext,
+            }) = runtime
+                .product_device_chat(&cx, seal.clone())
+                .await
+                .unwrap()
+            else {
+                panic!("expected sealed Chat message");
+            };
+            let open = HostProductDeviceChatRequest::V1(v01::HostProductDeviceChatRequest::Open {
+                product_account_id: product_account(0),
+                peer_chat_public_key,
+                cipher_suite: v01::HostProductDeviceChatCipherSuite::LegacyV2,
+                combined_ciphertext,
+            });
+            assert_eq!(
+                runtime
+                    .product_device_chat(&cx, open.clone())
+                    .await
+                    .unwrap(),
+                HostProductDeviceChatResponse::V1(v01::HostProductDeviceChatResponse::Opened {
+                    plaintext
+                })
+            );
+            assert_eq!(platform.chat_authority_reviews.lock().len(), 1);
+
+            runtime
+                .set_permission_authorization_status(
+                    PermissionAuthorizationRequest::ChatAuthority,
+                    PermissionAuthorizationStatus::Denied,
+                )
+                .await
+                .unwrap();
+            for request in [bind, seal, open] {
+                assert!(matches!(
+                    runtime.product_device_chat(&cx, request).await,
+                    Err(CallError::Domain(HostProductDeviceChatError::V1(
+                        v01::HostProductDeviceChatError::Rejected
+                    )))
+                ));
+            }
+            assert_eq!(
+                platform.chat_authority_reviews.lock().len(),
+                1,
+                "revocation must not be overridden by another prompt"
+            );
+        });
+    }
+
+    async fn sso_chat(
+        service: &super::sso_service::SigningHostSsoService,
+        payload: SsoProductDeviceChatOperation,
+    ) -> ProductDeviceChatResponse {
+        let message = RemoteMessage::request(
+            "chat-consent".to_string(),
+            ProductRequest {
+                calling_product_id: "myapp.dot".to_string(),
+                payload,
+            },
+        );
+        let Dispatch::Response(answer) = service.dispatch(service.current_session(), message).await
+        else {
+            panic!("expected SSO response");
+        };
+        let RemoteMessageData::V1(v1::RemoteMessage::ProductDeviceChatResponse(response)) =
+            answer.message.data
+        else {
+            panic!("expected SSO Chat response");
+        };
+        response.payload
+    }
+
+    #[test]
+    fn sso_chat_username_grant_does_not_authorize_crypto() {
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform::default());
+            let (_, activation) = signing_runtime_with_platform(platform.clone());
+            activation
+                .activate_local_session(ENTROPY.to_vec())
+                .await
+                .unwrap();
+            let service = super::sso_service::SigningHostSsoService::new(activation);
+            let permissions =
+                PermissionsService::new(platform.as_ref(), platform.as_ref(), "myapp.dot");
+            permissions
+                .set_authorization_status(
+                    &PermissionAuthorizationRequest::IdentityDisclosure,
+                    PermissionAuthorizationStatus::Authorized,
+                )
+                .await
+                .unwrap();
+            let request = SsoProductDeviceChatOperation::Bind {
+                derivation_index: v01::DerivationIndex::Index(0),
+                peer_identity_account_id: [0x33; 32],
+                peer_chat_public_key: x25519_dalek::PublicKey::from(
+                    &x25519_dalek::StaticSecret::from([0x22; 32]),
+                )
+                .to_bytes(),
+            };
+
+            for _ in 0..2 {
+                assert_eq!(
+                    sso_chat(&service, request.clone()).await,
+                    Err(v01::HostProductDeviceChatError::Rejected)
+                );
+            }
+            assert_eq!(
+                platform.chat_authority_reviews.lock().len(),
+                1,
+                "SSO Chat requires its own prompt, then respects the persisted refusal"
+            );
+            assert_eq!(
+                permissions
+                    .authorization_status(&PermissionAuthorizationRequest::ChatAuthority)
+                    .await
+                    .unwrap(),
+                PermissionAuthorizationStatus::Denied
+            );
+            assert_eq!(
+                permissions
+                    .authorization_status(&PermissionAuthorizationRequest::IdentityDisclosure)
+                    .await
+                    .unwrap(),
+                PermissionAuthorizationStatus::Authorized
+            );
+        });
+    }
+
+    #[test]
+    fn sso_chat_consent_is_cached_and_revocation_blocks_crypto() {
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform {
+                chat_authority_confirmed: true,
+                ..StubPlatform::default()
+            });
+            let (_, activation) = signing_runtime_with_platform(platform.clone());
+            activation
+                .activate_local_session(ENTROPY.to_vec())
+                .await
+                .unwrap();
+            let service = super::sso_service::SigningHostSsoService::new(activation);
+            let permissions =
+                PermissionsService::new(platform.as_ref(), platform.as_ref(), "myapp.dot");
+            permissions
+                .set_authorization_status(
+                    &PermissionAuthorizationRequest::IdentityDisclosure,
+                    PermissionAuthorizationStatus::Authorized,
+                )
+                .await
+                .unwrap();
+            permissions
+                .set_authorization_status(
+                    &PermissionAuthorizationRequest::ChatAuthority,
+                    PermissionAuthorizationStatus::Denied,
+                )
+                .await
+                .unwrap();
+            let peer_chat_public_key =
+                x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([0x22; 32]))
+                    .to_bytes();
+            let bind = SsoProductDeviceChatOperation::Bind {
+                derivation_index: v01::DerivationIndex::Index(0),
+                peer_identity_account_id: [0x33; 32],
+                peer_chat_public_key,
+            };
+            assert_eq!(
+                sso_chat(&service, bind.clone()).await,
+                Err(v01::HostProductDeviceChatError::Rejected)
+            );
+            assert!(platform.chat_authority_reviews.lock().is_empty());
+
+            permissions
+                .set_authorization_status(
+                    &PermissionAuthorizationRequest::ChatAuthority,
+                    PermissionAuthorizationStatus::NotDetermined,
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                sso_chat(&service, bind.clone()).await.unwrap(),
+                v01::HostProductDeviceChatResponse::IdentityBinding { .. }
+            ));
+            let plaintext = b"SSO Chat consent protects private messages".to_vec();
+            let seal = SsoProductDeviceChatOperation::Seal {
+                peer_chat_public_key,
+                cipher_suite: v01::HostProductDeviceChatCipherSuite::LegacyV2,
+                plaintext: plaintext.clone(),
+            };
+            let v01::HostProductDeviceChatResponse::Sealed {
+                combined_ciphertext,
+            } = sso_chat(&service, seal.clone()).await.unwrap()
+            else {
+                panic!("expected sealed SSO Chat message");
+            };
+            let open = SsoProductDeviceChatOperation::Open {
+                peer_chat_public_key,
+                cipher_suite: v01::HostProductDeviceChatCipherSuite::LegacyV2,
+                combined_ciphertext,
+            };
+            assert_eq!(
+                sso_chat(&service, open.clone()).await.unwrap(),
+                v01::HostProductDeviceChatResponse::Opened { plaintext }
+            );
+            assert_eq!(platform.chat_authority_reviews.lock().len(), 1);
+
+            permissions
+                .set_authorization_status(
+                    &PermissionAuthorizationRequest::ChatAuthority,
+                    PermissionAuthorizationStatus::Denied,
+                )
+                .await
+                .unwrap();
+            for request in [bind, seal, open] {
+                assert_eq!(
+                    sso_chat(&service, request).await,
+                    Err(v01::HostProductDeviceChatError::Rejected)
+                );
+            }
+            assert_eq!(
+                platform.chat_authority_reviews.lock().len(),
+                1,
+                "revocation must not be overridden by another SSO prompt"
+            );
+        });
     }
 
     #[test]

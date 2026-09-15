@@ -396,7 +396,7 @@ impl PairingProgress {
                 Ok(Self::Success(Box::new(PairingSuccess {
                     statement: statement.to_vec(),
                     peer_statement_account_id: verified.signer,
-                    success: (*success).clone(),
+                    success: *success,
                 })))
             }
         }

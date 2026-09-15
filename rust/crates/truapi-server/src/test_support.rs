@@ -97,7 +97,7 @@ pub(crate) struct StubPlatform {
     pub(crate) identity_disclosure_calls: Arc<AtomicUsize>,
     pub(crate) chat_authority_confirmed: bool,
     pub(crate) chat_authority_error: Option<&'static str>,
-    pub(crate) chat_authority_reviews: Arc<Mutex<Vec<ChatAuthorityReview>>>,
+    pub(crate) chat_authority_reviews: Arc<parking_lot::Mutex<Vec<ChatAuthorityReview>>>,
     pub(crate) sign_payload_confirmed: bool,
     pub(crate) sign_payload_error: Option<&'static str>,
     pub(crate) sign_raw_confirmed: bool,
@@ -1560,10 +1560,7 @@ impl UserConfirmation for StubPlatform {
                 )
             }
             UserConfirmationReview::ChatAuthority(review) => {
-                self.chat_authority_reviews
-                    .lock()
-                    .expect("Chat authority review list mutex poisoned")
-                    .push(review);
+                self.chat_authority_reviews.lock().push(review);
                 (self.chat_authority_error, self.chat_authority_confirmed)
             }
             UserConfirmationReview::ResourceAllocation(review) => {
