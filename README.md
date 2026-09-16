@@ -93,8 +93,11 @@ playground/                Interactive Next.js playground (truapi-playground dot
 hosts/ios/                 iOS host app; resolves the core from this tree
 hosts/android/             Android host app
 hosts/dotli/               dotli host, vendored as a submodule
+hosts/imports.json         Source repository and imported revision per host
 docs/                      Design docs, RFCs, feature proposals
 scripts/codegen.sh         Regenerate the TS client from the Rust source
+scripts/refresh-host-import.sh
+                           Refresh a vendored host tree from its source repository
 scripts/battery.sh         Run the generated battery against both headless CLI host roles,
                            plus the Pocket phase a Worker execution serves
 ```
@@ -258,6 +261,26 @@ truapi-host signing-host --frame-listen 127.0.0.1:9955 --product-id localhost:30
 To run the playground inside a real host instead, start it with `yarn dev` and
 open `https://dot.li/localhost:3000` in the Polkadot Desktop Host. See
 [`playground/README.md`](playground/README.md) for deployment.
+
+### Refreshing a vendored host tree
+
+The host trees under `hosts/` are snapshots of the repositories they were
+imported from, and those repositories keep moving. `hosts/imports.json` records
+where each tree came from and at which revision.
+
+```bash
+scripts/refresh-host-import.sh status ios     # how far behind, and what differs
+scripts/refresh-host-import.sh refresh ios    # take the new tree, re-apply adaptations
+```
+
+`refresh` replaces the tree with the source's, re-applies this repository's
+adaptations on top as a three-way patch, then compares every path against the
+source by blob hash in both directions. A difference no adaptation accounts for
+is upstream work that was dropped; an adaptation that left no difference either
+did not apply or has been adopted upstream.
+
+A clean apply is staged for review. A conflicted one is left unmerged, so git
+refuses to commit it until someone decides which side is right.
 
 ### Working on the iOS host
 
