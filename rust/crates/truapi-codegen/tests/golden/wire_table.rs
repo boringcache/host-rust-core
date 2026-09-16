@@ -42,7 +42,7 @@ pub enum WireKind {
 /// `TRUAPI_WIRE_SCHEMA_HASH`. A host stamps it on each debug envelope so
 /// the debugger refuses to decode a frame whose contract differs from
 /// its own, even when the coarse handshake codec version is unchanged.
-pub const TRUAPI_WIRE_SCHEMA_HASH: &str = "9d1f0711bce40a23";
+pub const TRUAPI_WIRE_SCHEMA_HASH: &str = "fae531303e87af7e";
 
 /// Wire discriminants for `system_handshake`.
 pub const SYSTEM_HANDSHAKE: MethodIds = MethodIds {
@@ -488,6 +488,18 @@ pub const LOCALE_SUBSCRIBE: MethodIds = MethodIds {
     method_id: 0,
 };
 
+/// Wire discriminants for `pill_declare_pill`.
+pub const PILL_DECLARE_PILL: MethodIds = MethodIds {
+    trait_id: 17,
+    method_id: 0,
+};
+
+/// Wire discriminants for `pill_withdraw_pill`.
+pub const PILL_WITHDRAW_PILL: MethodIds = MethodIds {
+    trait_id: 17,
+    method_id: 1,
+};
+
 /// The full wire table. Trait ids and per-trait method ordering are
 /// part of the wire protocol; only ever append within a trait.
 /// Removed methods leave their slot empty.
@@ -787,5 +799,13 @@ pub const WIRE_TABLE: &[WireEntry] = &[
     WireEntry {
         method: "locale_subscribe",
         kind: WireKind::Subscription(LOCALE_SUBSCRIBE),
+    },
+    WireEntry {
+        method: "pill_declare_pill",
+        kind: WireKind::Request(PILL_DECLARE_PILL),
+    },
+    WireEntry {
+        method: "pill_withdraw_pill",
+        kind: WireKind::Request(PILL_WITHDRAW_PILL),
     },
 ];

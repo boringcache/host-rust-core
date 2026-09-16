@@ -21,7 +21,7 @@ use thiserror::Error;
 use tracing::instrument;
 use truapi::v01;
 use truapi::{CallContext, CancellationReason};
-use truapi_platform::{ChatPlatform, PermissionStatusHost};
+use truapi_platform::{ChatPlatform, PermissionStatusHost, PillHost};
 use truapi_platform::{
     CoreAdmin, PairingHostAdmin, PairingHostConfig, PermissionAuthorizationRequest,
     PermissionAuthorizationStatus, Platform, ProductContext, SigningHostConfig,
@@ -274,6 +274,17 @@ impl PairingHostRuntime {
     #[instrument(skip_all, fields(runtime.method = "pairing_host_runtime.set_permission_status_host"))]
     pub fn set_permission_status_host(&self, host: Arc<dyn PermissionStatusHost>) -> bool {
         self.services.install_permission_status_host(host)
+    }
+
+    /// Install the host's [`PillHost`], the adapter that draws a product's pill
+    /// on the host's own surfaces.
+    ///
+    /// Set-once, so the capability cannot be swapped under a running product.
+    /// Returns whether this call installed it. Leaving it unset answers every
+    /// product pill call `Unsupported`.
+    #[instrument(skip_all, fields(runtime.method = "pairing_host_runtime.set_pill_host"))]
+    pub fn set_pill_host(&self, host: Arc<dyn PillHost>) -> bool {
+        self.services.install_pill_host(host)
     }
 
     /// Build a product-facing runtime from this pairing host.
@@ -594,6 +605,13 @@ impl SigningHostRuntime {
         self.services.install_permission_status_host(host)
     }
 
+    /// Install the host's [`PillHost`]. See
+    /// [`PairingHostRuntime::set_pill_host`].
+    #[instrument(skip_all, fields(runtime.method = "signing_host_runtime.set_pill_host"))]
+    pub fn set_pill_host(&self, host: Arc<dyn PillHost>) -> bool {
+        self.services.install_pill_host(host)
+    }
+
     /// Build a product-facing runtime from this signing host.
     #[instrument(skip_all, fields(runtime.method = "signing_host_runtime.product_runtime"))]
     pub fn product_runtime(
@@ -884,6 +902,8 @@ pub(crate) struct ConnectionAdapters {
     /// product execution, so the object that reports OS state has to be the
     /// same one that presents the prompt.
     pub(crate) permission_status: Option<Arc<dyn PermissionStatusHost>>,
+    /// Pill adapter for this connection, when the host draws pills.
+    pub(crate) pill: Option<Arc<dyn PillHost>>,
     pub(crate) chat: Arc<ChatConnection>,
 }
 
@@ -894,6 +914,7 @@ impl ConnectionAdapters {
             platform: services.platform.clone(),
             chat_platform: services.chat_platform.clone(),
             permission_status: services.permission_status_host(),
+            pill: services.pill_host(),
             chat: Arc::new(ChatConnection::new()),
         }
     }

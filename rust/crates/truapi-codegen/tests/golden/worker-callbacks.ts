@@ -26,6 +26,8 @@ export const CALLBACK_NAMES = [
   "devicePermissionStatus",
   "devicePermission",
   "remotePermission",
+  "declarePill",
+  "withdrawPill",
   "read",
   "write",
   "clear",
@@ -104,10 +106,11 @@ function rawCallbacks(
       bridge.callbackRequest("navigateTo", [url]) as ReturnType<
         Required<RawCallbacks>["navigateTo"]
       >,
-    pushNotification: (notification) =>
-      bridge.callbackRequest("pushNotification", [notification]) as ReturnType<
-        Required<RawCallbacks>["pushNotification"]
-      >,
+    pushNotification: (notification, urgency) =>
+      bridge.callbackRequest("pushNotification", [
+        notification,
+        urgency,
+      ]) as ReturnType<Required<RawCallbacks>["pushNotification"]>,
     cancelNotification: (id) =>
       bridge.callbackRequest("cancelNotification", [id]) as ReturnType<
         Required<RawCallbacks>["cancelNotification"]
@@ -202,6 +205,21 @@ function permissionStatusRawCallbacks(
   };
 }
 
+function pillRawCallbacks(
+  bridge: WorkerCallbackBridge,
+): Required<Pick<RawCallbacks, "declarePill" | "withdrawPill">> {
+  return {
+    declarePill: (request) =>
+      bridge.callbackRequest("declarePill", [request]) as ReturnType<
+        Required<RawCallbacks>["declarePill"]
+      >,
+    withdrawPill: (request) =>
+      bridge.callbackRequest("withdrawPill", [request]) as ReturnType<
+        Required<RawCallbacks>["withdrawPill"]
+      >,
+  };
+}
+
 /**
  * Optional capabilities the main-thread host actually serves. A
  * capability left out here is not proxied into the worker, so the
@@ -212,6 +230,8 @@ export interface OptionalCapabilities {
   chat?: boolean;
   /** Whether the host serves this capability. */
   permissionStatus?: boolean;
+  /** Whether the host serves this capability. */
+  pill?: boolean;
 }
 
 export function createWorkerRawCallbacks(
@@ -226,6 +246,7 @@ export function createWorkerRawCallbacks(
   if (capabilities.chat) Object.assign(callbacks, chatRawCallbacks(bridge));
   if (capabilities.permissionStatus)
     Object.assign(callbacks, permissionStatusRawCallbacks(bridge));
+  if (capabilities.pill) Object.assign(callbacks, pillRawCallbacks(bridge));
   return callbacks;
 }
 

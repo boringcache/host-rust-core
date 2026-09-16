@@ -28,7 +28,7 @@ use truapi::v01;
 use truapi_platform::SigningHostConfig;
 use truapi_platform::{
     ChainProvider, ChatPlatform, HostInfo, JsonRpcConnection, PairingHostConfig,
-    PermissionStatusHost, PlatformInfo, ProductContext, ProductExecutionKind,
+    PermissionStatusHost, PillHost, PlatformInfo, ProductContext, ProductExecutionKind,
     RuntimeConfigValidationError,
 };
 use wasm_bindgen::JsCast;
@@ -831,19 +831,23 @@ struct WasmPlatformAdapters {
     platform: Arc<WasmPlatform>,
     chat_platform: Option<Arc<dyn ChatPlatform>>,
     status_host: Option<Arc<dyn PermissionStatusHost>>,
+    pill_host: Option<Arc<dyn PillHost>>,
 }
 
 /// Build the platform and the optional capability adapters supplied by the host.
 fn wasm_platform(bridge: Arc<JsBridge>) -> WasmPlatformAdapters {
     let has_chat = bridge.has_chat();
     let has_permission_status = bridge.has_permission_status();
+    let has_pill = bridge.has_pill();
     let platform = Arc::new(WasmPlatform::new(bridge));
     let chat = has_chat.then(|| platform.clone() as Arc<dyn ChatPlatform>);
     let status = has_permission_status.then(|| platform.clone() as Arc<dyn PermissionStatusHost>);
+    let pill = has_pill.then(|| platform.clone() as Arc<dyn PillHost>);
     WasmPlatformAdapters {
         platform,
         chat_platform: chat,
         status_host: status,
+        pill_host: pill,
     }
 }
 
@@ -869,6 +873,7 @@ impl WasmPairingHostRuntime {
             platform,
             chat_platform,
             status_host,
+            pill_host,
         } = wasm_platform(bridge);
         let spawner: Spawner = Arc::new(|fut| {
             wasm_bindgen_futures::spawn_local(fut);
@@ -878,6 +883,9 @@ impl WasmPairingHostRuntime {
             PairingHostRuntime::with_chat_platform(platform, host_config, spawner, chat_platform);
         if let Some(status_host) = status_host {
             runtime.set_permission_status_host(status_host);
+        }
+        if let Some(pill_host) = pill_host {
+            runtime.set_pill_host(pill_host);
         }
         Ok(Self {
             runtime: Rc::new(runtime),
@@ -1245,6 +1253,7 @@ impl WasmProductRuntime {
             platform,
             chat_platform,
             status_host,
+            pill_host,
         } = wasm_platform(bridge);
         let spawner: Spawner = Arc::new(|fut| {
             wasm_bindgen_futures::spawn_local(fut);
@@ -1256,6 +1265,9 @@ impl WasmProductRuntime {
             PairingHostRuntime::with_chat_platform(platform, host_config, spawner, chat_platform);
         if let Some(status_host) = status_host {
             pairing.set_permission_status_host(status_host);
+        }
+        if let Some(pill_host) = pill_host {
+            pairing.set_pill_host(pill_host);
         }
         let core = pairing.product_runtime(product, frame_sink);
         Ok(Self::from_parts(core, channel.dispose))

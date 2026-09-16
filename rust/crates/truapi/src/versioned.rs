@@ -44,6 +44,7 @@ pub mod locale;
 pub mod notifications;
 pub mod payment;
 pub mod permissions;
+pub mod pill;
 pub mod preimage;
 pub mod resource_allocation;
 pub mod signing;

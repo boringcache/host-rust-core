@@ -246,9 +246,17 @@ interface HostBridge {
      * Deliver a push notification and return the host-assigned notification
      * id. Invoked on the dispatcher thread; marshal any UI work to the main
      * thread and return promptly.
+     *
+     * [urgency] is what the core resolved the product's request to. `CRITICAL`
+     * rings the platform's alarm framework until the user dismisses it, and
+     * reaches this call only where the host granted `ALARMS`; a host with no
+     * alarm framework refuses that grant.
      */
     @Throws(HostRejection::class)
-    suspend fun pushNotification(request: HostPushNotificationRequest): UInt = 0u
+    suspend fun pushNotification(
+        request: HostPushNotificationRequest,
+        urgency: HostPushNotificationUrgency,
+    ): UInt
 
     /** Cancel a previously scheduled notification id. */
     @Throws(HostRejection::class)
@@ -432,8 +440,10 @@ private class HostCallbackAdapter(private val bridge: HostBridge) : HostCallback
     override suspend fun navigateTo(url: String) =
         withNavigateRejection { bridge.navigateTo(url) }
 
-    override suspend fun pushNotification(request: HostPushNotificationRequest): UInt =
-        withHostRejection { bridge.pushNotification(request) }
+    override suspend fun pushNotification(
+        request: HostPushNotificationRequest,
+        urgency: HostPushNotificationUrgency,
+    ): UInt = withHostRejection { bridge.pushNotification(request, urgency) }
 
     override fun cancelNotification(id: UInt) =
         withHostRejection { bridge.cancelNotification(id) }
@@ -552,6 +562,38 @@ private inline fun <T> withStorageException(operation: () -> T): T =
             HostLocalStorageReadError.Unknown(hostRejectionReason(error)),
         ).apply { initCause(error) }
     }
+
+/**
+ * Draws a product's pill on the host's own surfaces. Hosts that serve one pass
+ * an implementation to [TrUAPIHostRuntime.openProductExecution]; hosts that do
+ * not pass nothing, and the core answers the product `Unsupported`.
+ *
+ * Threading: these run on the dispatcher; marshal UI work to the main thread
+ * and return promptly.
+ */
+interface PillHostBridge {
+    /**
+     * Record the declaration and draw the pill from `showFrom` until `deadline`,
+     * on every surface except while the declaring product is in the foreground.
+     * A declaration reusing a live key replaces it. `destination` arrives
+     * canonicalised, as `navigateTo` receives it.
+     */
+    @Throws(HostRejection::class)
+    suspend fun declarePill(request: HostPillDeclareRequest)
+
+    /** Withdraw the pill with this key. Idempotent. */
+    @Throws(HostRejection::class)
+    suspend fun withdrawPill(request: HostPillWithdrawRequest)
+}
+
+/** Bridges [PillHostBridge] to the generated `NativePillCallbacks` interface. */
+private class PillCallbackAdapter(private val bridge: PillHostBridge) : NativePillCallbacks {
+    override suspend fun declarePill(request: HostPillDeclareRequest) =
+        withHostRejection { bridge.declarePill(request) }
+
+    override suspend fun withdrawPill(request: HostPillWithdrawRequest) =
+        withHostRejection { bridge.withdrawPill(request) }
+}
 
 /**
  * Adapter from the public [ChatHostBridge] surface to the generated UniFFI
@@ -758,11 +800,14 @@ class TrUAPIHostRuntime private constructor(
         bridge: HostBridge,
         configuration: ProductExecutionConfig,
         chat: ChatHostBridge? = null,
+        pill: PillHostBridge? = null,
     ): TrUAPIProductExecution {
         val adapter = HostCallbackAdapter(bridge)
         val chatAdapter = chat?.let { ChatCallbackAdapter(it) }
-        val execution = inner.openProductExecution(adapter, chatAdapter, configuration.toNative())
-        return TrUAPIProductExecution(execution, adapter, chatAdapter)
+        val pillAdapter = pill?.let { PillCallbackAdapter(it) }
+        val execution =
+            inner.openProductExecution(adapter, chatAdapter, pillAdapter, configuration.toNative())
+        return TrUAPIProductExecution(execution, adapter, chatAdapter, pillAdapter)
     }
 
     /** Core-owned logout for the process-wide authentication session. */
@@ -843,6 +888,7 @@ class TrUAPIProductExecution internal constructor(
     private val inner: NativeProductExecution,
     private val callbackRetainer: HostCallbacks,
     private val chatRetainer: NativeChatCallbacks?,
+    private val pillRetainer: NativePillCallbacks?,
 ) : AutoCloseable {
     private val shutDown = AtomicBoolean(false)
 
