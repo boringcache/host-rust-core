@@ -205,5 +205,5 @@ final class StubChatHostBridge: ChatHostBridge {
 final class StubPocketHostBridge: PocketHostBridge {
     func listCards() throws -> [PocketCard] { [] }
 
-    func removeCard(cardId _: String) throws {}
+    func removeCard(cardId _: String) throws -> NativePocketRemoval { .absent }
 }
