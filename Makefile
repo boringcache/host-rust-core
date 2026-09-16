@@ -91,8 +91,7 @@ install: headless ## Install the truapi-host CLI into Cargo's bin dir; use as `m
 # The layout here is what scripts/truapi-host-installer.sh expects to download.
 CLI_INSTALLER_URL := https://raw.githubusercontent.com/paritytech/host-rust-core/main/scripts/truapi-host-installer.sh
 CLI_DIST_DIR := target/dist
-# Default to the triple that is actually published, not the rustc host: the
-# The Rust binary uses musl; the browser has its own host library requirements.
+# Published Linux binaries use musl; Chromium has separate host library requirements.
 CLI_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p' | sed 's/-linux-gnu$$/-linux-musl/')
 CLI_VERSION ?= $(shell awk -F'"' '/^version = /{print $$2; exit}' rust/crates/truapi-host-cli/Cargo.toml)
 CLI_ARCHIVE := truapi-host-$(CLI_VERSION)-$(CLI_TARGET).tar.gz

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, it } from "bun:test";
 import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { buildBrowserAssets } from "../rust/crates/truapi-host-cli/js/browser-assets.ts";
 
 const repository = resolve(import.meta.dir, "..");
 let directory: string;
@@ -41,6 +42,16 @@ it("ships each browser asset and the matching browser driver", async () => {
     join(directory, "node_modules/esbuild-wasm/package.json"),
   ).json();
   expect(builder.version).toBe("0.28.1");
+});
+
+it("packages the same browser assets used by source mode", async () => {
+  const expected = await buildBrowserAssets(repository);
+  const [container, client, bootstrap] = await Promise.all(
+    ["container.js", "client.mjs", "bootstrap.js"].map((name) =>
+      readFile(join(directory, "sandbox-assets", name), "utf8"),
+    ),
+  );
+  expect({ container, client, bootstrap }).toEqual(expected);
 });
 
 it("resolves the packaged runner without a source checkout", () => {

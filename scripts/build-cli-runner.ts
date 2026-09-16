@@ -1,7 +1,7 @@
 import { cp, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { build } from "esbuild";
+import { buildBrowserAssets } from "../rust/crates/truapi-host-cli/js/browser-assets.ts";
 
 const repository = resolve(import.meta.dir, "..");
 const destination = resolve(process.argv[2] ?? join(repository, "target/dist"));
@@ -36,40 +36,13 @@ try {
     throw new Error(`Cannot bundle runner: ${runner.logs.join("\n")}`);
   }
   await Bun.write(join(staging, "runner.js"), runner.outputs[0]);
-  for (const [entrypoint, output, target, format, external] of [
-    [
-      "js/container/src/index.ts",
-      "sandbox-assets/container.js",
-      "es2020",
-      "iife",
-      [],
-    ],
-    [
-      "js/packages/truapi/src/index.ts",
-      "sandbox-assets/client.mjs",
-      "es2022",
-      "esm",
-      [],
-    ],
-    [
-      "rust/crates/truapi-host-cli/js/browser-bootstrap.ts",
-      "sandbox-assets/bootstrap.js",
-      "es2022",
-      "esm",
-      ["@parity/truapi"],
-    ],
-  ] as const) {
-    const result = await build({
-      entryPoints: [join(repository, entrypoint)],
-      bundle: true,
-      platform: "browser",
-      target,
-      format,
-      external: [...external],
-      define: { "process.env.NODE_ENV": '"production"' },
-      write: false,
-    });
-    await Bun.write(join(staging, output), result.outputFiles[0].contents);
+  const assets = await buildBrowserAssets(repository);
+  for (const [name, source] of [
+    ["container.js", assets.container],
+    ["client.mjs", assets.client],
+    ["bootstrap.js", assets.bootstrap],
+  ]) {
+    await Bun.write(join(staging, "sandbox-assets", name), source);
   }
   for (const [name, directory] of packages) {
     await cp(directory, join(staging, "node_modules", name), {

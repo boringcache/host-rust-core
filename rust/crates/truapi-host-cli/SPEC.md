@@ -831,7 +831,7 @@ subprocess or host-environment access.
 The browser execution phase times out after five minutes. Success, failure or
 timeout closes the browser and disposes both frame providers.
 
-`TRUAPI_SCRIPT_MODE=trusted` explicitly selects the previous Bun execution path
+`TRUAPI_SCRIPT_MODE=trusted` explicitly selects Bun execution
 for diagnostics that read host logs or write reports. It prints the selected
 mode and imports the product with the launcher's capabilities. The value
 `sandboxed`, or an unset variable, uses the browser. Other values fail.

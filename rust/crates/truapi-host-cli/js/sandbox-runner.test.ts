@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { WireProvider } from "@parity/truapi";
 import { runBrowserScript } from "./sandbox-runner.ts";
 
 const provider = {
@@ -6,7 +7,8 @@ const provider = {
   subscribe() {
     return () => {};
   },
-};
+  dispose() {},
+} satisfies WireProvider;
 
 test("runs a product with CLI helpers but no host runtime capabilities", async () => {
   const messages: string[] = [];
@@ -101,48 +103,61 @@ test("revocation blocks the next fetch after an authorized response", async () =
   }
 }, 20_000);
 
-test("each redirect destination is authorized before it receives a request", async () => {
-  const hits: string[] = [];
-  const target = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch() {
-      hits.push("denied");
-      return new Response("unexpected", {
-        headers: { "Access-Control-Allow-Origin": "*" },
-      });
-    },
-  });
-  const denied = new URL(target.url);
-  denied.hostname = "localhost";
-  const redirect = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch() {
-      hits.push("allowed");
-      return new Response(null, {
-        status: 302,
-        headers: { Location: denied.href, "Access-Control-Allow-Origin": "*" },
-      });
-    },
-  });
-  try {
-    await runBrowserScript({
-      source: `
-        try { await fetch(${JSON.stringify(redirect.url.href)}); throw new Error('redirect escaped'); }
-        catch (error) { assert(error instanceof TypeError); }
-      `,
-      productId: "sandbox.testnet",
-      provider,
-      authorize: async (url) => new URL(url).hostname === "127.0.0.1",
-      timeoutMs: 10_000,
+for (const grantDestination of [false, true]) {
+  test(`redirects ${grantDestination ? "reach an authorized" : "cannot reach a denied"} destination`, async () => {
+    const hits: string[] = [];
+    const target = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        hits.push("destination");
+        return new Response("authorized", {
+          headers: { "Access-Control-Allow-Origin": "*" },
+        });
+      },
     });
-    expect(hits).toEqual(["allowed"]);
-  } finally {
-    redirect.stop(true);
-    target.stop(true);
-  }
-}, 20_000);
+    const destination = new URL(target.url);
+    destination.hostname = "localhost";
+    const redirect = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        hits.push("allowed");
+        return new Response(null, {
+          status: 302,
+          headers: {
+            Location: destination.href,
+            "Access-Control-Allow-Origin": "*",
+          },
+        });
+      },
+    });
+    try {
+      await runBrowserScript({
+        source: `
+        const endpoint = ${JSON.stringify(redirect.url.href)};
+        if (${grantDestination}) {
+          assert(await (await fetch(endpoint)).text() === 'authorized');
+        } else {
+          try { await fetch(endpoint); throw new Error('redirect escaped'); }
+          catch (error) { assert(error instanceof TypeError); }
+        }
+      `,
+        productId: "sandbox.testnet",
+        provider,
+        authorize: async (url) =>
+          grantDestination || new URL(url).hostname === "127.0.0.1",
+        timeoutMs: 10_000,
+      });
+      expect(hits).toEqual(
+        grantDestination ? ["allowed", "destination"] : ["allowed"],
+      );
+    } finally {
+      redirect.stop(true);
+      target.stop(true);
+    }
+  }, 20_000);
+}
 
 test("script rejection is reported to the CLI", async () => {
   await expect(
@@ -156,7 +171,7 @@ test("script rejection is reported to the CLI", async () => {
   ).rejects.toThrow("product failure");
 }, 20_000);
 
-test("a stalled product times out and releases its browser", async () => {
+test("a stalled product reports a timeout", async () => {
   await expect(
     runBrowserScript({
       source: "await new Promise(() => {});",

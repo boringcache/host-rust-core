@@ -32,7 +32,7 @@ test("prepares TypeScript and local imports without evaluating product code", as
   );
   const source = await buildProductScript(script);
   expect(source).toContain("42");
-  expect((globalThis as any).productWasEvaluated).toBeUndefined();
+  expect(Object.hasOwn(globalThis, "productWasEvaluated")).toBe(false);
 });
 
 test("rejects imports of host capabilities", async () => {
@@ -92,12 +92,18 @@ test("dependency directory symlinks cannot expand the product input boundary", a
 });
 
 test("product macros cannot execute with launcher privileges", async () => {
-  const { product, script } = await fixture(
+  const { directory, product, script } = await fixture(
     'import { probe } from "./macro.ts" with { type: "macro" }; console.log(probe());',
   );
+  const sentinel = join(directory, "macro-executed");
   await writeFile(
     join(product, "macro.ts"),
-    'export function probe() { return "macro-ran-with-host-privileges"; }',
+    `import { writeFileSync } from "node:fs";
+     export function probe() {
+       writeFileSync(${JSON.stringify(sentinel)}, "macro ran");
+       return "macro-ran-with-host-privileges";
+     }`,
   );
   await expect(buildProductScript(script)).rejects.toThrow(/macro/i);
+  expect(await Bun.file(sentinel).exists()).toBe(false);
 });

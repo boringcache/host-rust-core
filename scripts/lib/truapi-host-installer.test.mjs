@@ -47,8 +47,8 @@ test(
       "sandbox-assets/client.mjs": "client",
       "sandbox-assets/bootstrap.js": "bootstrap",
       "node_modules/playwright-core/cli.js": "installer",
-    "node_modules/playwright-core/browsers.json": "browser versions",
-    "node_modules/esbuild-wasm/esbuild.wasm": "portable builder",
+      "node_modules/playwright-core/browsers.json": "browser versions",
+      "node_modules/esbuild-wasm/esbuild.wasm": "portable builder",
     };
     const release = await startReleaseServer();
     release.publish(

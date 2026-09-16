@@ -480,7 +480,9 @@ jobs:
         run: bun test js/container/src
 
       - name: Test product preparation and CLI package
-        run: bun test rust/crates/truapi-host-cli/js/sandbox-build.test.ts scripts/cli-runner-package.test.ts
+        run: |
+          npm run typecheck:cli
+          bun test rust/crates/truapi-host-cli/js/sandbox-build.test.ts scripts/cli-runner-package.test.ts
 
       - name: Install sandboxed Chromium
         env:

@@ -6,9 +6,9 @@ import {
   type WireProvider,
 } from "../../../../js/packages/truapi/src/index.ts";
 import { buildProductScript } from "./sandbox-build.ts";
+import { buildBrowserAssets, type BrowserAssets } from "./browser-assets.ts";
 import { wsProvider } from "./ws-provider.ts";
 
-type BrowserAssets = { container: string; client: string; bootstrap: string };
 export interface BrowserScriptOptions {
   source: string;
   productId: string;
@@ -16,25 +16,6 @@ export interface BrowserScriptOptions {
   provider: WireProvider;
   onConsole?: (level: string, message: string) => void;
   timeoutMs?: number;
-}
-
-async function bundle(
-  entrypoint: URL,
-  format: "iife" | "esm",
-  external: string[] = [],
-): Promise<string> {
-  const { build } = await import("esbuild");
-  const result = await build({
-    entryPoints: [fileURLToPath(entrypoint)],
-    bundle: true,
-    platform: "browser",
-    target: format === "iife" ? "es2020" : "es2022",
-    format,
-    external,
-    define: { "process.env.NODE_ENV": '"production"' },
-    write: false,
-  });
-  return result.outputFiles[0].text;
 }
 
 let assetPromise: Promise<BrowserAssets> | undefined;
@@ -54,20 +35,9 @@ export function browserAssets(): Promise<BrowserAssets> {
         "Sandbox assets are missing beside runner.js; reinstall truapi-host",
       );
     }
-    const [container, client, bootstrap] = await Promise.all([
-      bundle(
-        new URL("../../../../js/container/src/index.ts", import.meta.url),
-        "iife",
-      ),
-      bundle(
-        new URL("../../../../js/packages/truapi/src/index.ts", import.meta.url),
-        "esm",
-      ),
-      bundle(new URL("./browser-bootstrap.ts", import.meta.url), "esm", [
-        "@parity/truapi",
-      ]),
-    ]);
-    return { container, client, bootstrap };
+    return buildBrowserAssets(
+      fileURLToPath(new URL("../../../../", import.meta.url)),
+    );
   })());
 }
 

@@ -75,14 +75,7 @@ fn resolve_runner(explicit: Option<OsString>, executable: Option<&Path>) -> Path
     if let Some(path) = explicit {
         return PathBuf::from(path);
     }
-    let packaged = executable.and_then(packaged_runner);
-    if let Some(packaged) = packaged.filter(|path| {
-        path.is_file()
-            || path
-                .parent()
-                .and_then(Path::parent)
-                .is_some_and(|parent| parent.file_name().is_some_and(|name| name == "versions"))
-    }) {
+    if let Some(packaged) = executable.and_then(packaged_runner) {
         return packaged;
     }
     Path::new(env!("CARGO_MANIFEST_DIR")).join("js/runner.ts")
@@ -101,7 +94,8 @@ fn packaged_runner(executable: &Path) -> Option<PathBuf> {
                 .join(PACKAGED_RUNNER),
         );
     }
-    Some(directory.join(PACKAGED_RUNNER))
+    let runner = directory.join(PACKAGED_RUNNER);
+    runner.is_file().then_some(runner)
 }
 
 fn browser_installer(runner: &Path) -> Result<PathBuf> {
@@ -128,6 +122,7 @@ fn browser_installer(runner: &Path) -> Result<PathBuf> {
     )
 }
 
+/// Prepare the Chromium runtime matching this installation's runner.
 pub async fn install_browser() -> Result<()> {
     let installer = browser_installer(&runner_path())?;
     let status = bun_command(&installer, &std::env::current_dir()?)?
@@ -337,6 +332,32 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires Bun; run with --include-ignored"]
     async fn caller_configuration_cannot_execute_before_the_sandbox() -> Result<()> {
+        const TEST_FIXTURE: &str = "TRUAPI_BUN_LAUNCHER_TEST_FIXTURE";
+        if let Some(fixture) = std::env::var_os(TEST_FIXTURE) {
+            let fixture = PathBuf::from(fixture);
+            let product = std::env::current_dir()?;
+            let output = bun_command(&fixture.join("trusted/entry.ts"), &product)?
+                .env_remove("TRUAPI_UNTRUSTED_DOTENV")
+                .output()
+                .await?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8(output.stderr)?, "");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
+                serde_json::json!({
+                    "preloaded": false,
+                    "environment": null,
+                    "dependency": "trusted dependency",
+                    "caller": product,
+                })
+            );
+            return Ok(());
+        }
+
         let fixture = tempfile::tempdir()?;
         let product = fixture.path().join("product");
         let trusted = fixture.path().join("trusted");
@@ -372,24 +393,21 @@ console.log(JSON.stringify({
 }));
 "#,
         )?;
-        let output = bun_command(&entrypoint, &product)?
-            .env_remove("TRUAPI_UNTRUSTED_DOTENV")
+        let output = Command::new(std::env::current_exe()?)
+            .args([
+                "--ignored",
+                "--exact",
+                "script_runner::tests::caller_configuration_cannot_execute_before_the_sandbox",
+            ])
+            .current_dir(&product)
+            .env(TEST_FIXTURE, fixture.path())
             .output()
             .await?;
         assert!(
             output.status.success(),
-            "{}",
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(String::from_utf8(output.stderr)?, "");
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
-            serde_json::json!({
-                "preloaded": false,
-                "environment": null,
-                "dependency": "trusted dependency",
-                "caller": product,
-            })
         );
         Ok(())
     }
