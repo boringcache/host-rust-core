@@ -3196,7 +3196,7 @@ mod tests {
         ))
         .expect("an action set must reach the host");
 
-        let mut actions = connection.subscribe();
+        let mut actions = connection.subscribe::<truapi::latest::GenericError>();
         connection
             .publish(truapi::versioned::chat::HostChatActionSubscribeItem::V1(
                 v01::HostChatActionSubscribeItem {
@@ -3263,6 +3263,7 @@ mod tests {
         let mut actions = futures::executor::block_on(truapi::api::Renderer::action_subscribe(
             admin.product_runtime().as_ref(),
             &truapi::CallContext::with_request_id("renderer-1".to_string()),
+            truapi::versioned::renderer::HostRendererActionSubscribeRequest::V1,
         ));
 
         let published = v01::HostRendererActionSubscribeItem {
