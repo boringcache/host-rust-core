@@ -382,9 +382,15 @@ impl PairingHost {
         let session = self.session_state.current().ok_or(RingVrfError::Unknown {
             reason: "no active session".to_string(),
         })?;
-        self.ring_vrf_registry
+        let providers = self
+            .ring_vrf_registry
             .providers(session.public_key, ring)
-            .await
+            .await?;
+        // Reserved handles are not injected here. A pairing host does not know
+        // the network suffix that names them, and it does not need to: listing
+        // delegates to the signing host, which does, and `reconcile_owner`
+        // writes what it returns into this registry.
+        Ok(providers)
     }
 
     pub(crate) async fn selected_ring_vrf_provider(
@@ -408,7 +414,10 @@ impl PairingHost {
             reason: "no active session".to_string(),
         })?;
         self.ring_vrf_registry
-            .select_provider(session.public_key, ring, handle)
+            // Reserved handles reach this registry through listing, which the
+            // signing host answers, so by selection time they are registered
+            // here like any other.
+            .select_provider(session.public_key, ring, handle, false)
             .await
     }
 

@@ -1,4 +1,4 @@
-//! Personhood ring collections on the People chain.
+//! Allowance-facing view of a personhood ring collection.
 //!
 //! A person can hold membership in more than one collection, and each one is a
 //! separate alias space with its own slot budget: aliases are derived from
@@ -6,51 +6,20 @@
 //! is two distinct storage entries. Capacity is therefore the sum over the
 //! collections a device can prove membership in, which is why the allowance
 //! path takes a collection rather than assuming one.
+//!
+//! The type itself lives in [`crate::host_logic::product_account`], which is
+//! compiled for wasm32 as this module is not, and which owns the member-key
+//! derivation. What stays here is what only the allowance path asks of it: the
+//! chain metadata naming its slot budget.
 
 use super::StatementAllowanceError;
 use super::extension::Metadata;
 use super::rpc::RpcClient;
 use super::view;
 
-/// A personhood ring collection in the People chain's `Members` pallet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::Display)]
-#[display("{}", self.metadata_variant())]
-pub enum PersonhoodCollection {
-    /// Full personhood, established by proof-of-personhood registration.
-    People,
-    /// Light personhood, backed by the wallet account.
-    LitePeople,
-}
-
-/// Full-personhood collection identifier: ASCII, space-padded to 32 bytes.
-const PEOPLE_IDENTIFIER: &[u8; 32] = b"pop:polkadot.network/people     ";
-/// Light-personhood collection identifier: ASCII, exactly 32 bytes.
-const LITE_PEOPLE_IDENTIFIER: &[u8; 32] = b"pop:polkadot.network/people-lite";
+pub use crate::host_logic::product_account::PersonhoodCollection;
 
 impl PersonhoodCollection {
-    /// Every collection the allowance path knows how to prove membership in,
-    /// widest slot budget first so a caller that stops at the first success
-    /// prefers the collection with the most capacity.
-    pub const ALL: [Self; 2] = [Self::People, Self::LitePeople];
-
-    /// The 32-byte collection identifier used as the first key in every
-    /// `Members` storage map.
-    pub fn identifier(self) -> &'static [u8; 32] {
-        match self {
-            Self::People => PEOPLE_IDENTIFIER,
-            Self::LitePeople => LITE_PEOPLE_IDENTIFIER,
-        }
-    }
-
-    /// The `MembershipCollection` / `PgasCollection` variant naming this
-    /// collection inside a transaction extension.
-    pub fn metadata_variant(self) -> &'static str {
-        match self {
-            Self::People => "People",
-            Self::LitePeople => "LitePeople",
-        }
-    }
-
     /// The `Resources` view function returning StatementStore slots per period
     /// for this collection.
     pub fn slots_per_period_view(self) -> &'static str {
