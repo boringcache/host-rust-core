@@ -29,36 +29,6 @@ public extension TrUAPIHost {
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
-        addProductScripts(
-            into: controller, endpoint: endpoint, container: container, webRtcAllowed: webRtcAllowed
-        )
-        return installation
-    }
-
-    /// Installs the container without a remote network adapter. Cross-origin fetch stays denied.
-    /// Use the web-view overload to enable permission-controlled remote requests.
-    @MainActor
-    static func installProductScripts(
-        into controller: WKUserContentController,
-        execution: any TrUAPIProductExecutionProtocol,
-        endpoint: WsBridgeEndpoint
-    ) async throws {
-        let webRtcAllowed = try await execution.permissionAuthorizationStatus(
-            request: .remote(RemotePermissionRequest(permission: .webRtc))
-        ) == .authorized
-        addProductScripts(
-            into: controller, endpoint: endpoint,
-            container: try ContainerScriptBundle.load(), webRtcAllowed: webRtcAllowed
-        )
-    }
-
-    @MainActor
-    private static func addProductScripts(
-        into controller: WKUserContentController,
-        endpoint: WsBridgeEndpoint,
-        container: String,
-        webRtcAllowed: Bool
-    ) {
         controller.addUserScript(WKUserScript(
             source: LocalhostBridgeBootstrap.script(
                 port: endpoint.port, token: endpoint.token, webRtcAllowed: webRtcAllowed
@@ -71,6 +41,7 @@ public extension TrUAPIHost {
             injectionTime: .atDocumentStart,
             forMainFrameOnly: false
         ))
+        return installation
     }
 }
 

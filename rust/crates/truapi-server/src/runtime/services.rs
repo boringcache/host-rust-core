@@ -190,6 +190,7 @@ impl RuntimeServices {
         self.pocket_platform.get().cloned()
     }
 
+    /// Keep each product's permission writes ordered across its executions.
     pub(crate) fn permission_mutations(&self, product_id: &str) -> PermissionMutations {
         self.permission_mutations
             .lock()

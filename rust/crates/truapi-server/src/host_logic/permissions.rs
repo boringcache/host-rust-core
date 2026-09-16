@@ -143,6 +143,7 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
         }
     }
 
+    /// Share permission-write ordering across executions of the same product.
     pub(crate) fn with_mutations(mut self, mutations: PermissionMutations) -> Self {
         self.mutations = mutations;
         self

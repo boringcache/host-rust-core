@@ -9,6 +9,74 @@ import WebKit
 @Suite(.serialized)
 @MainActor
 struct ProductNetworkAccessTests {
+    @Test(.timeLimit(.minutes(1)), arguments: [PermissionAuthorizationStatus.authorized, .denied])
+    func overlappingSettingsRefreshRegisteredOrigins(status: PermissionAuthorizationStatus) async throws {
+        let product = try await NetworkTestProduct.open()
+        defer { product.close() }
+        let remote = product.server.url(host: "127.0.0.1", path: "/allowed")
+        let redirect = product.server.url(host: "localhost", path: "/redirect-revoked")
+        #expect(await fetch(product.webView, remote) == "allowed")
+        #expect(await fetch(product.webView, redirect) == "allowed")
+
+        let pause = NetworkTestPause()
+        defer { pause.resume() }
+        product.execution.nextPermissionRead = pause
+        var writes = product.execution.writes.stream.makeAsyncIterator()
+        let first = Task {
+            try await product.installation.setPermissionAuthorizationStatus(
+                request: .remote(RemotePermissionRequest(permission: .remote(domains: ["first.example"]))),
+                status: .denied
+            )
+        }
+        try await pause.waitUntilSuspended()
+        try #require(await writes.next() != nil)
+        let second = Task {
+            try await product.installation.setPermissionAuthorizationStatus(
+                request: .remote(RemotePermissionRequest(permission: .remote(domains: ["127.0.0.1"]))),
+                status: status
+            )
+        }
+        try #require(await writes.next() != nil)
+        pause.resume()
+        try await first.value
+        try await second.value
+
+        let expectedResponse = status == .authorized ? "allowed" : "denied"
+        let expectedRequests = status == .authorized ? 3 : 2
+        #expect(await fetch(product.webView, redirect) == expectedResponse)
+        #expect(product.server.requests(path: "/allowed") == expectedRequests)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func disposingAnotherViewDoesNotFailCommittedSettings() async throws {
+        let product = try await NetworkTestProduct.open()
+        defer { product.close() }
+        let other = try await NetworkTestProduct.open()
+        defer { other.close() }
+        #expect(await fetch(product.webView, product.server.url(host: "127.0.0.1", path: "/allowed")) == "allowed")
+        #expect(await fetch(other.webView, other.server.url(host: "127.0.0.1", path: "/allowed")) == "allowed")
+
+        let pause = NetworkTestPause()
+        defer { pause.resume() }
+        other.execution.nextPermissionRead = pause
+        let update = Task {
+            try await product.installation.setPermissionAuthorizationStatus(
+                request: .remote(RemotePermissionRequest(permission: .remote(domains: ["other.example"]))),
+                status: .denied
+            )
+        }
+        try await pause.waitUntilSuspended()
+        other.installation.dispose()
+        pause.resume()
+        try await update.value
+
+        let redirect = product.server.url(host: "localhost", path: "/redirect-revoked")
+        #expect(await fetch(product.webView, redirect) == "allowed")
+        #expect(await fetch(other.webView, other.server.url(host: "127.0.0.1", path: "/allowed")) == "denied")
+        #expect(product.server.requests(path: "/allowed") == 2)
+        #expect(other.server.requests(path: "/allowed") == 1)
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func permissionCallbackCanUpdateSettingsBeforeReturning() async throws {
         let server = try await NetworkTestServer.start()
@@ -40,10 +108,7 @@ struct ProductNetworkAccessTests {
         )
         bridge.installation = installation
         defer { installation.dispose() }
-        await withCheckedContinuation { continuation in
-            ready.onReady = { continuation.resume() }
-            webView.load(URLRequest(url: productURL))
-        }
+        try await ready.load(webView, url: productURL)
 
         #expect(await fetch(webView, server.url(host: "127.0.0.1", path: "/allowed")) == "allowed")
         #expect(server.requests(path: "/allowed") == 1)
@@ -98,10 +163,7 @@ struct ProductNetworkAccessTests {
             into: webView, execution: execution, endpoint: endpoint, productURL: productURL
         )
         defer { installation.dispose() }
-        await withCheckedContinuation { continuation in
-            ready.onReady = { continuation.resume() }
-            webView.load(URLRequest(url: productURL))
-        }
+        try await ready.load(webView, url: productURL)
         await #expect(throws: ProductScriptInstallationError.webViewAlreadyLoaded) {
             try await TrUAPIHost.installProductScripts(
                 into: webView, execution: execution, endpoint: endpoint, productURL: productURL
@@ -145,10 +207,7 @@ struct ProductNetworkAccessTests {
             endpoint: secondExecution.startWsBridge(bindPort: 0), productURL: productURL
         )
         defer { secondInstallation.dispose() }
-        await withCheckedContinuation { continuation in
-            secondReady.onReady = { continuation.resume() }
-            secondWebView.load(URLRequest(url: productURL))
-        }
+        try await secondReady.load(secondWebView, url: productURL)
         #expect(await fetch(secondWebView, remote) == "allowed")
         #expect(server.requests(path: "/allowed") == 2)
 
@@ -206,21 +265,163 @@ struct ProductNetworkAccessTests {
     }
 }
 
+@MainActor
+private struct NetworkTestProduct {
+    let server: NetworkTestServer
+    let execution: PausedPermissionExecution
+    let webView: WKWebView
+    let installation: ProductScriptInstallation
+
+    static func open() async throws -> NetworkTestProduct {
+        let server = try await NetworkTestServer.start()
+        do {
+            let bridge = StubHostBridge()
+            let runtime = try TrUAPIHostRuntime(bridge: bridge, runtimeConfig: HostRuntimeConfig(
+                hostName: "network-tests", peopleChainGenesisHash: Data(repeating: 0, count: 32),
+                bulletinChainGenesisHash: Data(repeating: 0, count: 32), networkSuffix: "paseo"
+            ))
+            let inner = try runtime.openProductExecution(
+                bridge: bridge,
+                configuration: ProductExecutionConfig(productId: "network.paseo", executionKind: .app)
+            )
+            try inner.setPermissionAuthorizationStatus(
+                request: .remote(RemotePermissionRequest(permission: .remote(domains: ["127.0.0.1"]))),
+                status: .authorized
+            )
+            let execution = PausedPermissionExecution(inner)
+            let ready = ProductPageReady()
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .nonPersistent()
+            configuration.userContentController.add(ready, name: "testReady")
+            let webView = WKWebView(frame: .zero, configuration: configuration)
+            let productURL = server.url(host: "localhost", path: "/product")
+            let installation = try await TrUAPIHost.installProductScripts(
+                into: webView, execution: execution,
+                endpoint: execution.startWsBridge(bindPort: 0), productURL: productURL
+            )
+            do { try await ready.load(webView, url: productURL) }
+            catch {
+                installation.dispose()
+                throw error
+            }
+            return NetworkTestProduct(
+                server: server, execution: execution, webView: webView, installation: installation
+            )
+        } catch {
+            server.stop()
+            throw error
+        }
+    }
+
+    func close() {
+        installation.dispose()
+        execution.close()
+        server.stop()
+    }
+}
+
+@MainActor
+private final class NetworkTestPause {
+    private enum Failure: Error { case timedOut }
+    private let started = AsyncStream<Void>.makeStream()
+    private let resumed = AsyncStream<Void>.makeStream()
+
+    func suspend() async throws {
+        started.continuation.yield(())
+        started.continuation.finish()
+        try await wait(for: resumed)
+    }
+
+    func waitUntilSuspended() async throws { try await wait(for: started) }
+
+    func resume() {
+        resumed.continuation.yield(())
+        resumed.continuation.finish()
+    }
+
+    private func wait(
+        for signal: (stream: AsyncStream<Void>, continuation: AsyncStream<Void>.Continuation)
+    ) async throws {
+        let timeout = Task {
+            try await Task.sleep(for: .seconds(15))
+            signal.continuation.finish()
+        }
+        defer { timeout.cancel() }
+        var iterator = signal.stream.makeAsyncIterator()
+        guard await iterator.next() != nil else {
+            try Task.checkCancellation()
+            throw Failure.timedOut
+        }
+    }
+}
+
+private final class PausedPermissionExecution: TrUAPIProductExecutionProtocol, @unchecked Sendable {
+    private let inner: TrUAPIProductExecution
+    let writes = AsyncStream<Void>.makeStream()
+    @MainActor var nextPermissionRead: NetworkTestPause?
+
+    init(_ inner: TrUAPIProductExecution) { self.inner = inner }
+
+    func permissionAuthorizationStatus(
+        request: PermissionAuthorizationRequest
+    ) async throws -> PermissionAuthorizationStatus {
+        let status = try await inner.permissionAuthorizationStatus(request: request)
+        try await pauseNextRead()
+        return status
+    }
+
+    @MainActor
+    private func pauseNextRead() async throws {
+        guard let pause = nextPermissionRead else { return }
+        nextPermissionRead = nil
+        try await pause.suspend()
+    }
+
+    func setPermissionAuthorizationStatus(
+        request: PermissionAuthorizationRequest, status: PermissionAuthorizationStatus
+    ) throws {
+        try inner.setPermissionAuthorizationStatus(request: request, status: status)
+        writes.continuation.yield(())
+    }
+
+    func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus {
+        try await inner.authorizeNetworkAccess(url: url)
+    }
+
+    func startWsBridge(bindPort: UInt16) throws -> WsBridgeEndpoint { try inner.startWsBridge(bindPort: bindPort) }
+    func stopWsBridge() { inner.stopWsBridge() }
+    func close() {
+        writes.continuation.finish()
+        inner.close()
+    }
+    func publishChatAction(_ action: HostChatActionSubscribeItem) throws { try inner.publishChatAction(action) }
+    func render(_ request: ProductRendererRenderRequest) throws -> AsyncThrowingStream<RendererNode, Error> {
+        try inner.render(request)
+    }
+    func publishRendererAction(_ item: HostRendererActionSubscribeItem) throws { try inner.publishRendererAction(item) }
+    func notifyThemeChanged(theme: HostThemeSubscribeItem) { inner.notifyThemeChanged(theme: theme) }
+    func notifyLocaleChanged(locale: HostLocaleSubscribeItem) { inner.notifyLocaleChanged(locale: locale) }
+    func notifyPreimageChanged(key: Data, value: Data?) { inner.notifyPreimageChanged(key: key, value: value) }
+    func notifyChainResponse(connectionId: UInt32, json: String) {
+        inner.notifyChainResponse(connectionId: connectionId, json: json)
+    }
+    func notifyChainClosed(connectionId: UInt32) { inner.notifyChainClosed(connectionId: connectionId) }
+    func notifyChatRoomsChanged(rooms: [ChatRoom]) { inner.notifyChatRoomsChanged(rooms: rooms) }
+    func sessionChatIdentityKey() throws -> Data? { try inner.sessionChatIdentityKey() }
+    func notifyPocketCardsChanged(cards: [PocketCard]) { inner.notifyPocketCardsChanged(cards: cards) }
+}
+
 private final class PromptUpdatingHostBridge: HostBridge, @unchecked Sendable {
     let storage: HostStorageBackend = StubStorage()
-    let coreStorage: HostCoreStorageBackend = NetworkTestCoreStorage()
+    let coreStorage: HostCoreStorageBackend = StubCoreStorage()
     @MainActor weak var installation: ProductScriptInstallation?
 
     func navigateTo(url _: String) async throws {}
     func devicePermission(request _: HostDevicePermissionRequest) async throws -> Bool { false }
     func featureSupported(request _: HostFeatureSupportedRequest) async throws -> Bool { true }
 
-    func remotePermission(request: RemotePermission) async throws -> Bool {
-        try await updatePermission(request)
-    }
-
     @MainActor
-    private func updatePermission(_ request: RemotePermission) async throws -> Bool {
+    func remotePermission(request: RemotePermission) async throws -> Bool {
         guard let installation else { return false }
         try await installation.setPermissionAuthorizationStatus(
             request: .remote(RemotePermissionRequest(permission: request)), status: .authorized
@@ -229,32 +430,17 @@ private final class PromptUpdatingHostBridge: HostBridge, @unchecked Sendable {
     }
 }
 
-private final class NetworkTestCoreStorage: HostCoreStorageBackend, @unchecked Sendable {
-    private let lock = NSLock()
-    private var values: [Data: Data] = [:]
-
-    func read(key: Data) throws -> Data? {
-        lock.lock()
-        defer { lock.unlock() }
-        return values[key]
-    }
-
-    func write(key: Data, value: Data) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        values[key] = value
-    }
-
-    func clear(key: Data) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        values[key] = nil
-    }
-}
-
 @MainActor
 private final class ProductPageReady: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-    var onReady: (() -> Void)?
+    private var onReady: (() -> Void)?
+
+    func load(_ webView: WKWebView, url: URL) async throws {
+        let ready = NetworkTestPause()
+        onReady = { ready.resume() }
+        defer { onReady = nil }
+        webView.load(URLRequest(url: url))
+        try await ready.suspend()
+    }
 
     func userContentController(_: WKUserContentController, didReceive _: WKScriptMessage) {
         let callback = onReady
