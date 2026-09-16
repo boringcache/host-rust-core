@@ -285,18 +285,44 @@ impl PersonhoodCollection {
 
     /// The collection a handle names, ignoring which network it was written on.
     ///
-    /// For validating persisted state, where the suffix in force when the entry
-    /// was written is not known. Authorization uses [`Self::from_handle`],
-    /// which pins the network.
+    /// For validating persisted state, and for a host that holds no network
+    /// suffix of its own. Authorization uses [`Self::from_handle`], which pins
+    /// the network.
+    ///
+    /// The id must be exactly `peopl.<suffix>`. Matching on the first segment
+    /// alone would accept `peopl.evil.dot`, which is the product `evil` under
+    /// the rule that a name is the segment above its TLD, and so is a name
+    /// anyone can publish.
     pub fn from_handle_on_any_network(handle: &truapi::v01::ProductAccountId) -> Option<Self> {
-        let label = handle.dot_ns_identifier.split('.').next()?;
-        if label != PERSONHOOD_LABEL {
+        let (label, suffix) = handle.dot_ns_identifier.split_once('.')?;
+        if label != PERSONHOOD_LABEL || suffix.is_empty() || suffix.contains('.') {
             return None;
         }
         let bytes = derivation_index_bytes(&handle.derivation_index);
         Self::ALL
             .into_iter()
             .find(|collection| derivation_index_bytes(&collection.derivation()) == bytes)
+    }
+
+    /// Whether `handle` is the reserved key for the ring `ring` addresses.
+    ///
+    /// The one place this question is answered, because the three callers hold
+    /// different amounts of context and answering it separately let them drift:
+    /// a signing host pins its own `network_suffix`, while a paired host and
+    /// the snapshot validator have none and pass `None`. `None` still requires
+    /// a well-formed reserved name, and the signing host pins the exact suffix
+    /// again before it will resolve the key, so admitting one here cannot
+    /// produce a proof that the exact check would refuse.
+    pub fn reserved_for_ring(
+        handle: &truapi::v01::ProductAccountId,
+        ring: &truapi::v01::RingLocation,
+        network_suffix: Option<&str>,
+    ) -> bool {
+        let named = match network_suffix {
+            Some(suffix) => Self::from_handle(handle, suffix),
+            None => Self::from_handle_on_any_network(handle),
+        };
+        named.is_some_and(|collection| Self::from_ring_location(ring) == Some(collection))
     }
 
     /// The collection a ring location addresses, when it names a reserved one.
@@ -661,6 +687,89 @@ mod tests {
             PersonhoodCollection::from_collection_id(b"not a ring"),
             None
         );
+    }
+
+    /// The network-agnostic lookup is the one check that cannot pin a suffix,
+    /// so it has to pin the shape instead: a name is the segment above its
+    /// TLD, which makes `peopl.evil.dot` the product `evil` and publishable by
+    /// anyone.
+    #[test]
+    fn a_network_agnostic_handle_admits_only_a_real_reserved_name() {
+        let handle = |id: &str| truapi::v01::ProductAccountId {
+            dot_ns_identifier: id.to_string(),
+            derivation_index: truapi::v01::DerivationIndex::Index(0),
+        };
+
+        for id in ["peopl.dot", "peopl.paseo", "peopl.testnet"] {
+            assert_eq!(
+                PersonhoodCollection::from_handle_on_any_network(&handle(id)),
+                Some(PersonhoodCollection::People),
+                "{id} is the reserved product on its own network",
+            );
+        }
+        for id in [
+            "peopl.evil.dot",
+            "peopl.attacker.dot",
+            "peopl",
+            "peopl.",
+            "notpeopl.dot",
+            "peoplx.dot",
+        ] {
+            assert_eq!(
+                PersonhoodCollection::from_handle_on_any_network(&handle(id)),
+                None,
+                "{id} is not the reserved product",
+            );
+        }
+    }
+
+    /// Every host asks this through one function, so the pinned and unpinned
+    /// answers can only differ where they are meant to: on the suffix.
+    #[test]
+    fn reservedness_differs_between_hosts_only_on_the_network() {
+        let people = PersonhoodCollection::People;
+        let ring = people.ring_location([0x22; 32]);
+        let on_dot = people.handle("dot");
+        let on_paseo = people.handle("paseo");
+
+        for (handle, pinned, unpinned, why) in [
+            (&on_dot, true, true, "the reserved handle for this network"),
+            (
+                &on_paseo,
+                false,
+                true,
+                "reserved, but named on another network",
+            ),
+        ] {
+            assert_eq!(
+                PersonhoodCollection::reserved_for_ring(handle, &ring, Some("dot")),
+                pinned,
+                "pinned: {why}",
+            );
+            assert_eq!(
+                PersonhoodCollection::reserved_for_ring(handle, &ring, None),
+                unpinned,
+                "unpinned: {why}",
+            );
+        }
+
+        // Neither form admits a name anyone can publish, or a ring the handle
+        // does not belong to.
+        let forged = truapi::v01::ProductAccountId {
+            dot_ns_identifier: "peopl.evil.dot".to_string(),
+            derivation_index: truapi::v01::DerivationIndex::Index(0),
+        };
+        let other_ring = PersonhoodCollection::LitePeople.ring_location([0x22; 32]);
+        for suffix in [Some("dot"), None] {
+            assert!(!PersonhoodCollection::reserved_for_ring(
+                &forged, &ring, suffix
+            ));
+            assert!(!PersonhoodCollection::reserved_for_ring(
+                &on_dot,
+                &other_ring,
+                suffix
+            ));
+        }
     }
 
     #[test]

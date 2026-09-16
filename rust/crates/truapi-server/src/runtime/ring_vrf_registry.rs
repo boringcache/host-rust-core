@@ -379,10 +379,8 @@ fn validate_snapshot(snapshot: &RegistrySnapshot) -> Result<(), RingVrfError> {
         }
         // Network-agnostic on purpose: this validates bytes already persisted,
         // and whether the handle was reserved was settled when it was written.
-        let reserved = PersonhoodCollection::from_handle_on_any_network(&provider.handle)
-            .is_some_and(|collection| {
-                PersonhoodCollection::from_ring_location(&provider.ring) == Some(collection)
-            });
+        let reserved =
+            PersonhoodCollection::reserved_for_ring(&provider.handle, &provider.ring, None);
         if !reserved
             && !snapshot.entries.iter().any(|entry| {
                 entry.handle == provider.handle && entry.rings.contains(&provider.ring)

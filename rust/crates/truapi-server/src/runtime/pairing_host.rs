@@ -40,6 +40,7 @@ use super::sso_remote::{
 use super::statement_store_rpc::StatementStoreRpc;
 use crate::chain_runtime::ChainRuntime;
 use crate::host_logic::entropy::derive_product_entropy_from_source;
+use crate::host_logic::product_account::PersonhoodCollection;
 use crate::host_logic::product_account::{
     derivation_index_bytes, derive_product_keypair_from_subtree_secret,
     derive_ring_vrf_entropy_from_domain,
@@ -386,10 +387,11 @@ impl PairingHost {
             .ring_vrf_registry
             .providers(session.public_key, ring)
             .await?;
-        // Reserved handles are not injected here. A pairing host does not know
-        // the network suffix that names them, and it does not need to: listing
-        // delegates to the signing host, which does, and `reconcile_owner`
-        // writes what it returns into this registry.
+        // Reserved handles are not injected here: naming one takes the network
+        // suffix, and `PairingHostConfig` carries none. Listing delegates to
+        // the signing host, which has one, and `reconcile_owner` writes what it
+        // returns into this registry, so a reserved handle appears here once a
+        // listing has run rather than ahead of one.
         Ok(providers)
     }
 
@@ -413,11 +415,12 @@ impl PairingHost {
         let session = self.session_state.current().ok_or(RingVrfError::Unknown {
             reason: "no active session".to_string(),
         })?;
+        // Network-agnostic: this host holds no suffix of its own, and the
+        // signing host pins the exact one before it will resolve the key, so a
+        // handle admitted here still cannot produce a proof it should not.
+        let reserved = PersonhoodCollection::reserved_for_ring(&handle, &ring, None);
         self.ring_vrf_registry
-            // Reserved handles reach this registry through listing, which the
-            // signing host answers, so by selection time they are registered
-            // here like any other.
-            .select_provider(session.public_key, ring, handle, false)
+            .select_provider(session.public_key, ring, handle, reserved)
             .await
     }
 

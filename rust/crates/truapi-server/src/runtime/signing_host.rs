@@ -614,10 +614,8 @@ impl SigningHost {
         })?;
         // A reserved personhood key needs no registration, so it is selectable
         // for its own collection on whatever chain the caller named.
-        let reserved = PersonhoodCollection::from_handle(&handle, &self.network_suffix)
-            .is_some_and(|collection| {
-                PersonhoodCollection::from_ring_location(&ring) == Some(collection)
-            });
+        let reserved =
+            PersonhoodCollection::reserved_for_ring(&handle, &ring, Some(&self.network_suffix));
         self.ring_vrf_registry
             .select_provider(session.public_key, ring, handle, reserved)
             .await
