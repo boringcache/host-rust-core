@@ -26,9 +26,7 @@ import {
   reportLockdownFailures,
 } from './freeze.js';
 import { consumeWebRtcPolicy, installWebRtcPolicy } from './webrtc.js';
-
-// Capture native fetch BEFORE lockdown so the same-origin gate can use it.
-const _nativeFetch = window.fetch.bind(window);
+import { installFetchGate } from './network.js';
 
 const _NativeWebSocket = window.WebSocket;
 const _bridgeUrl: string | undefined = (window as any).__truapi_localhost?.url;
@@ -53,23 +51,12 @@ freezeCustom(
   (current) => current === _GatedWebSocket,
 );
 
-// --- Network: fetch gated to same-origin only ---
-freezeValue(window, 'fetch', (input: RequestInfo | URL, init?: RequestInit) => {
-  try {
-    const raw = typeof input === 'string' ? input
-      : input instanceof URL ? input.href
-      : input.url;
-    const url = new URL(raw, window.location.href);
-    if (url.origin === window.location.origin) {
-      return _nativeFetch(input, init);
-    }
-  } catch { /* fall through to rejection */ }
-  return Promise.reject(new TypeError('Network access is not allowed'));
-});
+installFetchGate(window);
 
 // --- Network: delete (no future permission path) ---
 freezeAndDelete(window, 'XMLHttpRequest');
 freezeAndDelete(window, 'EventSource');
+freezeAndDelete(window, 'WebTransport');
 
 freezeValue(navigator, 'sendBeacon', () => false);
 
@@ -86,6 +73,7 @@ freezeCustom(
 );
 
 // --- Workers ---
+freezeAndDelete(window, 'Worker');
 freezeAndDelete(window, 'SharedWorker');
 
 if (navigator.serviceWorker) {

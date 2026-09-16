@@ -300,6 +300,7 @@ impl ProductRuntimeHost {
     ) -> PermissionsService<'a, dyn Platform, dyn Platform> {
         PermissionsService::new(self.platform.as_ref(), self.platform.as_ref(), product_id)
             .with_status_host(self.permission_status.as_deref())
+            .with_mutations(self.services.permission_mutations(product_id))
     }
 
     /// Trusted executable kind attached to this product connection.
@@ -553,6 +554,29 @@ impl ProductRuntimeHost {
 }
 
 impl ProductRuntimeHost {
+    #[instrument(skip_all, fields(runtime.method = "permissions.authorize_network_access"))]
+    pub(crate) async fn authorize_network_access(
+        &self,
+        url: String,
+    ) -> Result<PermissionAuthorizationStatus, v01::GenericError> {
+        let host = url::Url::parse(&url)
+            .ok()
+            .filter(|url| matches!(url.scheme(), "http" | "https" | "ws" | "wss"))
+            .and_then(|url| url.host_str().map(truapi_platform::normalize_remote_domain))
+            .filter(|host| !host.is_empty() && !host.contains('*'))
+            .ok_or_else(|| v01::GenericError {
+                reason: "network access requires a concrete HTTP(S) or WS(S) URL".to_string(),
+            })?;
+        let product_id = self.product_id();
+        self.permissions_service(&product_id)
+            .check_or_prompt_remote(v01::RemotePermissionRequest {
+                permission: v01::RemotePermission::Remote {
+                    domains: vec![host],
+                },
+            })
+            .await
+    }
+
     /// Read a stored permission authorization status without prompting.
     ///
     /// A device capability also resolves the host application's OS gate, so an

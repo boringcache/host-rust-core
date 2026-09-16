@@ -905,6 +905,7 @@ public protocol TrUAPIProductExecutionProtocol: AnyObject, Sendable {
     func publishChatAction(_ action: HostChatActionSubscribeItem) throws
     func render(_ request: ProductRendererRenderRequest) throws -> AsyncThrowingStream<RendererNode, Error>
     func publishRendererAction(_ item: HostRendererActionSubscribeItem) throws
+    func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus
     func permissionAuthorizationStatus(
         request: PermissionAuthorizationRequest
     ) async throws -> PermissionAuthorizationStatus
@@ -977,12 +978,18 @@ public final class TrUAPIProductExecution: TrUAPIProductExecutionProtocol, @unch
         inner.notifyPocketCardsChanged(cards: cards)
     }
 
+    public func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus {
+        try await inner.authorizeNetworkAccess(url: url)
+    }
+
     public func permissionAuthorizationStatus(
         request: PermissionAuthorizationRequest
     ) async throws -> PermissionAuthorizationStatus {
         try await inner.permissionAuthorizationStatus(request: request)
     }
 
+    /// Live WKWebViews must use ProductScriptInstallation.setPermissionAuthorizationStatus
+    /// so engine rules are invalidated before the permission changes.
     public func setPermissionAuthorizationStatus(
         request: PermissionAuthorizationRequest,
         status: PermissionAuthorizationStatus

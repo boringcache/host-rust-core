@@ -4,11 +4,12 @@
 //! and signing hosts. Pairing state, signing state, active sessions, and role
 //! controls live on the concrete role objects.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::chain_runtime::{ChainRuntime, RuntimeChainProvider, RuntimeFailure};
+use crate::host_logic::permissions::PermissionMutations;
 use crate::host_logic::worker::WorkerLedger;
 use crate::runtime::bulletin_rpc::BulletinRpc;
 use crate::runtime::statement_store_rpc::StatementStoreRpc;
@@ -47,6 +48,7 @@ pub(crate) struct RuntimeServices {
     asset_hub_chain_genesis_hash: OnceLock<[u8; 32]>,
     /// Reference counts per product worker.
     pub(crate) worker_ledger: WorkerLedger,
+    permission_mutations: Mutex<HashMap<String, PermissionMutations>>,
     /// Shared chainHead-v1 runtime behind the Chain surface.
     pub(crate) chain: ChainRuntime,
     /// People-chain statement store RPC client.
@@ -99,6 +101,7 @@ impl RuntimeServices {
             pocket_platform: OnceLock::new(),
             asset_hub_chain_genesis_hash: OnceLock::new(),
             worker_ledger: WorkerLedger::default(),
+            permission_mutations: Mutex::new(HashMap::new()),
             chain,
             statement_store,
             bulletin,
@@ -185,6 +188,15 @@ impl RuntimeServices {
     /// The host's Pocket adapter, when one is installed.
     pub(crate) fn pocket_platform(&self) -> Option<Arc<dyn truapi_platform::PocketPlatform>> {
         self.pocket_platform.get().cloned()
+    }
+
+    pub(crate) fn permission_mutations(&self, product_id: &str) -> PermissionMutations {
+        self.permission_mutations
+            .lock()
+            .expect("permission mutations mutex poisoned")
+            .entry(product_id.to_string())
+            .or_default()
+            .clone()
     }
 
     /// This device's persisted X25519 encryption secret, created on first use.
