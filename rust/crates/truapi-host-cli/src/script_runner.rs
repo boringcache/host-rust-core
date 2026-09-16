@@ -1,5 +1,4 @@
-//! Runs a user host-script under `bun`, driving a host through the injected
-//! `truapi` global.
+//! Launches product scripts in the browser sandbox through a trusted Bun runner.
 //!
 //! The Rust CLI owns the flow: it starts the host, then spawns `js/runner.ts`
 //! (which connects the `@parity/truapi` client to the host and evaluates the
@@ -37,9 +36,7 @@ impl ScriptHostRole {
     }
 }
 
-const SCRATCH_TEMPLATE: &str = r#"#!/usr/bin/env bun
-
-// Scripts can use packages installed next to the script or in a parent project.
+const SCRATCH_TEMPLATE: &str = r#"// Scripts run in a browser sandbox and can import browser-compatible packages.
 
 const result = await truapi.account.getUserId();
 if (!result.isOk()) {
@@ -53,6 +50,7 @@ console.log('user id', result.value);
 /// `@parity/truapi` compiled in, so a downloaded install runs product scripts
 /// without a source checkout.
 const PACKAGED_RUNNER: &str = "runner.js";
+const BROWSER_INSTALLER: &str = "node_modules/playwright-core/cli.js";
 
 /// Locate the host-script runner.
 fn runner_path() -> PathBuf {
@@ -73,7 +71,13 @@ fn resolve_runner(explicit: Option<OsString>, executable: Option<&Path>) -> Path
         return PathBuf::from(path);
     }
     let packaged = executable.and_then(packaged_runner);
-    if let Some(packaged) = packaged.filter(|path| path.is_file()) {
+    if let Some(packaged) = packaged.filter(|path| {
+        path.is_file()
+            || path
+                .parent()
+                .and_then(Path::parent)
+                .is_some_and(|parent| parent.file_name().is_some_and(|name| name == "versions"))
+    }) {
         return packaged;
     }
     Path::new(env!("CARGO_MANIFEST_DIR")).join("js/runner.ts")
@@ -93,6 +97,51 @@ fn packaged_runner(executable: &Path) -> Option<PathBuf> {
         );
     }
     Some(directory.join(PACKAGED_RUNNER))
+}
+
+fn browser_installer(runner: &Path) -> Result<PathBuf> {
+    let directory = runner.parent().context("runner has no parent directory")?;
+    let installer = directory.join(BROWSER_INSTALLER);
+    if installer.is_file() {
+        return Ok(installer);
+    }
+    if runner
+        .file_name()
+        .is_none_or(|name| name != PACKAGED_RUNNER)
+    {
+        for ancestor in directory.ancestors().skip(1) {
+            let installer = ancestor.join(BROWSER_INSTALLER);
+            if installer.is_file() {
+                return Ok(installer);
+            }
+        }
+    }
+    anyhow::bail!(
+        "browser installer missing beside {}; reinstall truapi-host, or run \
+         `npm ci --ignore-scripts` in a source checkout",
+        runner.display()
+    )
+}
+
+pub async fn install_browser() -> Result<()> {
+    let installer = browser_installer(&runner_path())?;
+    let status = Command::new("bun")
+        .arg(installer)
+        .args(["install", "chromium", "--only-shell"])
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("could not start the browser installer; install Bun and ensure it is on PATH")?;
+    if !status.success() {
+        anyhow::bail!(
+            "browser installation failed ({status}); resolve the installer error and retry \
+             `truapi-host install-browser`"
+        );
+    }
+    Ok(())
 }
 
 /// Create a durable, uniquely-named TypeScript scratch file seeded with the
@@ -348,7 +397,24 @@ mod tests {
     }
 
     #[test]
-    fn scratch_script_starts_as_a_bun_script_with_dependency_free_example() -> Result<()> {
+    fn an_incomplete_managed_install_does_not_fall_back_to_source_code() -> Result<()> {
+        let install = tempfile::tempdir()?;
+        let version = install
+            .path()
+            .join("versions")
+            .join(env!("CARGO_PKG_VERSION"));
+        fs::create_dir_all(&version)?;
+        let executable = version.join("truapi-host");
+        fs::write(&executable, "binary")?;
+        assert_eq!(
+            resolve_runner(None, Some(&executable)),
+            version.join(PACKAGED_RUNNER)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scratch_script_describes_the_browser_contract() -> Result<()> {
         let temporary = tempfile::tempdir()?;
 
         let script = create_scratch_script(temporary.path())?;
@@ -356,9 +422,7 @@ mod tests {
 
         assert_eq!(
             contents,
-            r#"#!/usr/bin/env bun
-
-// Scripts can use packages installed next to the script or in a parent project.
+            r#"// Scripts run in a browser sandbox and can import browser-compatible packages.
 
 const result = await truapi.account.getUserId();
 if (!result.isOk()) {
@@ -368,6 +432,37 @@ if (!result.isOk()) {
 console.log('user id', result.value);
 "#
         );
+        Ok(())
+    }
+
+    #[test]
+    fn browser_installer_uses_the_runner_version_without_an_ancestor_fallback() -> Result<()> {
+        let install = tempfile::tempdir()?;
+        let parent_installer = install.path().join(BROWSER_INSTALLER);
+        fs::create_dir_all(parent_installer.parent().unwrap())?;
+        fs::write(&parent_installer, "wrong version")?;
+        let version = install.path().join("versions/current");
+        fs::create_dir_all(&version)?;
+        let runner = version.join(PACKAGED_RUNNER);
+        assert!(browser_installer(&runner).is_err());
+
+        let matching_installer = version.join(BROWSER_INSTALLER);
+        fs::create_dir_all(matching_installer.parent().unwrap())?;
+        fs::write(&matching_installer, "matching version")?;
+        assert_eq!(browser_installer(&runner)?, matching_installer);
+        Ok(())
+    }
+
+    #[test]
+    fn source_browser_installer_resolves_the_checkout_dependency() -> Result<()> {
+        let checkout = tempfile::tempdir()?;
+        let installer = checkout.path().join(BROWSER_INSTALLER);
+        fs::create_dir_all(installer.parent().unwrap())?;
+        fs::write(&installer, "source installer")?;
+        let runner = checkout
+            .path()
+            .join("rust/crates/truapi-host-cli/js/runner.ts");
+        assert_eq!(browser_installer(&runner)?, installer);
         Ok(())
     }
 

@@ -200,6 +200,8 @@ impl LogController {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Install the matching Chromium headless shell for sandboxed product scripts.
+    InstallBrowser,
     /// Run a seedless pairing host for product scripts or interactive pairing.
     ///
     /// With `--script`, exits with the script's status. Without it, stays in an
@@ -519,7 +521,7 @@ async fn main() -> Result<()> {
     // reports through `tracing`, which the terminal UI renders in its transcript
     // so it cannot corrupt the full-screen display. The command then waits for
     // it at exit, so even a short one completes the download it started.
-    let check = (!matches!(cli.command, Command::Update)).then(|| {
+    let check = (!matches!(cli.command, Command::Update | Command::InstallBrowser)).then(|| {
         update::report_install();
         tokio::spawn(update::run_background_check())
     });
@@ -542,6 +544,7 @@ async fn dispatch(
     log_controller: LogController,
 ) -> Result<()> {
     match command {
+        Command::InstallBrowser => script_runner::install_browser().await,
         Command::Update => update::run_update_command().await,
         Command::PairingHost(args) => run_pairing_host(args, log_filter, log_controller).await,
         Command::Dev(args) => run_dev(args, log_filter, log_controller).await,
@@ -3667,6 +3670,12 @@ fn default_base_path() -> PathBuf {
 mod cli_tests {
     use super::*;
     use parity_scale_codec::Encode;
+
+    #[test]
+    fn browser_installation_is_an_explicit_standalone_command() {
+        let cli = Cli::try_parse_from(["truapi-host", "install-browser"]).unwrap();
+        assert!(matches!(cli.command, Command::InstallBrowser));
+    }
 
     #[test]
     fn pairing_deeplink_becomes_a_public_persistable_host_record() {
