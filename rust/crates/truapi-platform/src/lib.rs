@@ -31,7 +31,7 @@ uniffi::use_remote_type!(truapi::Bytes32);
 use truapi::Bytes32;
 use truapi::latest::{
     AllocatableResource, ChainIdentifier, ChatAction, ChatActions, ChatCustomMessage, ChatFile,
-    ChatMedia, ChatMessageContent, ChatReaction, ChatRichText, GenericError,
+    ChatMedia, ChatMessageContent, ChatReaction, ChatRichText, DerivationIndex, GenericError,
     HostChatCreateRoomError, HostChatCreateRoomRequest, HostChatCreateRoomResponse,
     HostChatListSubscribeItem, HostChatPostMessageError, HostChatPostMessageRequest,
     HostChatPostMessageResponse, HostChatRegisterBotError, HostChatRegisterBotRequest,
@@ -1054,6 +1054,12 @@ pub enum PermissionAuthorizationRequest {
     /// Product-scoped permission to bind and use wallet-held Chat identity authority.
     #[codec(index = 4)]
     ChatAuthority,
+    /// Product-scoped permission to ensure Statement Store quota, not increase it.
+    #[codec(index = 5)]
+    StatementStoreAllowance {
+        /// `None` selects the legacy allowance account; `Some` selects a product account.
+        derivation_index: Option<DerivationIndex>,
+    },
 }
 
 /// Authorization status for a permission request.
@@ -1450,6 +1456,17 @@ impl CoreStorageKey {
         Self::PermissionAuthorization {
             product_id: product_id.to_string(),
             request: PermissionAuthorizationRequest::ChatAuthority,
+        }
+    }
+
+    /// Persisted authorization for one statement allowance account selector.
+    pub fn statement_store_allowance_authorization(
+        product_id: &str,
+        derivation_index: Option<DerivationIndex>,
+    ) -> Self {
+        Self::PermissionAuthorization {
+            product_id: product_id.to_string(),
+            request: PermissionAuthorizationRequest::StatementStoreAllowance { derivation_index },
         }
     }
 }

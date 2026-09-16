@@ -615,8 +615,6 @@ pub(super) async fn allocate_statement_store_allowance(
     product_id: &str,
     policy: OnExistingAllowancePolicy,
 ) -> Result<Vec<u8>, AllowanceAllocationError> {
-    use super::allowance_renewal::StatementRenewalTarget;
-
     signing_host.require_current_session(session)?;
     let entropy = signing_host.root_entropy()?;
     let allowance =
@@ -628,9 +626,6 @@ pub(super) async fn allocate_statement_store_allowance(
         product_id,
         allowance.public.to_bytes(),
         policy,
-        StatementRenewalTarget::ProductStatementAllowance {
-            product_id: product_id.to_string(),
-        },
     )
     .await?;
     Ok(allowance.secret.to_bytes().to_vec())
@@ -644,8 +639,6 @@ pub(super) async fn allocate_product_statement_store_allowance(
     derivation_index: &v01::DerivationIndex,
     policy: OnExistingAllowancePolicy,
 ) -> Result<(), AllowanceAllocationError> {
-    use super::allowance_renewal::StatementRenewalTarget;
-
     signing_host.require_current_session(session)?;
     let target = signing_host
         .product_keypair(&v01::ProductAccountId {
@@ -654,19 +647,8 @@ pub(super) async fn allocate_product_statement_store_allowance(
         })?
         .public
         .to_bytes();
-    register_statement_store_target(
-        services,
-        signing_host,
-        session,
-        product_id,
-        target,
-        policy,
-        StatementRenewalTarget::Account {
-            account_id: target,
-            label: format!("product-account:{product_id}"),
-        },
-    )
-    .await
+    register_statement_store_target(services, signing_host, session, product_id, target, policy)
+        .await
 }
 
 async fn register_statement_store_target(
@@ -676,9 +658,7 @@ async fn register_statement_store_target(
     product_id: &str,
     target: [u8; 32],
     policy: OnExistingAllowancePolicy,
-    renewal_target: super::allowance_renewal::StatementRenewalTarget,
 ) -> Result<(), AllowanceAllocationError> {
-    use super::allowance_renewal;
     use crate::runtime::statement_allowance::{
         self, PooledRegistrationParams, allocated_in, find_including_rings,
         register_statement_account_pooled, scan_collections,
@@ -710,6 +690,7 @@ async fn register_statement_store_target(
         reuse_existing,
     )
     .await?;
+    signing_host.require_current_session(session)?;
     if let Some((collection, seq)) = allocated_in(&scans) {
         debug!(
             %product_id,
@@ -772,10 +753,6 @@ async fn register_statement_store_target(
                 );
             }
         }
-    }
-    signing_host.require_current_session(session)?;
-    if let Err(reason) = allowance_renewal::track(signing_host, vec![renewal_target]).await {
-        warn!(%product_id, %reason, "failed to record statement-store renewal target");
     }
     signing_host.require_current_session(session)?;
     Ok(())
@@ -1101,7 +1078,7 @@ mod tests {
     /// rather than passing quietly.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn an_existing_allowance_is_served_without_touching_the_ring() {
+    fn repeated_implicit_provisioning_reuses_existing_allowance_without_submission() {
         use futures::FutureExt;
 
         use crate::host_logic::product_account::derive_sr25519_hard_path;
@@ -1151,35 +1128,58 @@ mod tests {
                     "state_getStorage",
                     format!(r#""0x{}""#, hex::encode(&slot_entry)),
                 ),
+                (
+                    "state_getStorage",
+                    format!(r#""0x{}""#, hex::encode(b"paseo".to_vec().encode())),
+                ),
+                (
+                    "state_getStorage",
+                    format!(r#""0x{}""#, hex::encode(&slot_entry)),
+                ),
+                (
+                    "state_getRuntimeVersion",
+                    r#"{"specVersion":1000000,"transactionVersion":1}"#.to_string(),
+                ),
+                (
+                    "chain_getBlockHash",
+                    format!(r#""0x{}""#, hex::encode([0u8; 32])),
+                ),
+                (
+                    "RuntimeViewFunction_execute_view_function",
+                    format!(
+                        r#""0x{}""#,
+                        hex::encode(Ok::<Vec<u8>, ()>(20u32.encode()).encode()),
+                    ),
+                ),
             ],
             ..Default::default()
         });
-        let (services, signing_host) = signing_fixture(platform.clone());
+        let (_services, signing_host) = signing_fixture(platform.clone());
 
         // Bounded, because the failure mode of losing the early return is a
         // wait on a chain read the stub deliberately does not answer — an
         // unbounded test would hang instead of reporting. The bound is generous
         // because it is catching a hang, not asserting latency.
-        let secret = futures::executor::block_on(async {
+        futures::executor::block_on(async {
             let session = signing_host.current_session().unwrap();
-            futures::select! {
-                result = allocate_statement_store_allowance(
-                    &services,
-                    &signing_host,
+            let cx = truapi::CallContext::default();
+            for _ in 0..2 {
+                let allocation = signing_host.statement_store_allowance_key(
+                    &cx,
                     &session,
-                    product_id,
-                    OnExistingAllowancePolicy::Ignore,
-                )
-                .fuse() => result,
-                _ = futures_timer::Delay::new(std::time::Duration::from_secs(30)).fuse() => {
-                    panic!("allocation blocked on a chain read it should not have made")
+                    product_id.to_string(),
+                );
+                futures::pin_mut!(allocation);
+                let response = futures::select! {
+                    result = allocation.fuse() => result,
+                    _ = futures_timer::Delay::new(std::time::Duration::from_secs(30)).fuse() => {
+                        panic!("allocation blocked on a chain read it should not have made")
+                    }
                 }
+                .expect("existing allowance succeeds");
+                assert_eq!(response.public_key, allowance.public.to_bytes());
             }
-        })
-        .expect("an existing allowance is returned");
-
-        assert_eq!(secret, allowance.secret.to_bytes().to_vec());
-
+        });
         let sent = platform.sent_rpc.lock().expect("rpc list mutex poisoned");
         let methods: Vec<String> = sent
             .iter()
@@ -1204,15 +1204,6 @@ mod tests {
                 .iter()
                 .any(|method| method.starts_with("author_submit")),
             "an extrinsic was submitted for an allowance already in place: {methods:?}"
-        );
-        // The suffix and one slot read answered it; the scan stopped at the first match.
-        assert_eq!(
-            methods
-                .iter()
-                .filter(|method| *method == "state_getStorage")
-                .count(),
-            2,
-            "expected one suffix and one slot read: {methods:?}"
         );
     }
 

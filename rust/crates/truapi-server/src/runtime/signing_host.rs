@@ -1513,6 +1513,436 @@ mod tests {
         )
     }
 
+    #[test]
+    fn statement_allowance_decisions_survive_runtime_restart_and_remain_scoped() {
+        let platform = Arc::new(StubPlatform {
+            resource_allocation_confirmed: true,
+            chain_connect_error: Some("offline"),
+            ..Default::default()
+        });
+        let selector = Some(v01::DerivationIndex::Index(0));
+        let request = PermissionAuthorizationRequest::StatementStoreAllowance {
+            derivation_index: selector.clone(),
+        };
+        futures::executor::block_on(async {
+            let (services, authority) = signing_runtime_with_platform(platform.clone());
+            authority
+                .activate_local_session(ENTROPY.to_vec())
+                .await
+                .unwrap();
+            let first = product_runtime(services, authority.clone());
+            let session = authority.current_session().unwrap();
+            first
+                .require_statement_store_allowance(&session, selector.clone())
+                .await
+                .unwrap();
+            drop(first);
+            drop(authority);
+
+            let (services, authority) = signing_runtime_with_platform(platform.clone());
+            authority
+                .activate_local_session(ENTROPY.to_vec())
+                .await
+                .unwrap();
+            let restarted = product_runtime(services.clone(), authority.clone());
+            let session = authority.current_session().unwrap();
+            restarted
+                .require_statement_store_allowance(&session, selector.clone())
+                .await
+                .unwrap();
+            assert_eq!(
+                platform.resource_allocation_reviews.lock().unwrap().len(),
+                1
+            );
+            assert_eq!(
+                restarted
+                    .permission_authorization_status(request.clone())
+                    .await
+                    .unwrap(),
+                PermissionAuthorizationStatus::Authorized
+            );
+            for separate in [
+                PermissionAuthorizationRequest::StatementStoreAllowance {
+                    derivation_index: None,
+                },
+                PermissionAuthorizationRequest::StatementStoreAllowance {
+                    derivation_index: Some(v01::DerivationIndex::Index(1)),
+                },
+                PermissionAuthorizationRequest::ChatAuthority,
+                PermissionAuthorizationRequest::IdentityDisclosure,
+            ] {
+                assert_eq!(
+                    restarted
+                        .permission_authorization_status(separate)
+                        .await
+                        .unwrap(),
+                    PermissionAuthorizationStatus::NotDetermined
+                );
+            }
+            let other = product_runtime_for(services.clone(), authority.clone(), "other.dot");
+            assert_eq!(
+                other
+                    .permission_authorization_status(request.clone())
+                    .await
+                    .unwrap(),
+                PermissionAuthorizationStatus::NotDetermined
+            );
+
+            // A connection with a different artifact store must not inherit a
+            // decision even with the same product id and the same authority.
+            let mut adapters = crate::host_core::ConnectionAdapters::from_services(&services);
+            adapters.platform = Arc::new(StubPlatform::default());
+            let other_artifact = ProductRuntimeHost::from_services(
+                services,
+                adapters,
+                authority,
+                ProductContext::new("myapp.dot".to_string()).unwrap(),
+            );
+            assert_eq!(
+                other_artifact
+                    .permission_authorization_status(request.clone())
+                    .await
+                    .unwrap(),
+                PermissionAuthorizationStatus::NotDetermined
+            );
+
+            restarted
+                .set_permission_authorization_status(
+                    request.clone(),
+                    PermissionAuthorizationStatus::Denied,
+                )
+                .await
+                .unwrap();
+            let result = ResourceAllocation::request(
+                &restarted,
+                &CallContext::default(),
+                HostRequestResourceAllocationRequest::V1(
+                    v01::HostRequestResourceAllocationRequest {
+                        resources: vec![v01::AllocatableResource::ProductStatementStoreAllowance(
+                            v01::DerivationIndex::Index(0),
+                        )],
+                    },
+                ),
+            )
+            .await;
+            assert!(result.is_err());
+            assert!(platform.sent_rpc.lock().unwrap().is_empty());
+            assert_eq!(
+                platform.resource_allocation_reviews.lock().unwrap().len(),
+                1
+            );
+            assert_eq!(
+                restarted
+                    .permission_authorization_status(request.clone())
+                    .await
+                    .unwrap(),
+                PermissionAuthorizationStatus::Denied
+            );
+            restarted
+                .set_permission_authorization_status(
+                    request,
+                    PermissionAuthorizationStatus::NotDetermined,
+                )
+                .await
+                .unwrap();
+            restarted
+                .require_statement_store_allowance(&session, selector)
+                .await
+                .unwrap();
+            assert_eq!(
+                platform.resource_allocation_reviews.lock().unwrap().len(),
+                2
+            );
+        });
+    }
+
+    #[test]
+    fn explicit_statement_increases_each_prompt_and_initial_approval_also_grants_ensure() {
+        let platform = Arc::new(StubPlatform {
+            resource_allocation_confirmed: true,
+            chain_connect_error: Some("offline"),
+            ..Default::default()
+        });
+        let (services, authority) = signing_runtime_with_platform(platform.clone());
+        futures::executor::block_on(async {
+            authority
+                .activate_local_session(ENTROPY.to_vec())
+                .await
+                .unwrap();
+            let runtime = product_runtime(services, authority.clone());
+            let session = authority.current_session().unwrap();
+            for expected_reviews in 1..=2 {
+                // Chain availability is independent of consent: a failed
+                // provisioning attempt must not force a second grant prompt.
+                ResourceAllocation::request(
+                    &runtime,
+                    &CallContext::default(),
+                    HostRequestResourceAllocationRequest::V1(
+                        v01::HostRequestResourceAllocationRequest {
+                            resources: vec![v01::AllocatableResource::StatementStoreAllowance],
+                        },
+                    ),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    platform
+                        .resource_allocation_reviews
+                        .lock()
+                        .expect("reviews")
+                        .len(),
+                    expected_reviews
+                );
+                runtime
+                    .require_statement_store_allowance(&session, None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    platform
+                        .resource_allocation_reviews
+                        .lock()
+                        .expect("reviews")
+                        .len(),
+                    expected_reviews
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn cancelling_an_explicit_increase_preserves_the_implicit_allowance_grant() {
+        let platform = Arc::new(StubPlatform::default());
+        let (services, authority) = signing_runtime_with_platform(platform.clone());
+        futures::executor::block_on(async {
+            authority
+                .activate_local_session(ENTROPY.to_vec())
+                .await
+                .unwrap();
+            let runtime = product_runtime(services, authority.clone());
+            let grant = PermissionAuthorizationRequest::StatementStoreAllowance {
+                derivation_index: None,
+            };
+            runtime
+                .set_permission_authorization_status(
+                    grant.clone(),
+                    PermissionAuthorizationStatus::Authorized,
+                )
+                .await
+                .unwrap();
+            assert!(
+                ResourceAllocation::request(
+                    &runtime,
+                    &CallContext::default(),
+                    HostRequestResourceAllocationRequest::V1(
+                        v01::HostRequestResourceAllocationRequest {
+                            resources: vec![v01::AllocatableResource::StatementStoreAllowance],
+                        }
+                    )
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(
+                runtime
+                    .permission_authorization_status(grant)
+                    .await
+                    .unwrap(),
+                PermissionAuthorizationStatus::Authorized
+            );
+            runtime
+                .require_statement_store_allowance(&authority.current_session().unwrap(), None)
+                .await
+                .unwrap();
+            assert_eq!(
+                platform
+                    .resource_allocation_reviews
+                    .lock()
+                    .expect("reviews")
+                    .len(),
+                1
+            );
+            assert!(platform.sent_rpc.lock().expect("rpc").is_empty());
+        });
+    }
+
+    #[test]
+    fn administration_during_explicit_review_wins_over_the_confirmation() {
+        use futures::FutureExt;
+        for (before, administrative) in [
+            (
+                PermissionAuthorizationStatus::NotDetermined,
+                PermissionAuthorizationStatus::Denied,
+            ),
+            (
+                PermissionAuthorizationStatus::Authorized,
+                PermissionAuthorizationStatus::NotDetermined,
+            ),
+        ] {
+            let (release, gate) = futures::channel::oneshot::channel();
+            let platform = Arc::new(StubPlatform {
+                resource_allocation_confirmed: true,
+                ..Default::default()
+            });
+            *platform
+                .resource_allocation_confirmation_gate
+                .lock()
+                .expect("gate") = Some(gate);
+            let (services, authority) = signing_runtime_with_platform(platform.clone());
+            futures::executor::block_on(async {
+                authority
+                    .activate_local_session(ENTROPY.to_vec())
+                    .await
+                    .unwrap();
+                let runtime = product_runtime(services, authority);
+                let grant = PermissionAuthorizationRequest::StatementStoreAllowance {
+                    derivation_index: None,
+                };
+                runtime
+                    .set_permission_authorization_status(grant.clone(), before)
+                    .await
+                    .unwrap();
+                let cx = CallContext::default();
+                let allocation = ResourceAllocation::request(
+                    &runtime,
+                    &cx,
+                    HostRequestResourceAllocationRequest::V1(
+                        v01::HostRequestResourceAllocationRequest {
+                            resources: vec![v01::AllocatableResource::StatementStoreAllowance],
+                        },
+                    ),
+                );
+                futures::pin_mut!(allocation);
+                assert!(allocation.as_mut().now_or_never().is_none());
+                runtime
+                    .set_permission_authorization_status(grant.clone(), administrative)
+                    .await
+                    .unwrap();
+                release.send(()).unwrap();
+                assert!(allocation.await.is_err());
+                assert_eq!(
+                    runtime
+                        .permission_authorization_status(grant)
+                        .await
+                        .unwrap(),
+                    administrative
+                );
+                assert!(platform.sent_rpc.lock().expect("rpc").is_empty());
+            });
+        }
+    }
+
+    #[test]
+    fn statement_allowance_storage_failure_never_prompts_or_allocates() {
+        let platform = Arc::new(StubPlatform {
+            local_storage_error: Some("storage unavailable"),
+            resource_allocation_confirmed: true,
+            ..Default::default()
+        });
+        let (services, authority) =
+            signing_runtime_with_platform(Arc::new(StubPlatform::default()));
+        futures::executor::block_on(async {
+            authority
+                .activate_local_session(ENTROPY.to_vec())
+                .await
+                .unwrap();
+            let mut adapters = crate::host_core::ConnectionAdapters::from_services(&services);
+            adapters.platform = platform.clone();
+            let runtime = ProductRuntimeHost::from_services(
+                services,
+                adapters,
+                authority,
+                ProductContext::new("myapp.dot".to_string()).unwrap(),
+            );
+            let result = ResourceAllocation::request(
+                &runtime,
+                &CallContext::default(),
+                HostRequestResourceAllocationRequest::V1(
+                    v01::HostRequestResourceAllocationRequest {
+                        resources: vec![v01::AllocatableResource::StatementStoreAllowance],
+                    },
+                ),
+            )
+            .await;
+            assert!(result.is_err());
+            assert!(
+                platform
+                    .resource_allocation_reviews
+                    .lock()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(platform.sent_rpc.lock().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn statement_consent_cannot_survive_same_account_reactivation() {
+        use futures::FutureExt;
+        for explicit in [false, true] {
+            let (release, gate) = futures::channel::oneshot::channel();
+            let platform = Arc::new(StubPlatform {
+                resource_allocation_confirmed: true,
+                ..Default::default()
+            });
+            *platform
+                .resource_allocation_confirmation_gate
+                .lock()
+                .expect("gate lock") = Some(gate);
+            let (services, authority) = signing_runtime_with_platform(platform.clone());
+            futures::executor::block_on(async {
+                authority
+                    .activate_local_session(ENTROPY.to_vec())
+                    .await
+                    .unwrap();
+                let runtime = product_runtime(services, authority.clone());
+                let session = authority.current_session().unwrap();
+                let consent = async {
+                    if explicit {
+                        ResourceAllocation::request(
+                            &runtime,
+                            &CallContext::default(),
+                            HostRequestResourceAllocationRequest::V1(
+                                v01::HostRequestResourceAllocationRequest {
+                                    resources: vec![
+                                        v01::AllocatableResource::StatementStoreAllowance,
+                                    ],
+                                },
+                            ),
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| format!("{error:?}"))
+                    } else {
+                        runtime
+                            .require_statement_store_allowance(&session, None)
+                            .await
+                    }
+                };
+                futures::pin_mut!(consent);
+                assert!(consent.as_mut().now_or_never().is_none());
+                authority.disconnect().await;
+                authority
+                    .activate_local_session(ENTROPY.to_vec())
+                    .await
+                    .unwrap();
+                release.send(()).unwrap();
+                assert!(consent.await.is_err());
+                assert_eq!(
+                    runtime
+                        .permission_authorization_status(
+                            PermissionAuthorizationRequest::StatementStoreAllowance {
+                                derivation_index: None
+                            },
+                        )
+                        .await
+                        .unwrap(),
+                    PermissionAuthorizationStatus::NotDetermined
+                );
+                assert!(platform.sent_rpc.lock().expect("rpc lock").is_empty());
+            });
+        }
+    }
+
     fn vrf_request(product_id: &str) -> v01::HostAccountSignVrfRequest {
         v01::HostAccountSignVrfRequest {
             account: v01::ProductAccountId {

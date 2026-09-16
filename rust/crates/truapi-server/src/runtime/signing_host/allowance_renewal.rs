@@ -7,9 +7,10 @@
 //! `statement_allowance::renewal`, either once (`renew_now`) or on a periodic
 //! tick (`start_renewal_loop`).
 //!
-//! All signing hosts record the ledger during allocation. The resident renewal
-//! driver belongs to the native host API; browser hosts currently allocate on
-//! demand without starting that driver.
+//! Only host-owned wallet/paired-device targets are renewed in the background.
+//! Product allowance decisions belong to product connection storage, which may
+//! be artifact-scoped and is unavailable here. They are ensured on demand by an
+//! authorized product request; old unscoped product ledger entries are pruned.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
@@ -73,6 +74,18 @@ pub enum StatementRenewalTarget {
         /// Human-readable name used in logs and reports.
         label: String,
     },
+}
+
+impl StatementRenewalTarget {
+    /// These legacy entries cannot identify the artifact-scoped decision that
+    /// authorized them. Never infer authorization from host-global storage.
+    fn is_product_grant(&self) -> bool {
+        match self {
+            Self::ProductStatementAllowance { .. } => true,
+            Self::Account { label, .. } => label.starts_with("product-account:"),
+            Self::WalletSso => false,
+        }
+    }
 }
 
 /// One persisted ledger entry.
@@ -190,6 +203,12 @@ async fn track_targets(
     owner: [u8; 32],
     new_targets: Vec<StatementRenewalTarget>,
 ) -> Result<(), String> {
+    if new_targets
+        .iter()
+        .any(StatementRenewalTarget::is_product_grant)
+    {
+        return Err("Product statement allowances require an authorized product request; background renewal cannot access artifact-scoped permissions".to_string());
+    }
     let _guard = ledger_lock.lock().await;
     let mut entries = read_entries(storage).await?;
     let mut changed = false;
@@ -382,7 +401,7 @@ async fn owned_targets(
     let (owned, foreign): (Vec<_>, Vec<_>) = read_entries(storage)
         .await?
         .into_iter()
-        .partition(|entry| entry.is_owned_by(owner));
+        .partition(|entry| entry.is_owned_by(owner) && !entry.target.is_product_grant());
     let pruned: Vec<String> = foreign
         .iter()
         .map(|entry| target_label(&entry.target))
@@ -390,7 +409,7 @@ async fn owned_targets(
     if !foreign.is_empty() {
         warn!(
             dropped = ?pruned,
-            "pruning renewal targets promised by a previous identity"
+            "pruning foreign or unscoped product renewal targets"
         );
         write_entries(storage, &owned).await?;
     }
@@ -663,18 +682,26 @@ mod tests {
     fn concurrent_tracks_do_not_drop_an_entry() {
         let storage = YieldingStorage::default();
         let ledger_lock = lock();
+        let first_target = StatementRenewalTarget::Account {
+            account_id: [8; 32],
+            label: "device:08".to_string(),
+        };
+        let second_target = StatementRenewalTarget::Account {
+            account_id: [9; 32],
+            label: "device:09".to_string(),
+        };
 
         futures::executor::block_on(async {
             let (first, second) = futures::join!(
-                track_targets(&storage, &ledger_lock, OWNER, vec![product("a.dot")]),
-                track_targets(&storage, &ledger_lock, OWNER, vec![product("b.dot")]),
+                track_targets(&storage, &ledger_lock, OWNER, vec![first_target.clone()]),
+                track_targets(&storage, &ledger_lock, OWNER, vec![second_target.clone()]),
             );
             first.unwrap();
             second.unwrap();
 
             let mut targets = read_targets(&storage, OWNER).await.unwrap();
             targets.sort_by_key(|target| format!("{target:?}"));
-            assert_eq!(targets, vec![product("a.dot"), product("b.dot")]);
+            assert_eq!(targets, vec![first_target, second_target]);
         });
     }
 
@@ -777,14 +804,19 @@ mod tests {
 
             let (pruned, tracked) = futures::join!(
                 owned_targets(&storage, &ledger_lock, OWNER),
-                track_targets(&storage, &ledger_lock, OWNER, vec![product("a.dot")]),
+                track_targets(
+                    &storage,
+                    &ledger_lock,
+                    OWNER,
+                    vec![StatementRenewalTarget::WalletSso]
+                ),
             );
             pruned.unwrap();
             tracked.unwrap();
 
             assert_eq!(
                 read_targets(&storage, OWNER).await.unwrap(),
-                vec![product("a.dot")],
+                vec![StatementRenewalTarget::WalletSso],
                 "the concurrently tracked target was overwritten by the prune"
             );
         });
@@ -805,20 +837,25 @@ mod tests {
             track_targets(&storage, &lock(), OTHER_OWNER, vec![device])
                 .await
                 .unwrap();
-            track_targets(&storage, &lock(), OWNER, vec![product("a.dot")])
-                .await
-                .unwrap();
+            track_targets(
+                &storage,
+                &lock(),
+                OWNER,
+                vec![StatementRenewalTarget::WalletSso],
+            )
+            .await
+            .unwrap();
 
             let (targets, pruned) = owned_targets(&storage, &lock(), OWNER).await.unwrap();
 
-            assert_eq!(targets, vec![product("a.dot")]);
+            assert_eq!(targets, vec![StatementRenewalTarget::WalletSso]);
             // Reported, not just dropped: the pass is a host's only view of the
             // ledger, so a silent prune is one it cannot notice or re-track.
             assert_eq!(pruned, vec!["device".to_string()]);
             // Dropped, not merely skipped, so the cost is paid once.
             assert_eq!(
                 read_entries(&storage).await.unwrap(),
-                vec![LedgerEntry::new(product("a.dot"), OWNER)]
+                vec![LedgerEntry::new(StatementRenewalTarget::WalletSso, OWNER)]
             );
         });
     }
@@ -849,14 +886,19 @@ mod tests {
         let storage = MemStorage::default();
 
         futures::executor::block_on(async {
-            track_targets(&storage, &lock(), OWNER, vec![product("a.dot")])
-                .await
-                .unwrap();
+            track_targets(
+                &storage,
+                &lock(),
+                OWNER,
+                vec![StatementRenewalTarget::WalletSso],
+            )
+            .await
+            .unwrap();
             let after_seeding = storage.writes();
 
             let (targets, _pruned) = owned_targets(&storage, &lock(), OWNER).await.unwrap();
 
-            assert_eq!(targets, vec![product("a.dot")]);
+            assert_eq!(targets, vec![StatementRenewalTarget::WalletSso]);
             // Every tick calls this; rewriting the ledger each time would be waste.
             assert_eq!(storage.writes(), after_seeding);
         });
@@ -919,7 +961,7 @@ mod tests {
                 &storage,
                 &lock(),
                 OWNER,
-                vec![StatementRenewalTarget::WalletSso, product("a.dot")],
+                vec![StatementRenewalTarget::WalletSso],
             )
             .await
             .unwrap();
@@ -928,7 +970,7 @@ mod tests {
                 &lock(),
                 OWNER,
                 vec![
-                    product("a.dot"),
+                    StatementRenewalTarget::WalletSso,
                     StatementRenewalTarget::Account {
                         account_id: [9; 32],
                         label: "device".to_string(),
@@ -942,7 +984,6 @@ mod tests {
                 read_targets(&storage, OWNER).await.unwrap(),
                 vec![
                     StatementRenewalTarget::WalletSso,
-                    product("a.dot"),
                     StatementRenewalTarget::Account {
                         account_id: [9; 32],
                         label: "device".to_string(),
@@ -985,14 +1026,59 @@ mod tests {
                 .write_core_storage(CoreStorageKey::StatementRenewalTargets, vec![0xff; 3])
                 .await
                 .unwrap();
-            track_targets(&storage, &lock(), OWNER, vec![product("a.dot")])
-                .await
-                .unwrap();
+            track_targets(
+                &storage,
+                &lock(),
+                OWNER,
+                vec![StatementRenewalTarget::WalletSso],
+            )
+            .await
+            .unwrap();
 
             assert_eq!(
                 read_targets(&storage, OWNER).await.unwrap(),
-                vec![product("a.dot")]
+                vec![StatementRenewalTarget::WalletSso]
             );
+        });
+    }
+
+    #[test]
+    fn product_grants_cannot_bypass_artifact_revocation_through_renewal() {
+        let storage = MemStorage::default();
+        let legacy = product("a.dot");
+        let product_account = StatementRenewalTarget::Account {
+            account_id: [8; 32],
+            label: "product-account:a.dot".to_string(),
+        };
+        let device = StatementRenewalTarget::Account {
+            account_id: [9; 32],
+            label: "device:09".to_string(),
+        };
+        futures::executor::block_on(async {
+            for target in [&legacy, &product_account] {
+                assert!(
+                    track_targets(&storage, &lock(), OWNER, vec![target.clone()])
+                        .await
+                        .is_err()
+                );
+            }
+            // Seed the old on-disk format: an upgrade must stop existing promises,
+            // not merely prevent new ones from being recorded.
+            write_entries(
+                &storage,
+                &[
+                    LedgerEntry::new(legacy, OWNER),
+                    LedgerEntry::new(product_account, OWNER),
+                    LedgerEntry::new(StatementRenewalTarget::WalletSso, OWNER),
+                    LedgerEntry::new(device.clone(), OWNER),
+                ],
+            )
+            .await
+            .unwrap();
+            let (targets, pruned) = owned_targets(&storage, &lock(), OWNER).await.unwrap();
+            assert_eq!(targets, vec![StatementRenewalTarget::WalletSso, device]);
+            assert_eq!(pruned, vec!["product:a.dot", "product-account:a.dot"]);
+            assert_eq!(read_targets(&storage, OWNER).await.unwrap(), targets);
         });
     }
 
@@ -1111,7 +1197,7 @@ mod tests {
                 &storage,
                 &lock(),
                 OWNER,
-                vec![device.clone(), product("a.dot")],
+                vec![device.clone(), StatementRenewalTarget::WalletSso],
             )
             .await
             .unwrap();
@@ -1119,11 +1205,11 @@ mod tests {
             // The recipe resolves under any identity; the raw account does not.
             assert_eq!(
                 read_targets(&storage, OWNER).await.unwrap(),
-                vec![device, product("a.dot")]
+                vec![device, StatementRenewalTarget::WalletSso]
             );
             assert_eq!(
                 read_targets(&storage, OTHER_OWNER).await.unwrap(),
-                vec![product("a.dot")]
+                vec![StatementRenewalTarget::WalletSso]
             );
         });
     }

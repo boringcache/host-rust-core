@@ -305,6 +305,16 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
                 )
                 .await
             }
+            PermissionAuthorizationRequest::StatementStoreAllowance { derivation_index } => {
+                authorization_status(
+                    self.storage,
+                    CoreStorageKey::statement_store_allowance_authorization(
+                        self.product_id,
+                        derivation_index.clone(),
+                    ),
+                )
+                .await
+            }
         }
     }
 
@@ -364,6 +374,12 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
             }
             PermissionAuthorizationRequest::ChatAuthority => {
                 CoreStorageKey::chat_authority_authorization(self.product_id)
+            }
+            PermissionAuthorizationRequest::StatementStoreAllowance { derivation_index } => {
+                CoreStorageKey::statement_store_allowance_authorization(
+                    self.product_id,
+                    derivation_index.clone(),
+                )
             }
         };
         set_authorization_status(self.storage, key, status).await

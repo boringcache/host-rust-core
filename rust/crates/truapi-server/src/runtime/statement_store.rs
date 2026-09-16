@@ -358,6 +358,9 @@ impl ProductRuntimeHost {
             .authority
             .current_session()
             .ok_or(StatementProofFailure::NoSession)?;
+        self.require_statement_store_allowance(&session, None)
+            .await
+            .map_err(StatementProofFailure::UnableToSign)?;
         let cx = remote_authority_context(cx);
         let allowance = remote_authority_call(
             &cx,
@@ -366,6 +369,9 @@ impl ProductRuntimeHost {
         )
         .await
         .map_err(statement_authority_failure)?;
+        self.check_statement_store_allowance(&session, None)
+            .await
+            .map_err(StatementProofFailure::UnableToSign)?;
         create_statement_proof_with_key(statement, &allowance)
     }
 }
@@ -583,6 +589,7 @@ mod tests {
         let payload = statement_payload(statement.clone());
         let (allowance_secret, expected_signer) = allowance_key(11);
         let platform = Arc::new(StubPlatform {
+            resource_allocation_confirmed: true,
             sso_response_script: Some(sso_success_response_script(
                 &session,
                 crate::host_logic::sso::messages::RemoteMessage {
@@ -612,7 +619,7 @@ mod tests {
         );
         host.test_session_state().set_session(session.clone());
         let cx = CallContext::with_request_id("proof-auth-1".to_string());
-        let request = RemoteStatementStoreCreateProofAuthorizedRequest::V1(statement);
+        let request = RemoteStatementStoreCreateProofAuthorizedRequest::V1(statement.clone());
 
         let response = futures::executor::block_on(StatementStore::create_proof_authorized(
             &host, &cx, request,
@@ -625,6 +632,22 @@ mod tests {
         };
         assert_eq!(signer, expected_signer);
         assert_sr25519_signature(signer, signature, &payload);
+        futures::executor::block_on(host.set_permission_authorization_status(
+            truapi_platform::PermissionAuthorizationRequest::StatementStoreAllowance {
+                derivation_index: None,
+            },
+            truapi_platform::PermissionAuthorizationStatus::Denied,
+        ))
+        .unwrap();
+        // Cached private material must not bypass a revoked product decision.
+        assert!(
+            futures::executor::block_on(StatementStore::create_proof_authorized(
+                &host,
+                &cx,
+                RemoteStatementStoreCreateProofAuthorizedRequest::V1(statement),
+            ))
+            .is_err()
+        );
 
         let message = submitted_remote_message(&platform, &session);
         let crate::host_logic::sso::messages::RemoteMessageData::V1(
