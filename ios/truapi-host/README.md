@@ -494,7 +494,7 @@ Use `installation.setPermissionAuthorizationStatus` for settings changes while v
 
 Redirects to origins that have never been registered by an authorized fetch in this view currently fail closed, even when Rust already stores a grant for the destination. Explicitly fetching the destination registers it. This conservative adapter does not enumerate wildcard grants into browser rules.
 
-Native verification must use the built container in a real WKWebView. `ProductNetworkAccessTests` checks grant/fetch, denied and unseen redirect destinations, revocation across two executions, raw preload after revocation, exact rule matching, overlapping grant/deny settings, and disposal of another view during refresh, including asynchronous rule-cache cleanup. These Apple-only tests cannot run on Linux. Consumer apps that assemble their own scripts must adopt the web-view helper and safe settings/teardown paths; rebuilding this package alone does not update that wiring.
+Native verification must use the built container in a real WKWebView. `ProductNetworkAccessTests` checks grant/fetch, denied and unseen redirect destinations, revocation across two executions, raw preload before and after revocation, exact rule matching, overlapping grant/deny settings, and disposal of another view during refresh, including asynchronous rule-cache cleanup. The offscreen test views disable inactive scheduling suspension so page work can complete without a window. These Apple-only tests cannot run on Linux. Consumer apps that assemble their own scripts must adopt the web-view helper and safe settings/teardown paths; rebuilding this package alone does not update that wiring.
 
 
 ## Build outputs in detail
