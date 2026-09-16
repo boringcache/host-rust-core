@@ -164,7 +164,7 @@ jobs:
             || { echo "::error::binary reports '${reported}'"; exit 1; }
           archive="target/dist/truapi-host-${VERSION}-${{ matrix.target }}.tar.gz"
           tar -tzf "${archive}" > "${RUNNER_TEMP}/cli-archive-files"
-          for asset in runner.js sandbox-assets/container.js sandbox-assets/client.mjs sandbox-assets/bootstrap.js node_modules/playwright-core/cli.js node_modules/playwright-core/browsers.json; do
+          for asset in runner.js sandbox-assets/container.js sandbox-assets/client.mjs sandbox-assets/bootstrap.js node_modules/playwright-core/cli.js node_modules/playwright-core/browsers.json node_modules/esbuild-wasm/esbuild.wasm; do
             grep -Fqx "${asset}" "${RUNNER_TEMP}/cli-archive-files" \
               || { echo "::error::archive is missing ${asset}"; exit 1; }
           done
@@ -183,6 +183,16 @@ jobs:
           set -euo pipefail
           package="${RUNNER_TEMP}/truapi-host-package"
           "${package}/truapi-host" install-browser
+          if [ "${RUNNER_OS}" = "Linux" ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || true)" = "1" ]; then
+            cat > "${RUNNER_TEMP}/truapi-browser-apparmor" <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile truapi-cli-release "${PLAYWRIGHT_BROWSERS_PATH}/**/chrome-headless-shell" flags=(unconfined) {
+            userns,
+          }
+          EOF
+            sudo apparmor_parser -r "${RUNNER_TEMP}/truapi-browser-apparmor"
+          fi
           printf '%s\n' 'assert(typeof Bun === "undefined"); assert(typeof process === "undefined"); console.log("sandbox-ok");' > "${RUNNER_TEMP}/sandbox-smoke.ts"
           if ! "${package}/truapi-host" pairing-host --script "${RUNNER_TEMP}/sandbox-smoke.ts" --base-path "${RUNNER_TEMP}/sandbox-state" > "${RUNNER_TEMP}/sandbox-smoke.log" 2>&1; then
             cat "${RUNNER_TEMP}/sandbox-smoke.log"
@@ -190,6 +200,7 @@ jobs:
           fi
           cat "${RUNNER_TEMP}/sandbox-smoke.log"
           grep -q sandbox-ok "${RUNNER_TEMP}/sandbox-smoke.log"
+          bun scripts/cli-sandbox.e2e.ts "${package}/truapi-host"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

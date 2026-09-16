@@ -124,6 +124,7 @@ async function main() {
       "sandbox-assets/bootstrap.js",
       "node_modules/playwright-core/cli.js",
       "node_modules/playwright-core/browsers.json",
+      "node_modules/esbuild-wasm/esbuild.wasm",
     ]) {
       check(
         `the installed package includes ${asset}`,
