@@ -1,5 +1,5 @@
 /// <reference path="../runner.ts" />
-import { PASEO_NEXT_V2_INDIVIDUALITY } from "../../../../../js/packages/truapi/src/index.ts";
+import { PASEO_NEXT_V2_INDIVIDUALITY } from "@parity/truapi";
 
 const PEOPLE_COLLECTION_ID =
   "0x706f703a706f6c6b61646f742e6e6574776f726b2f70656f706c652d6c697465";

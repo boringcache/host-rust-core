@@ -50,8 +50,9 @@ export async function runRemoteFetch(endpoint: string) {
 }
 
 export default async function () {
+  const endpoint =
+    typeof process === "undefined" ? undefined : process.env.REMOTE_FETCH_URL;
   return runRemoteFetch(
-    process.env.REMOTE_FETCH_URL ??
-      "https://jsonplaceholder.typicode.com/todos/1",
+    endpoint ?? "https://jsonplaceholder.typicode.com/todos/1",
   );
 }

@@ -37,6 +37,9 @@
 
 set -euo pipefail
 
+# Diagnostics read host transcripts and write reports outside the product sandbox.
+export TRUAPI_SCRIPT_MODE=trusted
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -92,6 +95,9 @@ fi
 # The battery imports the generated example manifest and the playground's
 # example runner, so both the codegen output and the playground's dependency
 # tree have to exist before a host starts.
+if [ ! -f "node_modules/playwright-core/package.json" ] || [ ! -f "node_modules/esbuild-wasm/package.json" ]; then
+  npm ci --ignore-scripts
+fi
 generated=(
   "js/packages/truapi/src/generated/client.ts"
   "js/packages/truapi/src/playground/codegen/services.ts"
