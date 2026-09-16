@@ -382,11 +382,8 @@ jobs:
           cp -R ios/truapi-host/Binaries/truapi_server.xcframework "$probe/ios/truapi-host/Binaries/"
           cp -R ios/truapi-provider/Binaries/truapi_provider.xcframework "$probe/ios/truapi-provider/Binaries/"
           cd "$probe"
-          xcodebuild build-for-testing \
-            -scheme TrUAPIHost-Package \
-            -destination "platform=iOS Simulator,arch=arm64,id=$simulator" \
-            -derivedDataPath "$RUNNER_TEMP/TrUAPIHostDerivedData" \
-            CODE_SIGNING_ALLOWED=NO
+          TRUAPI_TEST_SIMULATOR="$simulator" ./ios/truapi-host/scripts/test.sh build-for-testing \
+            -derivedDataPath "$RUNNER_TEMP/TrUAPINetworkTestHost"
           # Built for the simulator like TrUAPIHost above, not with `swift build`,
           # which targets macOS: the xcframeworks carry iOS slices only, and the
           # generated bindings use Swift concurrency, which the package's macOS
@@ -400,28 +397,11 @@ jobs:
       - name: Test native product network permissions in WKWebView
         run: |
           set -euo pipefail
-          runtime="$(xcrun simctl list -j | jq -er --arg simulator "$TRUAPI_TEST_SIMULATOR" '
-            . as $available
-            | .devices | to_entries[]
-            | select(any(.value[]; .udid == $simulator))
-            | .key as $identifier
-            | $available.runtimes[]
-            | select(.identifier == $identifier)
-            | .bundlePath
-          ')"
-          swift_libraries="$runtime/Contents/Resources/RuntimeRoot/System/Cryptexes/OS/usr/lib/swift"
-          # iOS 18.5 omits this overlay from its loader path: https://bugs.webkit.org/show_bug.cgi?id=293831
-          if [[ -f "$swift_libraries/libswiftWebKit.dylib" ]]; then
-            export TEST_RUNNER_DYLD_FALLBACK_LIBRARY_PATH="$swift_libraries"
-          fi
           cd "$RUNNER_TEMP/tag-probe"
-          xcodebuild test-without-building \
-            -scheme TrUAPIHost-Package \
-            -destination "platform=iOS Simulator,arch=arm64,id=$TRUAPI_TEST_SIMULATOR" \
-            -derivedDataPath "$RUNNER_TEMP/TrUAPIHostDerivedData" \
-            -only-testing:TrUAPIHostTests/ProductNetworkAccessTests \
-            -resultBundlePath "$RUNNER_TEMP/TrUAPINetworkTests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO
+          ./ios/truapi-host/scripts/test.sh test-without-building \
+            -derivedDataPath "$RUNNER_TEMP/TrUAPINetworkTestHost" \
+            -only-testing:NetworkPermissionTests/ProductNetworkAccessTests \
+            -resultBundlePath "$RUNNER_TEMP/TrUAPINetworkTests.xcresult"
 
       - name: Export native test diagnostics
         if: always()

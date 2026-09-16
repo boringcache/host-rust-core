@@ -13,7 +13,8 @@ The `TrUAPIHost` SPM package an iOS host app imports directly. It carries:
 - the Rust core as a binary target — a GitHub release asset by default (`publishedBinaryURL` in the root `Package.swift`), or the locally built `Binaries/truapi_server.xcframework` when `useLocalBinary` is flipped to true.
 - `Sources/TrUAPIHost/truapi_server.swift` and `Sources/truapi_serverFFI/include/` — the generated UniFFI bindings.
 - [`js/container/`](../../js/container) — the TS lockdown container; built into `Sources/TrUAPIHost/Resources/truapi-container.js` and exposed via `ContainerScriptBundle.load()`.
-- `Tests/` — WS-bridge round-trip tests that boot the real Rust core.
+- `Tests/` contains WS-bridge and WebKit network tests that boot the real Rust core.
+- `TestHost/` provides the UIKit app and XcodeGen project for simulator tests.
 
 The generated bindings, the container bundle and the xcframework are all **gitignored** build outputs, so a fresh checkout has no Swift sources for the package's targets. Run `rebuild.sh` before opening it. The xcframework is additionally distributed as a GitHub release asset. Two scripts split the lifecycle:
 
@@ -96,11 +97,11 @@ and the People/Bulletin genesis hashes. It must match the People chain's
 `NetworkSuffix.NetworkSuffix`. Include this configuration update in the
 embedding app's package upgrade.
 
-Run the package tests against an iOS simulator (the xcframework has no macOS slice):
+Run the package tests in their UIKit host on an iOS simulator (the xcframework has no macOS slice). The helper installs pinned XcodeGen under `.agent/tools`, generates the project, and selects an available simulator:
 
 ```bash
 # from the repo root
-xcodebuild test -scheme TrUAPIHost-Package -destination 'platform=iOS Simulator,name=iPhone 16'
+./ios/truapi-host/scripts/test.sh
 ```
 
 ## Chat
@@ -495,7 +496,7 @@ Use `installation.setPermissionAuthorizationStatus` for settings changes while v
 
 Redirects to origins that have never been registered by an authorized fetch in this view currently fail closed, even when Rust already stores a grant for the destination. Explicitly fetching the destination registers it. This conservative adapter does not enumerate wildcard grants into browser rules.
 
-Native verification must use the built container in a real WKWebView. `ProductNetworkAccessTests` checks grant/fetch, denied and unseen redirect destinations, revocation across two executions, raw preload before and after revocation, exact rule matching, overlapping grant/deny settings, and disposal of another view during refresh, including asynchronous rule-cache cleanup. The offscreen test views disable inactive scheduling suspension so page work can complete without a window. These Apple-only tests cannot run on Linux. Consumer apps that assemble their own scripts must adopt the web-view helper and safe settings/teardown paths; rebuilding this package alone does not update that wiring.
+Native verification must use the built container in a real WKWebView. `ProductNetworkAccessTests` checks grant/fetch, denied and unseen redirect destinations, revocation across two executions, raw preload before and after revocation, exact rule matching, overlapping grant/deny settings, and disposal of another view during refresh, including asynchronous rule-cache cleanup. The UIKit test host gives each web view a visible window on its active scene, with ordinary WebKit scheduling. These Apple-only tests cannot run on Linux. Consumer apps that assemble their own scripts must adopt the web-view helper and safe settings/teardown paths; rebuilding this package alone does not update that wiring.
 
 
 ## Build outputs in detail
