@@ -78,6 +78,13 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-features
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+
+      - name: Test launcher isolation from product configuration
+        run: cargo test -p truapi-host-cli --bin truapi-host caller_configuration_cannot_execute_before_the_sandbox -- --include-ignored
+
   wasm-provider:
     name: truapi-provider (wasm browser tests)
     timeout-minutes: 10
@@ -471,6 +478,30 @@ jobs:
 
       - name: Test shared product container
         run: bun test js/container/src
+
+      - name: Test product preparation and CLI package
+        run: bun test rust/crates/truapi-host-cli/js/sandbox-build.test.ts scripts/cli-runner-package.test.ts
+
+      - name: Install sandboxed Chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/truapi-browsers
+        run: |
+          bun node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
+            cat > "$RUNNER_TEMP/truapi-browser-apparmor" <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile truapi-cli-browser "$PLAYWRIGHT_BROWSERS_PATH/**/chrome-headless-shell" flags=(unconfined) {
+            userns,
+          }
+          EOF
+            sudo apparmor_parser -r "$RUNNER_TEMP/truapi-browser-apparmor"
+          fi
+
+      - name: Test browser isolation and network enforcement
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/truapi-browsers
+        run: bun test rust/crates/truapi-host-cli/js/sandbox-runner.test.ts
 
   ts-host:
     name: "@parity/truapi-host"
