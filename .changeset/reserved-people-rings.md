@@ -1,5 +1,5 @@
 ---
-"@parity/truapi": patch
+"@parity/truapi": minor
 ---
 
 The two reserved personhood rings resolve for proofs, signatures and provider selection without an RFC-0024

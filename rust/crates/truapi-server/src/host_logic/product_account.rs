@@ -293,7 +293,7 @@ impl PersonhoodCollection {
     /// alone would accept `peopl.evil.dot`, which is the product `evil` under
     /// the rule that a name is the segment above its TLD, and so is a name
     /// anyone can publish.
-    pub fn from_handle_on_any_network(handle: &truapi::v01::ProductAccountId) -> Option<Self> {
+    fn from_handle_on_any_network(handle: &truapi::v01::ProductAccountId) -> Option<Self> {
         let (label, suffix) = handle.dot_ns_identifier.split_once('.')?;
         if label != PERSONHOOD_LABEL || suffix.is_empty() || suffix.contains('.') {
             return None;
@@ -641,6 +641,8 @@ mod tests {
         );
     }
 
+    /// The identifier is a fixed-width storage key, so a padding slip would
+    /// silently read a neighbouring collection rather than fail.
     #[test]
     fn people_collection_ids_are_space_padded_to_the_ring_width() {
         assert_eq!(
@@ -651,6 +653,14 @@ mod tests {
             *PersonhoodCollection::LitePeople.identifier(),
             *b"pop:polkadot.network/people-lite"
         );
+        assert_ne!(
+            PersonhoodCollection::People.identifier(),
+            PersonhoodCollection::LitePeople.identifier(),
+        );
+        for collection in PersonhoodCollection::ALL {
+            assert_eq!(collection.identifier().len(), 32, "{collection}");
+            assert!(collection.identifier().is_ascii(), "{collection}");
+        }
     }
 
     #[test]
