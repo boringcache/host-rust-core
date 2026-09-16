@@ -53,10 +53,14 @@ struct ProductNetworkAccessTests {
     func disposingAnotherViewDoesNotFailCommittedSettings() async throws {
         let product = try await NetworkTestProduct.open()
         defer { product.close() }
+        #expect(try await fetch(product.webView, product.server.url(host: "127.0.0.1", path: "/allowed")) == "allowed")
+        let store = try #require(WKContentRuleListStore.default())
+        let existingRules = Set(try #require(await store.availableIdentifiers()))
         let other = try await NetworkTestProduct.open()
         defer { other.close() }
-        #expect(try await fetch(product.webView, product.server.url(host: "127.0.0.1", path: "/allowed")) == "allowed")
         #expect(try await fetch(other.webView, other.server.url(host: "127.0.0.1", path: "/allowed")) == "allowed")
+        let otherRules = Set(try #require(await store.availableIdentifiers())).subtracting(existingRules)
+        try #require(!otherRules.isEmpty)
 
         let pause = NetworkTestPause()
         defer { pause.resume() }
@@ -72,6 +76,10 @@ struct ProductNetworkAccessTests {
         other.installation.dispose()
         pause.resume()
         try await networkTestOperation("settings refresh after other view disposal") { try await update.value }
+        let remainingRules = try await networkTestOperation("disposed view rule removal callbacks") {
+            Set(try #require(await store.availableIdentifiers()))
+        }
+        #expect(otherRules.isDisjoint(with: remainingRules))
 
         let redirect = product.server.url(host: "localhost", path: "/redirect-revoked")
         #expect(try await fetch(product.webView, redirect) == "allowed")
