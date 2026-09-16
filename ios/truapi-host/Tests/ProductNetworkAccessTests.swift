@@ -6,8 +6,49 @@ import Testing
 import WebKit
 @testable import TrUAPIHost
 
+@Suite(.serialized)
 @MainActor
 struct ProductNetworkAccessTests {
+    @Test(.timeLimit(.minutes(1)))
+    func permissionCallbackCanUpdateSettingsBeforeReturning() async throws {
+        let server = try await NetworkTestServer.start()
+        defer { server.stop() }
+        let bridge = PromptUpdatingHostBridge()
+        let runtime = try TrUAPIHostRuntime(
+            bridge: bridge,
+            runtimeConfig: HostRuntimeConfig(
+                hostName: "network-tests",
+                peopleChainGenesisHash: Data(repeating: 0, count: 32),
+                bulletinChainGenesisHash: Data(repeating: 0, count: 32),
+                networkSuffix: "paseo"
+            )
+        )
+        let execution = try runtime.openProductExecution(
+            bridge: bridge,
+            configuration: ProductExecutionConfig(productId: "network.paseo", executionKind: .app)
+        )
+        defer { execution.close() }
+        let ready = ProductPageReady()
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController.add(ready, name: "testReady")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let productURL = server.url(host: "localhost", path: "/product")
+        let installation = try await TrUAPIHost.installProductScripts(
+            into: webView, execution: execution,
+            endpoint: execution.startWsBridge(bindPort: 0), productURL: productURL
+        )
+        bridge.installation = installation
+        defer { installation.dispose() }
+        await withCheckedContinuation { continuation in
+            ready.onReady = { continuation.resume() }
+            webView.load(URLRequest(url: productURL))
+        }
+
+        #expect(await fetch(webView, server.url(host: "127.0.0.1", path: "/allowed")) == "allowed")
+        #expect(server.requests(path: "/allowed") == 1)
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func grantedFetchUsesTheRustDecisionAndRevocationBlocksRedirects() async throws {
         let server = try await NetworkTestServer.start()
@@ -162,6 +203,52 @@ struct ProductNetworkAccessTests {
 
     private func matches(_ pattern: String, _ value: String) -> Bool {
         value.range(of: pattern, options: .regularExpression) != nil
+    }
+}
+
+private final class PromptUpdatingHostBridge: HostBridge, @unchecked Sendable {
+    let storage: HostStorageBackend = StubStorage()
+    let coreStorage: HostCoreStorageBackend = NetworkTestCoreStorage()
+    @MainActor weak var installation: ProductScriptInstallation?
+
+    func navigateTo(url _: String) async throws {}
+    func devicePermission(request _: HostDevicePermissionRequest) async throws -> Bool { false }
+    func featureSupported(request _: HostFeatureSupportedRequest) async throws -> Bool { true }
+
+    func remotePermission(request: RemotePermission) async throws -> Bool {
+        try await updatePermission(request)
+    }
+
+    @MainActor
+    private func updatePermission(_ request: RemotePermission) async throws -> Bool {
+        guard let installation else { return false }
+        try await installation.setPermissionAuthorizationStatus(
+            request: .remote(RemotePermissionRequest(permission: request)), status: .authorized
+        )
+        return true
+    }
+}
+
+private final class NetworkTestCoreStorage: HostCoreStorageBackend, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Data: Data] = [:]
+
+    func read(key: Data) throws -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[key]
+    }
+
+    func write(key: Data, value: Data) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        values[key] = value
+    }
+
+    func clear(key: Data) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        values[key] = nil
     }
 }
 

@@ -101,6 +101,7 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
     private var current: WKContentRuleList
     private var remoteOrigins: Set<ProductNetworkOrigin> = []
     private var pending: Task<Bool, Never>?
+    private var pendingRefresh: Task<Void, Error>?
     private var generation = 0
     private var policyRevision = 0
     private var disposed = false
@@ -212,12 +213,11 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
         }
         try execution.setPermissionAuthorizationStatus(request: request, status: status)
         let updates = snapshots.map { installation, origins in
-            installation.enqueue {
+            Task { @MainActor in
                 do {
-                    try await installation.refresh(origins.union(installation.remoteOrigins))
+                    try await installation.refresh(origins)
                     return !installation.disposed
                 } catch {
-                    installation.restrictToProduct()
                     return false
                 }
             }
@@ -234,6 +234,8 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
         controller?.removeScriptMessageHandler(forName: Self.handlerName, contentWorld: .page)
         pending?.cancel()
         pending = nil
+        pendingRefresh?.cancel()
+        pendingRefresh = nil
         for suffix in ["-base", "-0", "-1"] {
             store.removeContentRuleList(forIdentifier: identifier + suffix, completionHandler: nil)
         }
@@ -252,6 +254,10 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
 
     private func restrictToProduct() {
         policyRevision += 1
+        useBaseline()
+    }
+
+    private func useBaseline() {
         if current !== baseline {
             controller?.add(baseline)
             controller?.remove(current)
@@ -263,6 +269,7 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
     private func authorize(_ rawURL: String) async -> Bool {
         guard !disposed, let url = URL(string: rawURL),
               let origin = try? ProductNetworkOrigin(url) else { return false }
+        let revision = policyRevision
         do {
             var candidates = remoteOrigins
             if origin != productOrigin {
@@ -276,13 +283,31 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
             try await refresh(candidates)
             return !disposed && (origin == productOrigin || remoteOrigins.contains(origin))
         } catch {
-            restrictToProduct()
+            if revision == policyRevision { restrictToProduct() }
             return false
         }
     }
 
     private func refresh(_ candidates: Set<ProductNetworkOrigin>) async throws {
+        let previous = pendingRefresh
         let revision = policyRevision
+        let task = Task { @MainActor in
+            _ = try? await previous?.value
+            do {
+                try await self.refreshRules(candidates.union(self.remoteOrigins), revision: revision)
+            } catch {
+                if revision == self.policyRevision { self.restrictToProduct() }
+                throw error
+            }
+        }
+        pendingRefresh = task
+        try await task.value
+    }
+
+    private func refreshRules(
+        _ candidates: Set<ProductNetworkOrigin>, revision: Int
+    ) async throws {
+        guard !disposed, revision == policyRevision else { throw CancellationError() }
         var approved: Set<ProductNetworkOrigin> = []
         for origin in candidates {
             let status = try await execution.permissionAuthorizationStatus(request: .remote(
@@ -293,7 +318,7 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
         guard !disposed, revision == policyRevision else { throw CancellationError() }
         guard approved != remoteOrigins else { return }
         if approved.isEmpty {
-            restrictToProduct()
+            useBaseline()
             return
         }
         generation += 1
