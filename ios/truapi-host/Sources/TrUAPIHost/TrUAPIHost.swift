@@ -819,6 +819,7 @@ public protocol TrUAPIProductExecutionProtocol: AnyObject, Sendable {
         messageType: String,
         payload: Data
     ) throws -> AsyncThrowingStream<CustomRendererNode, Error>
+    func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus
     func permissionAuthorizationStatus(
         request: PermissionAuthorizationRequest
     ) async throws -> PermissionAuthorizationStatus
@@ -886,12 +887,18 @@ public final class TrUAPIProductExecution: TrUAPIProductExecutionProtocol, @unch
         }
     }
 
+    public func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus {
+        try await inner.authorizeNetworkAccess(url: url)
+    }
+
     public func permissionAuthorizationStatus(
         request: PermissionAuthorizationRequest
     ) async throws -> PermissionAuthorizationStatus {
         try await inner.permissionAuthorizationStatus(request: request)
     }
 
+    /// Live WKWebViews must use ProductScriptInstallation.setPermissionAuthorizationStatus
+    /// so engine rules are invalidated before the permission changes.
     public func setPermissionAuthorizationStatus(
         request: PermissionAuthorizationRequest,
         status: PermissionAuthorizationStatus

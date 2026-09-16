@@ -4,11 +4,12 @@
 //! and signing hosts. Pairing state, signing state, active sessions, and role
 //! controls live on the concrete role objects.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::chain_runtime::{ChainRuntime, RuntimeChainProvider, RuntimeFailure};
+use crate::host_logic::permissions::PermissionMutations;
 use crate::runtime::bulletin_rpc::BulletinRpc;
 use crate::runtime::statement_store_rpc::StatementStoreRpc;
 use crate::subscription::Spawner;
@@ -37,6 +38,7 @@ pub(crate) struct RuntimeServices {
     /// startup by a host that can read it. Unset leaves device grants
     /// resolving from stored state alone.
     permission_status: OnceLock<Arc<dyn PermissionStatusHost>>,
+    permission_mutations: Mutex<HashMap<String, PermissionMutations>>,
     /// Shared chainHead-v1 runtime behind the Chain surface.
     pub(crate) chain: ChainRuntime,
     /// People-chain statement store RPC client.
@@ -86,6 +88,7 @@ impl RuntimeServices {
             host_info,
             chat_platform: None,
             permission_status: OnceLock::new(),
+            permission_mutations: Mutex::new(HashMap::new()),
             chain,
             statement_store,
             bulletin,
@@ -138,6 +141,15 @@ impl RuntimeServices {
     /// The host's live OS permission-status adapter, when one is installed.
     pub(crate) fn permission_status_host(&self) -> Option<Arc<dyn PermissionStatusHost>> {
         self.permission_status.get().cloned()
+    }
+
+    pub(crate) fn permission_mutations(&self, product_id: &str) -> PermissionMutations {
+        self.permission_mutations
+            .lock()
+            .expect("permission mutations mutex poisoned")
+            .entry(product_id.to_string())
+            .or_default()
+            .clone()
     }
 
     /// This device's persisted X25519 encryption secret, created on first use.

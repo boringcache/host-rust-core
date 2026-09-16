@@ -986,6 +986,25 @@ impl NativeProductExecution {
 
 #[uniffi::export]
 impl NativeProductExecution {
+    /// Authorize a concrete HTTP(S)/WS(S) destination for this live execution.
+    pub async fn authorize_network_access(
+        &self,
+        url: String,
+    ) -> Result<PermissionAuthorizationStatus, HostRejection> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(HostRejection::Rejected {
+                reason: "product execution is closed".to_string(),
+            });
+        }
+        let status = self.admin().authorize_network_access(url).await?;
+        if self.closed.load(Ordering::Acquire) {
+            return Err(HostRejection::Rejected {
+                reason: "product execution is closed".to_string(),
+            });
+        }
+        Ok(status)
+    }
+
     /// Read a product-scoped permission authorization without prompting.
     ///
     /// A device capability resolves the host application's OS gate as well as
@@ -1917,6 +1936,8 @@ mod tests {
         chain_closes: Mutex<Vec<u32>>,
         /// Capability this host reports as refused by the OS, if any.
         os_refused: Option<v01::HostDevicePermissionRequest>,
+        remote_permission_result: Result<bool, HostRejection>,
+        remote_permission_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     }
 
     impl EventCallbacks {
@@ -1951,6 +1972,8 @@ mod tests {
                 chain_sends: Mutex::new(Vec::new()),
                 chain_closes: Mutex::new(Vec::new()),
                 os_refused: None,
+                remote_permission_result: Ok(false),
+                remote_permission_hook: Mutex::new(None),
             }
         }
     }
@@ -1990,7 +2013,10 @@ mod tests {
             &self,
             _request: v01::RemotePermission,
         ) -> Result<bool, HostRejection> {
-            Ok(false)
+            if let Some(hook) = self.remote_permission_hook.lock().unwrap().as_ref() {
+                hook();
+            }
+            self.remote_permission_result.clone()
         }
         fn auth_state_changed(&self, state: AuthState) {
             self.auth_states
@@ -3579,6 +3605,84 @@ mod tests {
         )
         .expect("review must lift back");
         assert_eq!(lifted, review);
+    }
+
+    #[test]
+    fn native_network_access_uses_the_execution_permission_callback() {
+        for (answer, expected) in [
+            (Ok(true), PermissionAuthorizationStatus::Authorized),
+            (Ok(false), PermissionAuthorizationStatus::Denied),
+            (
+                Err(HostRejection::Rejected {
+                    reason: "permission UI unavailable".to_string(),
+                }),
+                PermissionAuthorizationStatus::NotDetermined,
+            ),
+        ] {
+            let host = NativeTrUApiHostRuntime::with_runtime_config(
+                Arc::new(EventCallbacks::new()),
+                native_host_runtime_config(),
+            )
+            .unwrap();
+            let execution = host
+                .open_product_execution(
+                    Arc::new(EventCallbacks {
+                        remote_permission_result: answer,
+                        ..EventCallbacks::new()
+                    }),
+                    None,
+                    native_execution_config("fetch.dot", ProductExecutionKind::App),
+                )
+                .unwrap();
+            let result = futures::executor::block_on(
+                execution.authorize_network_access("https://api.example.com/data".to_string()),
+            )
+            .unwrap();
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn a_closed_native_execution_cannot_authorize_network_access() {
+        for close_during_prompt in [false, true] {
+            let callbacks = Arc::new(EventCallbacks {
+                remote_permission_result: Ok(true),
+                ..EventCallbacks::new()
+            });
+            let host = NativeTrUApiHostRuntime::with_runtime_config(
+                callbacks.clone(),
+                native_host_runtime_config(),
+            )
+            .unwrap();
+            let execution = host
+                .open_product_execution(
+                    callbacks.clone(),
+                    None,
+                    native_execution_config("fetch.dot", ProductExecutionKind::App),
+                )
+                .unwrap();
+            let prompts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let weak_execution = Arc::downgrade(&execution);
+            let prompt_count = prompts.clone();
+            *callbacks.remote_permission_hook.lock().unwrap() = Some(Arc::new(move || {
+                prompt_count.fetch_add(1, Ordering::SeqCst);
+                weak_execution.upgrade().unwrap().shutdown();
+            }));
+            if !close_during_prompt {
+                execution.shutdown();
+            }
+            let result = futures::executor::block_on(
+                execution.authorize_network_access("https://api.example.com/data".to_string()),
+            )
+            .map_err(|error| error.to_string());
+            assert_eq!(
+                (result, prompts.load(Ordering::SeqCst)),
+                (
+                    Err("product execution is closed".to_string()),
+                    usize::from(close_during_prompt),
+                )
+            );
+        }
     }
 
     /// Drives the whole native chain for a status read: foreign callback,

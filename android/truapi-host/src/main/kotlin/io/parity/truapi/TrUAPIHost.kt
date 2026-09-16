@@ -917,6 +917,10 @@ class TrUAPIProductExecution internal constructor(
     @Throws(HostRejection::class)
     fun sessionChatIdentityKey(): ByteArray? = inner.sessionChatIdentityKey()
 
+    @Throws(HostRejection::class)
+    suspend fun authorizeNetworkAccess(url: String): PermissionAuthorizationStatus =
+        inner.authorizeNetworkAccess(url)
+
     /**
      * Read a permission authorization status without prompting.
      *

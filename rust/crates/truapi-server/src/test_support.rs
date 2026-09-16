@@ -68,6 +68,9 @@ pub(crate) fn immediate_spawner() -> Spawner {
 pub type AuthStateHook = Arc<dyn Fn(&AuthState) + Send + Sync>;
 /// Test hook invoked after an auth-session write is recorded.
 pub type StorageWriteHook = Arc<dyn Fn() + Send + Sync>;
+/// Test action awaited while a remote permission prompt is open.
+pub type RemotePermissionHook =
+    Arc<dyn Fn() -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
 
 /// Minimal Platform impl that only answers `feature_supported`. Every
 /// other callback returns a unit value or empty stream, so the runtime
@@ -78,6 +81,7 @@ pub(crate) struct StubPlatform {
     /// Every `remote_permission` request, in order, so a test can assert which
     /// domains reached the prompt and that a stored grant suppresses a re-ask.
     pub(crate) remote_permission_requests: Arc<Mutex<Vec<v01::RemotePermissionRequest>>>,
+    pub(crate) remote_permission_hook: Mutex<Option<RemotePermissionHook>>,
     /// URLs handed to `navigate_to`. Empty means the gate blocked before the
     /// platform was ever reached.
     pub(crate) navigations: Arc<Mutex<Vec<String>>>,
@@ -933,6 +937,10 @@ impl PlatformPermissions for StubPlatform {
             .lock()
             .expect("remote permission list mutex poisoned")
             .push(request);
+        let hook = self.remote_permission_hook.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook().await;
+        }
         Ok(v01::RemotePermissionResponse {
             granted: !self.remote_permission_denied,
         })
