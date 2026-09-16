@@ -231,26 +231,36 @@ struct ProductNetworkAccessTests {
         #expect(server.requests(path: "/allowed") == 2)
     }
 
-    @Test
-    func networkRulesDoNotBroadenOriginsOrBridgeCredentials() throws {
+    @Test(.timeLimit(.minutes(1)))
+    func networkRulesCompileWithoutBroadeningOriginsOrBridgeCredentials() async throws {
         let product = try ProductNetworkOrigin(URL(string: "polkadot://example.paseo/index.html")!)
         let remote = try ProductNetworkOrigin(URL(string: "https://api.example.com:8443/data")!)
         let bridge = "ws://127.0.0.1:1234/?t=exact-token"
         let rules = try ProductNetworkRules.encode(
             productOrigin: product, bridgeURL: bridge, remoteOrigins: [remote]
         )
+        let store = try #require(WKContentRuleListStore.default())
+        let identifier = "network-rules-test-" + UUID().uuidString
+        let compiled = try await store.compileContentRuleList(
+            forIdentifier: identifier, encodedContentRuleList: rules
+        )
+        try await store.removeContentRuleList(forIdentifier: identifier)
+        _ = try #require(compiled)
         let decoded = try #require(JSONSerialization.jsonObject(with: Data(rules.utf8)) as? [[String: Any]])
-        #expect(decoded.count == 4)
-        let remoteTrigger = try #require(decoded[3]["trigger"] as? [String: Any])
-        #expect(remoteTrigger["resource-type"] as? [String] == ["raw"])
+        let allowed = decoded.filter { ($0["action"] as? [String: String])?["type"] == "ignore-previous-rules" }
+            .compactMap { $0["trigger"] as? [String: Any] }
+        let remoteTrigger = try #require(allowed.first { $0["resource-type"] as? [String] == ["raw"] })
         let remotePattern = try #require(remoteTrigger["url-filter"] as? String)
         #expect(matches(remotePattern, "https://api.example.com:8443/data"))
-        #expect(!matches(remotePattern, "https://api.example.com.attacker.test:8443/data"))
-        #expect(!matches(remotePattern, "https://api.example.com:443/data"))
-        let bridgeTrigger = try #require(decoded[2]["trigger"] as? [String: Any])
-        let bridgePattern = try #require(bridgeTrigger["url-filter"] as? String)
-        #expect(matches(bridgePattern, bridge))
-        #expect(!matches(bridgePattern, bridge + "-other"))
+        let allowedPatterns = try allowed.map { try #require($0["url-filter"] as? String) }
+        #expect(allowedPatterns.contains { matches($0, bridge) })
+        for disallowedURL in [
+            "https://api.example.com.attacker.test:8443/data",
+            "https://api.example.com:443/data",
+            bridge + "-other",
+        ] {
+            #expect(!allowedPatterns.contains { matches($0, disallowedURL) })
+        }
     }
 
     private func fetch(_ webView: WKWebView, _ url: URL) async -> String {
