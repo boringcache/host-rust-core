@@ -1018,6 +1018,8 @@ struct RecordingConnection {
     sent: Arc<Mutex<Vec<String>>>,
     responses: Vec<String>,
     method_responses: Vec<(&'static str, String)>,
+    /// Method scripts must not replay requests from a previously closed connection.
+    method_requests: Arc<Mutex<Vec<String>>>,
     sso_response_script: Option<SsoResponseScript>,
     auth_states: Arc<Mutex<Vec<AuthState>>>,
     pairing_success_response: bool,
@@ -1159,6 +1161,12 @@ fn sso_scripted_responses(
 
 impl JsonRpcConnection for RecordingConnection {
     fn send(&self, request: String) {
+        if !self.method_responses.is_empty() {
+            self.method_requests
+                .lock()
+                .expect("connection rpc list mutex poisoned")
+                .push(request.clone());
+        }
         self.sent
             .lock()
             .expect("rpc list mutex poisoned")
@@ -1304,7 +1312,10 @@ impl JsonRpcConnection for RecordingConnection {
             return sso_scripted_responses(self.sent.clone(), script);
         }
         if !self.method_responses.is_empty() {
-            return method_keyed_responses(self.sent.clone(), self.method_responses.clone());
+            return method_keyed_responses(
+                self.method_requests.clone(),
+                self.method_responses.clone(),
+            );
         }
         if self.responses.is_empty() {
             Box::pin(futures::stream::pending())
@@ -1483,6 +1494,7 @@ impl ChainProvider for StubPlatform {
             sent: self.sent_rpc.clone(),
             responses: self.rpc_responses.clone(),
             method_responses: self.rpc_method_responses.clone(),
+            method_requests: Arc::default(),
             sso_response_script: self.sso_response_script.clone(),
             auth_states: self.auth_states.clone(),
             pairing_success_response: self.pairing_success_response,
