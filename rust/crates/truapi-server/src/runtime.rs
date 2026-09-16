@@ -7,6 +7,8 @@
 //! permission cache layer). Methods with no platform backing return
 //! `CallError::unavailable()`.
 
+/// Connection-scoped, host-fed action streams.
+pub(crate) mod actions;
 mod allowances;
 /// Core-owned auth/session UI state machine.
 pub(crate) mod auth_state;
@@ -21,6 +23,7 @@ pub(crate) mod login_failure;
 mod pairing_host;
 pub(crate) mod product_manifest;
 mod product_subtree;
+mod renderer;
 mod ring_vrf_registry;
 /// Role-neutral runtime services shared by product-facing runtimes.
 pub(crate) mod services;
@@ -43,13 +46,15 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
+pub(crate) use actions::ActionChannel;
 use authority::{AuthorityCancelError, AuthoritySession};
 pub(crate) use authority::{AuthorityError, BulletinAllowanceKey, ProductAuthority};
-pub(crate) use chat::{ChatConnection, chat_platform_for};
+pub(crate) use chat::chat_platform_for;
 use futures::{FutureExt, StreamExt, pin_mut};
 #[cfg(test)]
 use pairing_host::PairingHost;
 pub(crate) use pairing_host::PairingHost as PairingHostRole;
+pub(crate) use renderer::renderer_access_for;
 pub(crate) use services::RuntimeServices;
 #[cfg(not(target_arch = "wasm32"))]
 pub use signing_host::StatementRenewalTarget;
@@ -59,7 +64,8 @@ pub(crate) use signing_host::{
 };
 pub use signing_host::{PairedSsoPeer, ResponderExit};
 use tracing::{instrument, warn};
-use truapi::api::Chat;
+use truapi::api::{Chat, Pocket, Renderer};
+use truapi::latest::GenericError;
 use truapi::versioned::account::{HostAccountGetError, HostAccountSignVrfError};
 use truapi::versioned::chat::{
     HostChatActionSubscribeItem, HostChatCreateRoomError, HostChatCreateRoomRequest,
@@ -67,7 +73,12 @@ use truapi::versioned::chat::{
     HostChatPostMessageRequest, HostChatPostMessageResponse, HostChatRegisterBotError,
     HostChatRegisterBotRequest, HostChatRegisterBotResponse,
 };
+use truapi::versioned::pocket::{
+    HostPocketListSubscribeItem, HostPocketRemoveCardError, HostPocketRemoveCardRequest,
+    HostPocketRemoveCardResponse,
+};
 use truapi::versioned::preimage::RemotePreimageSubmitError;
+use truapi::versioned::renderer::HostRendererActionSubscribeItem;
 use truapi::{CallContext, CallError, CancellationReason, Subscription, v01};
 use truapi_platform::{
     AccountAccessReview, ChatFieldError, IdentityDisclosureReview, PermissionAuthorizationRequest,
@@ -245,7 +256,9 @@ pub struct ProductRuntimeHost {
     /// Stable per-product-runtime id used to scope long-lived chain follow
     /// operation ids within one shared host runtime.
     core_instance: u64,
-    chat: Arc<ChatConnection>,
+    chat: Arc<ActionChannel<HostChatActionSubscribeItem>>,
+    renderer: Arc<ActionChannel<HostRendererActionSubscribeItem>>,
+    pocket_platform: Option<Arc<dyn truapi_platform::PocketPlatform>>,
 }
 
 impl ProductRuntimeHost {
@@ -268,6 +281,8 @@ impl ProductRuntimeHost {
             product,
             core_instance,
             chat: adapters.chat,
+            renderer: adapters.renderer,
+            pocket_platform: adapters.pocket_platform,
         }
     }
 
@@ -379,7 +394,8 @@ impl ProductRuntimeHost {
         );
         let pairing_host = PairingHost::new(services.clone(), host_config);
         let core_instance = services.next_core_instance();
-        let chat = Arc::new(ChatConnection::new());
+        let chat = Arc::new(ActionChannel::chat());
+        let renderer = Arc::new(ActionChannel::renderer());
         let host = Self {
             services,
             platform,
@@ -390,6 +406,8 @@ impl ProductRuntimeHost {
             product,
             core_instance,
             chat,
+            renderer,
+            pocket_platform: None,
         };
         (host, pairing_host)
     }
@@ -961,7 +979,56 @@ impl ProductRuntimeHost {
         action: truapi::versioned::chat::HostChatActionSubscribeItem,
     ) -> Result<(), crate::host_core::ProductRuntimeError> {
         self.native_chat_platform()?;
-        self.chat.publish_action(action)
+        self.chat.publish(action)
+    }
+
+    /// Renderer access policy for this connection; see [`renderer_access_for`].
+    pub(crate) fn renderer_access(&self) -> Result<(), crate::host_core::ProductRuntimeError> {
+        renderer_access_for(self.product.execution_kind)
+    }
+
+    /// Take one core-held reference on this connection's product worker, for
+    /// a body the product is drawing. Pair every call with one
+    /// [`Self::release_worker_reference`].
+    pub(crate) fn acquire_worker_reference(&self) {
+        self.services
+            .worker_ledger
+            .acquire(&self.product.product_id);
+    }
+
+    /// Release one core-held reference on this connection's product worker.
+    pub(crate) fn release_worker_reference(&self) {
+        self.services
+            .worker_ledger
+            .release(&self.product.product_id);
+    }
+
+    /// End the renderer action stream this connection's product is reading.
+    pub(crate) fn detach_renderer(&self) {
+        self.renderer.detach();
+    }
+
+    /// Buffer one renderer action for this connection's product.
+    pub(crate) fn publish_renderer_action(
+        &self,
+        item: HostRendererActionSubscribeItem,
+    ) -> Result<(), crate::host_core::ProductRuntimeError> {
+        self.renderer_access()?;
+        self.renderer.publish(item)
+    }
+
+    /// Pocket access policy for this connection: the collection is reachable
+    /// only from a Worker execution with an active session, and only where the
+    /// host installed an adapter. The kind and session checks come first, so a
+    /// connection that may never reach Pocket is told `Denied` even on a host
+    /// that serves nothing.
+    fn pocket_platform<E>(&self) -> Result<Arc<dyn truapi_platform::PocketPlatform>, CallError<E>> {
+        if self.product.execution_kind != truapi_platform::ProductExecutionKind::Worker
+            || self.authority.session_state().current().is_none()
+        {
+            return Err(CallError::Denied);
+        }
+        self.pocket_platform.clone().ok_or(CallError::Unsupported)
     }
 }
 
@@ -1010,30 +1077,30 @@ impl Chat for ProductRuntimeHost {
     }
 
     #[instrument(skip_all, fields(runtime.method = "chat.list_subscribe"))]
-    async fn list_subscribe(&self, _cx: &CallContext) -> Subscription<HostChatListSubscribeItem> {
-        let Ok(platform) = self.chat_platform::<()>() else {
-            return Subscription::empty();
+    async fn list_subscribe(
+        &self,
+        _cx: &CallContext,
+    ) -> Subscription<HostChatListSubscribeItem, CallError<GenericError>> {
+        let platform = match self.chat_platform::<GenericError>() {
+            Ok(platform) => platform,
+            Err(error) => return Subscription::interrupted(error),
         };
-        Subscription::new(Box::pin(
+        Subscription::new(
             platform
                 .subscribe_chat_rooms(&self.product)
-                .filter_map(|item| async {
-                    // TODO: preserve platform stream errors as terminal
-                    // subscription interrupts once subscription items can carry
-                    // in-stream failures. Until then a dropped error freezes the
-                    // product's room list on its last value, so record why.
-                    match item {
-                        Ok(item) => Some(HostChatListSubscribeItem::V1(item)),
-                        Err(error) => {
-                            warn!(
-                                reason = %error.reason,
-                                "chat room list platform stream failed"
-                            );
-                            None
-                        }
+                .map(|item| match item {
+                    Ok(item) => Ok(HostChatListSubscribeItem::V1(item)),
+                    Err(error) => {
+                        warn!(
+                            reason = %error.reason,
+                            "chat room list platform stream failed"
+                        );
+                        Err(CallError::HostFailure {
+                            reason: error.reason,
+                        })
                     }
                 }),
-        ))
+        )
     }
 
     #[instrument(skip_all, fields(runtime.method = "chat.post_message"))]
@@ -1063,13 +1130,88 @@ impl Chat for ProductRuntimeHost {
     async fn action_subscribe(
         &self,
         _cx: &CallContext,
-    ) -> Subscription<HostChatActionSubscribeItem> {
-        if self.chat_platform::<()>().is_err() {
-            return Subscription::empty();
+    ) -> Subscription<HostChatActionSubscribeItem, CallError<GenericError>> {
+        if let Err(error) = self.chat_platform::<GenericError>() {
+            return Subscription::interrupted(error);
         }
-        self.chat.subscribe_actions()
+        self.chat.subscribe()
     }
 }
+
+#[truapi_platform::async_trait]
+impl Renderer for ProductRuntimeHost {
+    #[instrument(skip_all, fields(runtime.method = "renderer.action_subscribe"))]
+    async fn action_subscribe(
+        &self,
+        _cx: &CallContext,
+    ) -> Subscription<HostRendererActionSubscribeItem, CallError<GenericError>> {
+        if self.renderer_access().is_err() {
+            return Subscription::interrupted(CallError::Denied);
+        }
+        self.renderer.subscribe()
+    }
+}
+
+#[truapi::async_trait]
+impl Pocket for ProductRuntimeHost {
+    #[instrument(skip_all, fields(runtime.method = "pocket.list_subscribe"))]
+    async fn list_subscribe(
+        &self,
+        _cx: &CallContext,
+    ) -> Subscription<HostPocketListSubscribeItem, CallError<GenericError>> {
+        let platform = match self.pocket_platform::<GenericError>() {
+            Ok(platform) => platform,
+            Err(error) => return Subscription::interrupted(error),
+        };
+        Subscription::new(
+            platform
+                .subscribe_pocket_cards(&self.product)
+                .map(|item| match item {
+                    Ok(item) => Ok(HostPocketListSubscribeItem::V1(item)),
+                    Err(error) => {
+                        warn!(
+                            reason = %error.reason,
+                            "pocket card list platform stream failed"
+                        );
+                        Err(CallError::HostFailure {
+                            reason: error.reason,
+                        })
+                    }
+                }),
+        )
+    }
+
+    #[instrument(skip_all, fields(runtime.method = "pocket.remove_card"))]
+    async fn remove_card(
+        &self,
+        _cx: &CallContext,
+        request: HostPocketRemoveCardRequest,
+    ) -> Result<HostPocketRemoveCardResponse, CallError<HostPocketRemoveCardError>> {
+        let platform = self.pocket_platform()?;
+        let HostPocketRemoveCardRequest::V1(mut request) = request;
+        // A card id is a product-chosen label the host renders in its own
+        // chrome, so it is screened before the host ever sees it: trimmed,
+        // NFC-normalized, and rejected if it carries characters that let two
+        // distinct ids render identically.
+        request.card_id =
+            normalize_chat_identifier("cardId", &request.card_id).map_err(pocket_field_error)?;
+        platform
+            .remove_pocket_card(&self.product, request)
+            .await
+            .map(|()| HostPocketRemoveCardResponse::V1)
+            .map_err(|error| CallError::Domain(HostPocketRemoveCardError::V1(error)))
+    }
+}
+
+/// Report a rejected card id as a removal domain error.
+fn pocket_field_error(error: ChatFieldError) -> CallError<HostPocketRemoveCardError> {
+    CallError::Domain(HostPocketRemoveCardError::V1(
+        v01::HostPocketRemoveCardError::Unknown {
+            reason: error.to_string(),
+        },
+    ))
+}
+
 /// Report a rejected chat bot field as a bot-registration domain error.
 fn chat_register_bot_field_error(
     error: truapi_platform::ChatFieldError,

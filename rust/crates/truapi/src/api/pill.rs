@@ -8,7 +8,7 @@ use crate::{CallContext, CallError};
 use crate::{wire, wire_trait};
 
 /// A countdown the host draws on its own surfaces on the product's behalf.
-#[wire_trait(id = 17)]
+#[wire_trait(id = 19)]
 #[crate::async_trait]
 pub trait Pill: Send + Sync {
     /// Declare the pill the host draws from `show_from` until `deadline`.

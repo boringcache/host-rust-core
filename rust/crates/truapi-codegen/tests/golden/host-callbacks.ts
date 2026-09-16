@@ -39,6 +39,8 @@ import type {
   HostLocaleSubscribeItem,
   HostPillDeclareRequest,
   HostPillWithdrawRequest,
+  HostPocketListSubscribeItem,
+  HostPocketRemoveCardRequest,
   HostPushNotificationRequest,
   HostPushNotificationResponse,
   HostPushNotificationUrgency,
@@ -1327,6 +1329,32 @@ export interface PillHost {
 }
 
 /**
+ * Host-implemented adapter through which product Pocket calls reach the
+ * host's card collection. Optional: a host that omits it leaves Pocket
+ * requests answered `Unsupported`. See `OptionalPlatform`.
+ *
+ * The host owns the collection: it decides which cards are privileged and
+ * keeps each card's newest face. A face does not cross this boundary.
+ */
+export interface PocketPlatform {
+  /**
+   * Emit the calling product's current cards and every later replacement.
+   */
+  subscribePocketCards(
+    product: ProductContext,
+  ): AsyncIterable<Result<HostPocketListSubscribeItem, GenericError>>;
+
+  /**
+   * Remove one of the calling product's cards. Removing an absent card
+   * succeeds; a privileged card is refused with `Privileged`.
+   */
+  removePocketCard(
+    product: ProductContext,
+    request: HostPocketRemoveCardRequest,
+  ): Promise<void>;
+}
+
+/**
  * Host preimage backend. The core builds, signs, and submits the Bulletin
  * `TransactionStorage.store` transaction itself; the host only owns preimage
  * content retrieval (P2P/IPFS lookup).
@@ -1415,6 +1443,7 @@ export interface HostCallbacks {
   chat?: ChatPlatform;
   permissionStatus?: PermissionStatusHost;
   pill?: PillHost;
+  pocket?: PocketPlatform;
 }
 
 export interface RequiredHostCallbacks {
@@ -1433,4 +1462,5 @@ export interface RequiredHostCallbacks {
   chat?: Required<ChatPlatform>;
   permissionStatus?: Required<PermissionStatusHost>;
   pill?: Required<PillHost>;
+  pocket?: Required<PocketPlatform>;
 }

@@ -20,6 +20,8 @@ import {
   HostLocaleSubscribeItem,
   HostPillDeclareRequest,
   HostPillWithdrawRequest,
+  HostPocketListSubscribeItem,
+  HostPocketRemoveCardRequest,
   HostPushNotificationRequest,
   HostPushNotificationResponse,
   HostPushNotificationUrgency,
@@ -86,6 +88,12 @@ export interface RawCallbacks {
   remotePermission(request: Uint8Array): Promise<Uint8Array>;
   declarePill?(request: Uint8Array): Promise<void>;
   withdrawPill?(request: Uint8Array): Promise<void>;
+  subscribePocketCards?(
+    product: Uint8Array,
+    sendItem: (item?: Uint8Array) => void,
+    sendError: (error: GenericError) => void,
+  ): (() => void) | void;
+  removePocketCard?(product: Uint8Array, request: Uint8Array): Promise<void>;
   lookupPreimage(
     key: Uint8Array,
     sendItem: (item?: Uint8Array) => void,
@@ -108,6 +116,7 @@ export function createWasmRawCallbacks(
   const chat = callbacks.chat;
   const permissionStatus = callbacks.permissionStatus;
   const pill = callbacks.pill;
+  const pocket = callbacks.pocket;
   return {
     authStateChanged: async (state) =>
       await callbacks.auth.authStateChanged(AuthState.dec(state)),
@@ -204,6 +213,21 @@ export function createWasmRawCallbacks(
             await pill.declarePill(HostPillDeclareRequest.dec(request)),
           withdrawPill: async (request) =>
             await pill.withdrawPill(HostPillWithdrawRequest.dec(request)),
+        }
+      : {}),
+    ...(pocket
+      ? {
+          subscribePocketCards: (product, sendItem, sendError) =>
+            driveResultStream(
+              pocket.subscribePocketCards(ProductContext.dec(product)),
+              (item) => sendItem(HostPocketListSubscribeItem.enc(item)),
+              sendError,
+            ),
+          removePocketCard: async (product, request) =>
+            await pocket.removePocketCard(
+              ProductContext.dec(product),
+              HostPocketRemoveCardRequest.dec(request),
+            ),
         }
       : {}),
     lookupPreimage: (key, sendItem, sendError) =>

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::chain_runtime::{ChainRuntime, RuntimeChainProvider, RuntimeFailure};
+use crate::host_logic::worker::WorkerLedger;
 use crate::runtime::bulletin_rpc::BulletinRpc;
 use crate::runtime::statement_store_rpc::StatementStoreRpc;
 use crate::subscription::Spawner;
@@ -40,10 +41,15 @@ pub(crate) struct RuntimeServices {
     /// Host adapter drawing a product's pill, installed once at startup by a
     /// host that serves one. Unset answers every pill call `Unsupported`.
     pill: OnceLock<Arc<dyn PillHost>>,
+    /// Host Pocket adapter, installed once at startup by a host with a Pocket
+    /// surface. Unset leaves every product Pocket call `Unsupported`.
+    pocket_platform: OnceLock<Arc<dyn truapi_platform::PocketPlatform>>,
     /// Asset Hub the dotNS contracts are deployed on, installed once at startup
     /// by the host that knows its chain configuration. Unset leaves every
     /// manifest unresolvable, so no cross-product grant is honoured.
     asset_hub_chain_genesis_hash: OnceLock<[u8; 32]>,
+    /// Reference counts per product worker.
+    pub(crate) worker_ledger: WorkerLedger,
     /// Shared chainHead-v1 runtime behind the Chain surface.
     pub(crate) chain: ChainRuntime,
     /// People-chain statement store RPC client.
@@ -94,7 +100,9 @@ impl RuntimeServices {
             chat_platform: None,
             permission_status: OnceLock::new(),
             pill: OnceLock::new(),
+            pocket_platform: OnceLock::new(),
             asset_hub_chain_genesis_hash: OnceLock::new(),
+            worker_ledger: WorkerLedger::default(),
             chain,
             statement_store,
             bulletin,
@@ -177,6 +185,23 @@ impl RuntimeServices {
     /// The host's live OS permission-status adapter, when one is installed.
     pub(crate) fn permission_status_host(&self) -> Option<Arc<dyn PermissionStatusHost>> {
         self.permission_status.get().cloned()
+    }
+
+    /// Install the host's Pocket adapter.
+    ///
+    /// Set-once, like every optional capability, so the card collection cannot
+    /// change hands under a running product. Returns whether this call
+    /// installed it.
+    pub(crate) fn install_pocket_platform(
+        &self,
+        platform: Arc<dyn truapi_platform::PocketPlatform>,
+    ) -> bool {
+        self.pocket_platform.set(platform).is_ok()
+    }
+
+    /// The host's Pocket adapter, when one is installed.
+    pub(crate) fn pocket_platform(&self) -> Option<Arc<dyn truapi_platform::PocketPlatform>> {
+        self.pocket_platform.get().cloned()
     }
 
     /// This device's persisted X25519 encryption secret, created on first use.

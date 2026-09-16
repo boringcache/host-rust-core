@@ -3,6 +3,7 @@
 use futures::StreamExt;
 use tracing::{instrument, warn};
 use truapi::api::{LocalStorage, Locale, Notifications, Permissions, Pill, System, Theme};
+use truapi::latest::GenericError;
 use truapi::versioned::IntoLatest;
 use truapi::versioned::local_storage::{
     HostLocalStorageClearError, HostLocalStorageClearRequest, HostLocalStorageClearResponse,
@@ -81,11 +82,13 @@ impl System for ProductRuntimeHost {
                     v01::HostNavigateToError::Unknown { reason },
                 )));
             }
-            // dotNS and localhost resolve back into the host's own product
-            // surface, which is already gated by the product sandbox. Neither
-            // reaches an arbitrary internet host, so neither consumes a grant.
+            // dotNS, localhost and a host-handled Pocket target all resolve
+            // back into the host's own product surface, which is already gated
+            // by the product sandbox. None reaches an arbitrary internet host,
+            // so none consumes a grant.
             NavigateDecision::DotName { canonical_url, .. }
-            | NavigateDecision::Localhost { canonical_url, .. } => canonical_url,
+            | NavigateDecision::Localhost { canonical_url, .. }
+            | NavigateDecision::Pocket { canonical_url, .. } => canonical_url,
             // An `http(s)` URL hands an arbitrary host the referrer, the shape
             // of the URL, and whatever the product put in it, so it needs the
             // same per-domain grant that gates outbound access to that host.
@@ -250,38 +253,40 @@ impl LocalStorage for ProductRuntimeHost {
 #[truapi::async_trait]
 impl Theme for ProductRuntimeHost {
     #[instrument(skip_all, fields(runtime.method = "theme.subscribe"))]
-    async fn subscribe(&self, _cx: &CallContext) -> Subscription<HostThemeSubscribeItem> {
-        let stream = self.platform.subscribe_theme().filter_map(|item| async {
-            // TODO: preserve platform stream errors as terminal
-            // subscription interrupts once subscription items can carry
-            // in-stream failures. Until then a dropped error freezes the
-            // product's theme on its last value, so record why.
-            match item {
-                Ok(item) => Some(HostThemeSubscribeItem::V1(item)),
-                Err(error) => {
-                    warn!(reason = %error.reason, "theme platform stream failed");
-                    None
-                }
+    async fn subscribe(
+        &self,
+        _cx: &CallContext,
+    ) -> Subscription<HostThemeSubscribeItem, CallError<GenericError>> {
+        let stream = self.platform.subscribe_theme().map(|item| match item {
+            Ok(item) => Ok(HostThemeSubscribeItem::V1(item)),
+            Err(error) => {
+                warn!(reason = %error.reason, "theme platform stream failed");
+                Err(CallError::HostFailure {
+                    reason: error.reason,
+                })
             }
         });
-        Subscription::new(Box::pin(stream))
+        Subscription::new(stream)
     }
 }
 
 #[truapi::async_trait]
 impl Locale for ProductRuntimeHost {
     #[instrument(skip_all, fields(runtime.method = "locale.subscribe"))]
-    async fn subscribe(&self, _cx: &CallContext) -> Subscription<HostLocaleSubscribeItem> {
-        let stream = self.platform.subscribe_locale().filter_map(|item| async {
-            match item {
-                Ok(item) => Some(HostLocaleSubscribeItem::V1(item)),
-                Err(error) => {
-                    warn!(reason = %error.reason, "locale platform stream failed");
-                    None
-                }
+    async fn subscribe(
+        &self,
+        _cx: &CallContext,
+    ) -> Subscription<HostLocaleSubscribeItem, CallError<GenericError>> {
+        let stream = self.platform.subscribe_locale().map(|item| match item {
+            Ok(item) => Ok(HostLocaleSubscribeItem::V1(item)),
+            Err(error) => {
+                warn!(reason = %error.reason, "locale platform stream failed");
+                Err(CallError::HostFailure {
+                    reason: error.reason,
+                })
             }
         });
-        Subscription::new(Box::pin(stream))
+        Subscription::new(stream)
     }
 }
 
@@ -312,7 +317,8 @@ impl Pill for ProductRuntimeHost {
         inner.destination = match parse_navigate(&inner.destination) {
             NavigateDecision::Reject { reason } => return Err(refuse(reason)),
             NavigateDecision::DotName { canonical_url, .. }
-            | NavigateDecision::Localhost { canonical_url, .. } => canonical_url,
+            | NavigateDecision::Localhost { canonical_url, .. }
+            | NavigateDecision::Pocket { canonical_url, .. } => canonical_url,
             NavigateDecision::External { url } => url,
         };
         pill.declare_pill(inner)

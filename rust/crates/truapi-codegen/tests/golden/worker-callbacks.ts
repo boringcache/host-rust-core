@@ -28,6 +28,7 @@ export const CALLBACK_NAMES = [
   "remotePermission",
   "declarePill",
   "withdrawPill",
+  "removePocketCard",
   "read",
   "write",
   "clear",
@@ -38,6 +39,7 @@ export type CallbackName = (typeof CALLBACK_NAMES)[number];
 export const SUBSCRIPTION_NAMES = [
   "subscribeChatRooms",
   "subscribeLocale",
+  "subscribePocketCards",
   "lookupPreimage",
   "subscribeTheme",
 ] as const;
@@ -220,6 +222,25 @@ function pillRawCallbacks(
   };
 }
 
+function pocketRawCallbacks(
+  bridge: WorkerCallbackBridge,
+): Required<Pick<RawCallbacks, "subscribePocketCards" | "removePocketCard">> {
+  return {
+    subscribePocketCards: (product, sendItem, sendError) =>
+      bridge.startSubscription(
+        "subscribePocketCards",
+        product,
+        sendItem,
+        sendError,
+      ),
+    removePocketCard: (product, request) =>
+      bridge.callbackRequest("removePocketCard", [
+        product,
+        request,
+      ]) as ReturnType<Required<RawCallbacks>["removePocketCard"]>,
+  };
+}
+
 /**
  * Optional capabilities the main-thread host actually serves. A
  * capability left out here is not proxied into the worker, so the
@@ -232,6 +253,8 @@ export interface OptionalCapabilities {
   permissionStatus?: boolean;
   /** Whether the host serves this capability. */
   pill?: boolean;
+  /** Whether the host serves this capability. */
+  pocket?: boolean;
 }
 
 export function createWorkerRawCallbacks(
@@ -247,6 +270,7 @@ export function createWorkerRawCallbacks(
   if (capabilities.permissionStatus)
     Object.assign(callbacks, permissionStatusRawCallbacks(bridge));
   if (capabilities.pill) Object.assign(callbacks, pillRawCallbacks(bridge));
+  if (capabilities.pocket) Object.assign(callbacks, pocketRawCallbacks(bridge));
   return callbacks;
 }
 
@@ -266,6 +290,12 @@ export function startRawSubscription(
       return callbacks.subscribeChatRooms?.(payload, sendItem, sendError);
     case "subscribeLocale":
       return callbacks.subscribeLocale(sendItem, sendError);
+    case "subscribePocketCards":
+      if (payload === null) {
+        console.warn(`[truapi worker] ${name} requires payload`);
+        return undefined;
+      }
+      return callbacks.subscribePocketCards?.(payload, sendItem, sendError);
     case "lookupPreimage":
       if (payload === null) {
         console.warn(`[truapi worker] ${name} requires payload`);

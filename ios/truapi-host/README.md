@@ -172,11 +172,59 @@ carries back, so it must name that message for as long as the host stores it.
 Ids arriving _in_ a `Reaction` or `ReactionRemoved` are product-chosen and
 untrusted: they may name a message in another room, or one that never existed.
 
+## Pocket
+
+A host with a Pocket surface owns the card collection and implements
+`PocketHostBridge`, passed as `pocket:` to `openProductExecution`. Pocket is
+reachable only from a Worker execution with an active session, so a product
+on a signed-out host is denied before the bridge is consulted. Hosts without
+the bridge pass nothing and Pocket calls answer unsupported.
+
+```swift
+final class MyPocketBridge: PocketHostBridge, @unchecked Sendable {
+    private let store: PocketStore
+
+    init(store: PocketStore) { self.store = store }
+
+    // `privileged` marks a card this host pinned, which the product sees and
+    // cannot remove.
+    func listCards() throws -> [PocketCard] { store.cards() }
+
+    // Decide and remove together so a card cannot be pinned in between.
+    func removeCard(cardId: String) throws -> NativePocketRemoval {
+        store.removeIfRemovable(cardId)
+    }
+}
+
+let execution = try runtime.openProductExecution(
+    bridge: bridge,
+    configuration: ProductExecutionConfig(productId: "game.dot", executionKind: .worker),
+    pocket: MyPocketBridge(store: pocketStore)
+)
+
+// Pocket needs an active session too: without `activateLocalSession` every
+// Pocket call answers denied, whatever this bridge holds.
+
+// Republish after the host's own collection changes.
+execution.notifyPocketCardsChanged(cards: pocketStore.cards())
+```
+
+A card's face does not cross this bridge. The host keeps each card's newest
+face itself: that is what the card shows while the worker is down, and at cold
+start before the worker answers.
+
 On the execution: `publishChatAction` delivers a user's action back to the
 product, buffering up to 64 before it subscribes; `notifyChatRoomsChanged`
-republishes the room list; `renderCustomMessage` returns a stream of typed UI
-for a stored custom message; and `sessionChatIdentityKey` reads the session's
-X25519 chat identity private key, which must not be logged or persisted.
+republishes the room list; `render` returns a stream of `RendererNode` trees
+for one render context; `publishRendererAction` delivers a renderer action
+back to the product; and `sessionChatIdentityKey` reads the session's X25519
+chat identity private key, which must not be logged or persisted. An open
+render stream is one worker reference the core holds on the product's behalf;
+the transition it causes arrives on the runtime bridge's
+`workerDemandChanged`, never on the execution's. Two rules the core
+cannot check are the host's to keep: send a render context only for a surface
+the product's manifest `includes`, and publish a renderer action only from the
+current tree of an open render stream.
 
 ## Architecture
 

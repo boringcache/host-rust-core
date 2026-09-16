@@ -36,14 +36,17 @@ import uniffi.truapi.ChatBotRegistrationStatus
 import uniffi.truapi.ChatMessageContent
 import uniffi.truapi.ChatRoom
 import uniffi.truapi.ChatRoomRegistrationStatus
-import uniffi.truapi.CustomRendererNode
 import uniffi.truapi.HostChatActionSubscribeItem
 import uniffi.truapi.HostDevicePermissionRequest
 import uniffi.truapi.HostFeatureSupportedRequest
 import uniffi.truapi.HostLocaleSubscribeItem
 import uniffi.truapi.HostPlatform
+import uniffi.truapi.PocketCard
 import uniffi.truapi.HostPushNotificationRequest
+import uniffi.truapi.HostRendererActionSubscribeItem
+import uniffi.truapi.ProductRendererRenderRequest
 import uniffi.truapi.RemotePermission
+import uniffi.truapi.RendererNode
 import uniffi.truapi.HostThemeSubscribeItem
 import uniffi.truapi.ThemeName
 import uniffi.truapi.ThemeVariant
@@ -56,7 +59,9 @@ import uniffi.truapi_platform.PermissionAuthorizationStatus
 import uniffi.truapi_platform.UserConfirmationReview
 import uniffi.truapi_server.HostCallbacks
 import uniffi.truapi_server.NativeChatCallbacks
-import uniffi.truapi_server.NativeCustomRendererObserver
+import uniffi.truapi_server.NativePocketCallbacks
+import uniffi.truapi_server.NativePocketRemoval
+import uniffi.truapi_server.NativeRendererObserver
 import uniffi.truapi_server.NativeDevicePermissionStatus
 import uniffi.truapi_server.NativeProductExecution
 import uniffi.truapi_server.NativeTrUApiHostRuntime
@@ -69,6 +74,7 @@ import uniffi.truapi_server.NativeRenewalTargetException
 import uniffi.truapi_server.NativeRuntimeConfigException
 import uniffi.truapi_server.NativeStatementRenewalTarget
 import uniffi.truapi_server.StatementRenewalReport
+import uniffi.truapi_server.WorkerTransition
 import uniffi.truapi_server.WsBridgeEndpoint
 import uniffi.truapi_server.WsBridgeStartException
 import uniffi.truapi_server.NativeHostRuntimeConfig as UniFfiNativeHostRuntimeConfig
@@ -369,6 +375,22 @@ interface HostBridge {
     @Throws(HostRejection::class)
     fun supportedChains(): HostChainSet = HostChainSet(network = "", chains = emptyList())
 
+    /**
+     * Observe demand on a product's worker crossing zero. `Start` means run
+     * the worker now, `Stop` that nothing wants it any more. Every transition
+     * arrives here in ledger order, the ones the app asks for by taking a
+     * reference of its own included.
+     *
+     * Demand is runtime-wide, so the core invokes this only on the bridge
+     * [TrUAPIHostRuntime] was built with, never on the per-execution bridge
+     * passed to [TrUAPIHostRuntime.openProductExecution]. Can arrive on any
+     * thread, including synchronously on the calling thread during
+     * `acquireWorker`/`releaseWorker`, often the main thread and
+     * re-entrantly: marshal the work off rather than blocking on another
+     * thread from inside it.
+     */
+    fun workerDemandChanged(productId: String, transition: WorkerTransition) {}
+
     /** Product-scoped key-value storage for the Rust core. */
     val storage: HostStorage
 
@@ -425,6 +447,32 @@ interface ChatHostBridge {
 }
 
 /**
+ * Native Pocket collection surface. Implement and pass to
+ * [TrUAPIHostRuntime.openProductExecution] when the host has a Pocket surface;
+ * hosts without one pass nothing.
+ *
+ * Threading: these run inline on the process-wide dispatch pool shared by
+ * every product execution, so implementations must be safe to enter
+ * concurrently and one that blocks stalls the others.
+ */
+interface PocketHostBridge {
+    /**
+     * Return the product's cards as this host holds them, each carrying
+     * whether the host pinned it.
+     */
+    @Throws(HostRejection::class)
+    fun listCards(): List<PocketCard>
+
+    /**
+     * Remove one of the product's cards and report what happened. Decide and
+     * remove together, under whatever lock this host holds, so a card cannot
+     * be pinned between the two.
+     */
+    @Throws(HostRejection::class)
+    fun removeCard(cardId: String): NativePocketRemoval
+}
+
+/**
  * Adapter from the public [HostBridge] surface to the generated UniFFI
  * [HostCallbacks] interface. Keeps the public API stable even if uniffi-bindgen
  * renames generated symbols.
@@ -435,6 +483,11 @@ private class HostCallbackAdapter(private val bridge: HostBridge) : HostCallback
     // `panic = "abort"`. Neither may let a host exception reach the FFI.
     override fun onCoreLog(marker: String, detail: String) {
         runCatching { bridge.onCoreLog(marker, detail) }
+    }
+
+    // Infallible across the FFI for the same reason `onCoreLog` is.
+    override fun workerDemandChanged(productId: String, transition: WorkerTransition) {
+        runCatching { bridge.workerDemandChanged(productId, transition) }
     }
 
     override suspend fun navigateTo(url: String) =
@@ -619,6 +672,17 @@ private class ChatCallbackAdapter(private val bridge: ChatHostBridge) : NativeCh
 }
 
 /**
+ * Adapter from the public [PocketHostBridge] surface to the generated UniFFI
+ * [NativePocketCallbacks] interface.
+ */
+private class PocketCallbackAdapter(private val bridge: PocketHostBridge) : NativePocketCallbacks {
+    override fun listCards(): List<PocketCard> = withHostRejection { bridge.listCards() }
+
+    override fun removeCard(cardId: String): NativePocketRemoval =
+        withHostRejection { bridge.removeCard(cardId) }
+}
+
+/**
  * Bootstrap helper for the native localhost WebSocket bridge that a product
  * execution starts when the cdylib is built with the `ws-bridge` feature.
  */
@@ -793,7 +857,8 @@ class TrUAPIHostRuntime private constructor(
     /**
      * Open one executable connection with a host-assigned immutable context.
      * Pass [chat] to install the host's Chat adapter; hosts without the Chat
-     * modality omit it.
+     * modality omit it. Pass [pocket] to install the card collection, and omit
+     * that where the host has no Pocket surface.
      */
     @Throws(NativeRuntimeConfigException::class)
     fun openProductExecution(
@@ -801,13 +866,39 @@ class TrUAPIHostRuntime private constructor(
         configuration: ProductExecutionConfig,
         chat: ChatHostBridge? = null,
         pill: PillHostBridge? = null,
+        pocket: PocketHostBridge? = null,
     ): TrUAPIProductExecution {
         val adapter = HostCallbackAdapter(bridge)
         val chatAdapter = chat?.let { ChatCallbackAdapter(it) }
         val pillAdapter = pill?.let { PillCallbackAdapter(it) }
+        val pocketAdapter = pocket?.let { PocketCallbackAdapter(it) }
         val execution =
-            inner.openProductExecution(adapter, chatAdapter, pillAdapter, configuration.toNative())
-        return TrUAPIProductExecution(execution, adapter, chatAdapter, pillAdapter)
+            inner.openProductExecution(
+                adapter,
+                chatAdapter,
+                pillAdapter,
+                pocketAdapter,
+                configuration.toNative(),
+            )
+        return TrUAPIProductExecution(execution, adapter, chatAdapter, pillAdapter, pocketAdapter)
+    }
+
+    /**
+     * Take one reference on the product's worker for a modality holder that is
+     * on screen or in flight. The first one reports a start transition to
+     * [HostBridge.workerDemandChanged], which is where the host starts the
+     * worker. Pair every call with one [releaseWorker].
+     */
+    fun acquireWorker(productId: String) {
+        inner.acquireWorker(productId)
+    }
+
+    /**
+     * Release one reference. The last one reports a stop transition, after
+     * which the host may stop the worker. Releasing with none held is a no-op.
+     */
+    fun releaseWorker(productId: String) {
+        inner.releaseWorker(productId)
     }
 
     /** Core-owned logout for the process-wide authentication session. */
@@ -875,7 +966,7 @@ class TrUAPIHostRuntime private constructor(
 }
 
 /** A render the product declined or could not encode. */
-class CustomRendererStreamException(
+class RendererStreamException(
     /** Why the product ended the render. */
     val reason: String,
 ) : Exception(reason)
@@ -889,6 +980,7 @@ class TrUAPIProductExecution internal constructor(
     private val callbackRetainer: HostCallbacks,
     private val chatRetainer: NativeChatCallbacks?,
     private val pillRetainer: NativePillCallbacks?,
+    private val pocketRetainer: NativePocketCallbacks?,
 ) : AutoCloseable {
     private val shutDown = AtomicBoolean(false)
 
@@ -920,25 +1012,21 @@ class TrUAPIProductExecution internal constructor(
     }
 
     /**
-     * Request typed native UI for one stored custom Chat message. The flow
-     * subscribes on collection, so a closed or non-Chat execution fails the
+     * Request a native renderer tree for one render context. The flow
+     * subscribes on collection, so a closed or non-Worker execution fails the
      * collector with [ProductRuntimeException] rather than this call. It
      * cancels the renderer when collection ends;
      * each emission is a complete replacement tree, so only the latest is kept
      * when the collector falls behind.
      */
-    fun renderCustomMessage(
-        messageId: String,
-        messageType: String,
-        payload: ByteArray,
-    ): Flow<CustomRendererNode> =
+    fun render(request: ProductRendererRenderRequest): Flow<RendererNode> =
         callbackFlow {
             val observer =
-                object : NativeCustomRendererObserver {
+                object : NativeRendererObserver {
                     // The core declares all three infallible, so uniffi has no
                     // error type to convert a throw into and panics -- which
                     // aborts under `panic = "abort"`.
-                    override fun onUpdate(node: CustomRendererNode) {
+                    override fun onUpdate(node: RendererNode) {
                         runCatching { trySend(node) }
                     }
 
@@ -949,15 +1037,32 @@ class TrUAPIProductExecution internal constructor(
                     // The last tree sent is partial, so closing with a cause
                     // keeps this distinct from a clean end for the collector.
                     override fun onError(reason: String) {
-                        runCatching { close(CustomRendererStreamException(reason)) }
+                        runCatching { close(RendererStreamException(reason)) }
                     }
                 }
-            val subscription = inner.renderCustomMessage(messageId, messageType, payload, observer)
+            val subscription = inner.render(request, observer)
             awaitClose {
                 subscription.cancel()
                 subscription.close()
             }
         }.conflate()
+
+    /**
+     * Publish one native renderer action, buffering it until the product
+     * connection subscribes.
+     */
+    @Throws(ProductRuntimeException::class)
+    fun publishRendererAction(item: HostRendererActionSubscribeItem) {
+        inner.publishRendererAction(item)
+    }
+
+    /**
+     * Republish the product-scoped card list. Call it whenever the host's own
+     * collection changes, including after the user removes a card.
+     */
+    fun notifyPocketCardsChanged(cards: List<PocketCard>) {
+        inner.notifyPocketCardsChanged(cards)
+    }
 
     /** Read the active session's X25519 chat identity private key, if any. */
     @Throws(HostRejection::class)

@@ -24,7 +24,9 @@ use truapi::api::{
     Payment,
     Permissions,
     Pill,
+    Pocket,
     Preimage,
+    Renderer,
     ResourceAllocation,
     Signing,
     StatementStore,
@@ -37,7 +39,9 @@ use truapi_platform::ProductExecutionKind;
 use crate::dispatcher::Dispatcher;
 use crate::frame::downgrade_call_error;
 use crate::generated::wire_table;
-use crate::subscription::{HostInitiatedSubscriptionManager, subscription_stream};
+use crate::subscription::{
+    HostInitiatedSubscriptionManager, subscription_interrupt, subscription_stream,
+};
 use crate::transport::Transport;
 
 /// Register every TrUAPI method with the dispatcher.
@@ -56,7 +60,9 @@ where
     register_payment(dispatcher, host.clone());
     register_permissions(dispatcher, host.clone());
     register_pill(dispatcher, host.clone());
+    register_pocket(dispatcher, host.clone());
     register_preimage(dispatcher, host.clone());
+    register_renderer(dispatcher, host.clone());
     register_resource_allocation(dispatcher, host.clone());
     register_signing(dispatcher, host.clone());
     register_statement_store(dispatcher, host.clone());
@@ -64,14 +70,14 @@ where
     register_theme(dispatcher, host);
 }
 
-/// Start the host-initiated `chat_custom_message_render` subscription.
-pub(crate) fn chat_custom_message_render(
+/// Start the host-initiated `renderer_render` subscription.
+pub(crate) fn renderer_render(
     subscriptions: &HostInitiatedSubscriptionManager,
     transport: Arc<dyn Transport>,
-    request: versioned::chat::ProductChatCustomMessageRenderRequest,
-) -> truapi::Subscription<Result<versioned::chat::ProductChatCustomMessageRenderItem, truapi::latest::GenericError>> {
+    request: versioned::renderer::ProductRendererRenderRequest,
+) -> truapi::Subscription<versioned::renderer::ProductRendererRenderItem, truapi::CallError<truapi::latest::GenericError>> {
     subscriptions.start(
-        wire_table::CHAT_CUSTOM_MESSAGE_RENDER,
+        wire_table::RENDERER_RENDER,
         parity_scale_codec::Encode::encode(&request),
         transport,
     )
@@ -91,18 +97,23 @@ where
                     Err(err) => {
                         let error: truapi::CallError<truapi::latest::GenericError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = <versioned::account::HostAccountConnectionStatusSubscribeItem as truapi::versioned::Versioned>::LATEST;
                 let cx = CallContext::with_request_id(request_id);
                 let stream = host.connection_status_subscribe(&cx).await;
-                let stream = futures::StreamExt::map(stream, move |item: versioned::account::HostAccountConnectionStatusSubscribeItem| {
-                    <versioned::account::HostAccountConnectionStatusSubscribeItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::account::HostAccountConnectionStatusSubscribeItem, truapi::CallError<truapi::latest::GenericError>>| {
+                        item.map(|item| {
+                            <versioned::account::HostAccountConnectionStatusSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -403,18 +414,23 @@ where
                     Err(err) => {
                         let error: truapi::CallError<truapi::latest::GenericError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
                 let stream = host.follow_head_subscribe(&cx, request).await;
-                let stream = futures::StreamExt::map(stream, move |item: versioned::chain::RemoteChainHeadFollowItem| {
-                    <versioned::chain::RemoteChainHeadFollowItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::chain::RemoteChainHeadFollowItem, truapi::CallError<truapi::latest::GenericError>>| {
+                        item.map(|item| {
+                            <versioned::chain::RemoteChainHeadFollowItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -868,22 +884,27 @@ where
                     Err(err) => {
                         let error: truapi::CallError<truapi::latest::GenericError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = <versioned::chat::HostChatListSubscribeItem as truapi::versioned::Versioned>::LATEST;
                 let cx = CallContext::with_request_id(request_id);
                 if !execution_allowed {
                     let error: truapi::CallError<truapi::latest::GenericError> = truapi::CallError::Denied;
-                    return Err(Some(error).encode());
+                    return Err(subscription_interrupt(error));
                 }
                 let stream = host.list_subscribe(&cx).await;
-                let stream = futures::StreamExt::map(stream, move |item: versioned::chat::HostChatListSubscribeItem| {
-                    <versioned::chat::HostChatListSubscribeItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::chat::HostChatListSubscribeItem, truapi::CallError<truapi::latest::GenericError>>| {
+                        item.map(|item| {
+                            <versioned::chat::HostChatListSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -933,22 +954,27 @@ where
                     Err(err) => {
                         let error: truapi::CallError<truapi::latest::GenericError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = <versioned::chat::HostChatActionSubscribeItem as truapi::versioned::Versioned>::LATEST;
                 let cx = CallContext::with_request_id(request_id);
                 if !execution_allowed {
                     let error: truapi::CallError<truapi::latest::GenericError> = truapi::CallError::Denied;
-                    return Err(Some(error).encode());
+                    return Err(subscription_interrupt(error));
                 }
                 let stream = host.action_subscribe(&cx).await;
-                let stream = futures::StreamExt::map(stream, move |item: versioned::chat::HostChatActionSubscribeItem| {
-                    <versioned::chat::HostChatActionSubscribeItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::chat::HostChatActionSubscribeItem, truapi::CallError<truapi::latest::GenericError>>| {
+                        item.map(|item| {
+                            <versioned::chat::HostChatActionSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1025,24 +1051,24 @@ where
                     Err(err) => {
                         let error: truapi::CallError<versioned::coin_payment::HostCoinPaymentRebalancePurseError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
-                let stream = match host.rebalance_purse(&cx, request).await {
-                    Ok(sub) => sub,
-                    Err(err) => {
-                        let error = downgrade_call_error(err, target_version);
-                        return Err(Some(error).encode());
-                    }
-                };
-                let stream = futures::StreamExt::map(stream, move |item: versioned::coin_payment::HostCoinPaymentRebalancePurseItem| {
-                    <versioned::coin_payment::HostCoinPaymentRebalancePurseItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = host.rebalance_purse(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::coin_payment::HostCoinPaymentRebalancePurseItem, truapi::CallError<versioned::coin_payment::HostCoinPaymentRebalancePurseError>>| {
+                        item.map(|item| {
+                            <versioned::coin_payment::HostCoinPaymentRebalancePurseItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1057,24 +1083,24 @@ where
                     Err(err) => {
                         let error: truapi::CallError<versioned::coin_payment::HostCoinPaymentDeletePurseError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
-                let stream = match host.delete_purse(&cx, request).await {
-                    Ok(sub) => sub,
-                    Err(err) => {
-                        let error = downgrade_call_error(err, target_version);
-                        return Err(Some(error).encode());
-                    }
-                };
-                let stream = futures::StreamExt::map(stream, move |item: versioned::coin_payment::HostCoinPaymentDeletePurseItem| {
-                    <versioned::coin_payment::HostCoinPaymentDeletePurseItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = host.delete_purse(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::coin_payment::HostCoinPaymentDeletePurseItem, truapi::CallError<versioned::coin_payment::HostCoinPaymentDeletePurseError>>| {
+                        item.map(|item| {
+                            <versioned::coin_payment::HostCoinPaymentDeletePurseItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1145,24 +1171,24 @@ where
                     Err(err) => {
                         let error: truapi::CallError<versioned::coin_payment::HostCoinPaymentDepositError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
-                let stream = match host.deposit(&cx, request).await {
-                    Ok(sub) => sub,
-                    Err(err) => {
-                        let error = downgrade_call_error(err, target_version);
-                        return Err(Some(error).encode());
-                    }
-                };
-                let stream = futures::StreamExt::map(stream, move |item: versioned::coin_payment::HostCoinPaymentDepositItem| {
-                    <versioned::coin_payment::HostCoinPaymentDepositItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = host.deposit(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::coin_payment::HostCoinPaymentDepositItem, truapi::CallError<versioned::coin_payment::HostCoinPaymentDepositError>>| {
+                        item.map(|item| {
+                            <versioned::coin_payment::HostCoinPaymentDepositItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1177,24 +1203,24 @@ where
                     Err(err) => {
                         let error: truapi::CallError<versioned::coin_payment::HostCoinPaymentRefundError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
-                let stream = match host.refund(&cx, request).await {
-                    Ok(sub) => sub,
-                    Err(err) => {
-                        let error = downgrade_call_error(err, target_version);
-                        return Err(Some(error).encode());
-                    }
-                };
-                let stream = futures::StreamExt::map(stream, move |item: versioned::coin_payment::HostCoinPaymentRefundItem| {
-                    <versioned::coin_payment::HostCoinPaymentRefundItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = host.refund(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::coin_payment::HostCoinPaymentRefundItem, truapi::CallError<versioned::coin_payment::HostCoinPaymentRefundError>>| {
+                        item.map(|item| {
+                            <versioned::coin_payment::HostCoinPaymentRefundItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1209,24 +1235,24 @@ where
                     Err(err) => {
                         let error: truapi::CallError<versioned::coin_payment::HostCoinPaymentListenForError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
-                let stream = match host.listen_for_payment(&cx, request).await {
-                    Ok(sub) => sub,
-                    Err(err) => {
-                        let error = downgrade_call_error(err, target_version);
-                        return Err(Some(error).encode());
-                    }
-                };
-                let stream = futures::StreamExt::map(stream, move |item: versioned::coin_payment::HostCoinPaymentListenForItem| {
-                    <versioned::coin_payment::HostCoinPaymentListenForItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = host.listen_for_payment(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::coin_payment::HostCoinPaymentListenForItem, truapi::CallError<versioned::coin_payment::HostCoinPaymentListenForError>>| {
+                        item.map(|item| {
+                            <versioned::coin_payment::HostCoinPaymentListenForItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1371,18 +1397,23 @@ where
                     Err(err) => {
                         let error: truapi::CallError<truapi::latest::GenericError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = <versioned::locale::HostLocaleSubscribeItem as truapi::versioned::Versioned>::LATEST;
                 let cx = CallContext::with_request_id(request_id);
                 let stream = host.subscribe(&cx).await;
-                let stream = futures::StreamExt::map(stream, move |item: versioned::locale::HostLocaleSubscribeItem| {
-                    <versioned::locale::HostLocaleSubscribeItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::locale::HostLocaleSubscribeItem, truapi::CallError<truapi::latest::GenericError>>| {
+                        item.map(|item| {
+                            <versioned::locale::HostLocaleSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1465,24 +1496,24 @@ where
                     Err(err) => {
                         let error: truapi::CallError<versioned::payment::HostPaymentBalanceSubscribeError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
-                let stream = match host.balance_subscribe(&cx, request).await {
-                    Ok(sub) => sub,
-                    Err(err) => {
-                        let error = downgrade_call_error(err, target_version);
-                        return Err(Some(error).encode());
-                    }
-                };
-                let stream = futures::StreamExt::map(stream, move |item: versioned::payment::HostPaymentBalanceSubscribeItem| {
-                    <versioned::payment::HostPaymentBalanceSubscribeItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = host.balance_subscribe(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::payment::HostPaymentBalanceSubscribeItem, truapi::CallError<versioned::payment::HostPaymentBalanceSubscribeError>>| {
+                        item.map(|item| {
+                            <versioned::payment::HostPaymentBalanceSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1525,24 +1556,24 @@ where
                     Err(err) => {
                         let error: truapi::CallError<versioned::payment::HostPaymentStatusSubscribeError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
-                let stream = match host.status_subscribe(&cx, request).await {
-                    Ok(sub) => sub,
-                    Err(err) => {
-                        let error = downgrade_call_error(err, target_version);
-                        return Err(Some(error).encode());
-                    }
-                };
-                let stream = futures::StreamExt::map(stream, move |item: versioned::payment::HostPaymentStatusSubscribeItem| {
-                    <versioned::payment::HostPaymentStatusSubscribeItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = host.status_subscribe(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::payment::HostPaymentStatusSubscribeItem, truapi::CallError<versioned::payment::HostPaymentStatusSubscribeError>>| {
+                        item.map(|item| {
+                            <versioned::payment::HostPaymentStatusSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1701,6 +1732,82 @@ where
     }
 }
 
+fn register_pocket<P>(dispatcher: &mut Dispatcher, host: Arc<P>)
+where
+    P: Pocket + Send + Sync + 'static,
+{
+    {
+        let execution_allowed = dispatcher.allows_execution(ProductExecutionKind::Worker);
+        let host = host.clone();
+        dispatcher.on_subscription(wire_table::POCKET_LIST_SUBSCRIBE, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let _request: () = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<truapi::latest::GenericError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        return Err(subscription_interrupt(error));
+                    }
+                };
+                let target_version = <versioned::pocket::HostPocketListSubscribeItem as truapi::versioned::Versioned>::LATEST;
+                let cx = CallContext::with_request_id(request_id);
+                if !execution_allowed {
+                    let error: truapi::CallError<truapi::latest::GenericError> = truapi::CallError::Denied;
+                    return Err(subscription_interrupt(error));
+                }
+                let stream = host.list_subscribe(&cx).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::pocket::HostPocketListSubscribeItem, truapi::CallError<truapi::latest::GenericError>>| {
+                        item.map(|item| {
+                            <versioned::pocket::HostPocketListSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                    },
+                );
+                Ok(subscription_stream(stream))
+            })
+        });
+    }
+    {
+        let execution_allowed = dispatcher.allows_execution(ProductExecutionKind::Worker);
+        let host = host;
+        dispatcher.on_request(wire_table::POCKET_REMOVE_CARD, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let request: versioned::pocket::HostPocketRemoveCardRequest = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<versioned::pocket::HostPocketRemoveCardError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        let result: Result<versioned::pocket::HostPocketRemoveCardResponse, truapi::CallError<versioned::pocket::HostPocketRemoveCardError>> = Err(error);
+                        return result.encode();
+                    }
+                };
+                let target_version = request.version();
+                let cx = CallContext::with_request_id(request_id);
+                if !execution_allowed {
+                    let error: truapi::CallError<versioned::pocket::HostPocketRemoveCardError> = truapi::CallError::Denied;
+                    let result: Result<versioned::pocket::HostPocketRemoveCardResponse, truapi::CallError<versioned::pocket::HostPocketRemoveCardError>> = Err(error);
+                    return result.encode();
+                }
+                let result: Result<versioned::pocket::HostPocketRemoveCardResponse, truapi::CallError<versioned::pocket::HostPocketRemoveCardError>> =
+                    match host.remove_card(&cx, request).await {
+                        Ok(response) => Ok(<versioned::pocket::HostPocketRemoveCardResponse as truapi::versioned::FromLatest>::from_latest(
+                            truapi::versioned::IntoLatest::into_latest(response),
+                            target_version,
+                        )),
+                        Err(err) => Err(downgrade_call_error(err, target_version)),
+                    };
+                result.encode()
+            })
+        });
+    }
+}
+
 fn register_preimage<P>(dispatcher: &mut Dispatcher, host: Arc<P>)
 where
     P: Preimage + Send + Sync + 'static,
@@ -1715,18 +1822,23 @@ where
                     Err(err) => {
                         let error: truapi::CallError<truapi::latest::GenericError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
                 let stream = host.lookup_subscribe(&cx, request).await;
-                let stream = futures::StreamExt::map(stream, move |item: versioned::preimage::RemotePreimageLookupSubscribeItem| {
-                    <versioned::preimage::RemotePreimageLookupSubscribeItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::preimage::RemotePreimageLookupSubscribeItem, truapi::CallError<truapi::latest::GenericError>>| {
+                        item.map(|item| {
+                            <versioned::preimage::RemotePreimageLookupSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -1756,6 +1868,48 @@ where
                         Err(err) => Err(downgrade_call_error(err, target_version)),
                     };
                 result.encode()
+            })
+        });
+    }
+}
+
+fn register_renderer<P>(dispatcher: &mut Dispatcher, host: Arc<P>)
+where
+    P: Renderer + Send + Sync + 'static,
+{
+    {
+        let execution_allowed = dispatcher.allows_execution(ProductExecutionKind::Worker);
+        let host = host;
+        dispatcher.on_subscription(wire_table::RENDERER_ACTION_SUBSCRIBE, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let _request: () = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<truapi::latest::GenericError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        return Err(subscription_interrupt(error));
+                    }
+                };
+                let target_version = <versioned::renderer::HostRendererActionSubscribeItem as truapi::versioned::Versioned>::LATEST;
+                let cx = CallContext::with_request_id(request_id);
+                if !execution_allowed {
+                    let error: truapi::CallError<truapi::latest::GenericError> = truapi::CallError::Denied;
+                    return Err(subscription_interrupt(error));
+                }
+                let stream = host.action_subscribe(&cx).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::renderer::HostRendererActionSubscribeItem, truapi::CallError<truapi::latest::GenericError>>| {
+                        item.map(|item| {
+                            <versioned::renderer::HostRendererActionSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                    },
+                );
+                Ok(subscription_stream(stream))
             })
         });
     }
@@ -2039,24 +2193,24 @@ where
                     Err(err) => {
                         let error: truapi::CallError<versioned::statement_store::RemoteStatementStoreSubscribeError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = request.version();
                 let cx = CallContext::with_request_id(request_id);
-                let stream = match host.subscribe(&cx, request).await {
-                    Ok(sub) => sub,
-                    Err(err) => {
-                        let error = downgrade_call_error(err, target_version);
-                        return Err(Some(error).encode());
-                    }
-                };
-                let stream = futures::StreamExt::map(stream, move |item: versioned::statement_store::RemoteStatementStoreSubscribeItem| {
-                    <versioned::statement_store::RemoteStatementStoreSubscribeItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = host.subscribe(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::statement_store::RemoteStatementStoreSubscribeItem, truapi::CallError<versioned::statement_store::RemoteStatementStoreSubscribeError>>| {
+                        item.map(|item| {
+                            <versioned::statement_store::RemoteStatementStoreSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });
@@ -2303,18 +2457,23 @@ where
                     Err(err) => {
                         let error: truapi::CallError<truapi::latest::GenericError> =
                             truapi::CallError::MalformedFrame { reason: err.to_string() };
-                        return Err(Some(error).encode());
+                        return Err(subscription_interrupt(error));
                     }
                 };
                 let target_version = <versioned::theme::HostThemeSubscribeItem as truapi::versioned::Versioned>::LATEST;
                 let cx = CallContext::with_request_id(request_id);
                 let stream = host.subscribe(&cx).await;
-                let stream = futures::StreamExt::map(stream, move |item: versioned::theme::HostThemeSubscribeItem| {
-                    <versioned::theme::HostThemeSubscribeItem as truapi::versioned::FromLatest>::from_latest(
-                        truapi::versioned::IntoLatest::into_latest(item),
-                        target_version,
-                    )
-                });
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::theme::HostThemeSubscribeItem, truapi::CallError<truapi::latest::GenericError>>| {
+                        item.map(|item| {
+                            <versioned::theme::HostThemeSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                    },
+                );
                 Ok(subscription_stream(stream))
             })
         });

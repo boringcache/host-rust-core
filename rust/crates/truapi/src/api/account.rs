@@ -1,5 +1,6 @@
 //! Unified [`Account`] trait.
 
+use crate::latest::GenericError;
 use crate::versioned::account::{
     HostAccountConnectionStatusSubscribeItem, HostAccountCreateProofError,
     HostAccountCreateProofRequest, HostAccountCreateProofResponse, HostAccountGetAliasError,
@@ -35,8 +36,8 @@ pub trait Account: Send + Sync {
     async fn connection_status_subscribe(
         &self,
         _cx: &CallContext,
-    ) -> Subscription<HostAccountConnectionStatusSubscribeItem> {
-        Subscription::empty()
+    ) -> Subscription<HostAccountConnectionStatusSubscribeItem, CallError<GenericError>> {
+        Subscription::interrupted(CallError::unavailable())
     }
 
     /// Retrieve a product-scoped account.
@@ -198,7 +199,8 @@ pub trait Account: Send + Sync {
     /// Register a ring-VRF key owned by the calling product.
     ///
     /// ```ts
-    /// import { PASEO_NEXT_V2_INDIVIDUALITY } from "@parity/truapi";
+    /// const people = await truapi.chain.getChainInfo({ chain: "People" });
+    /// assert(people.isOk(), "getChainInfo failed:", people);
     ///
     /// const PEOPLE_COLLECTION_ID =
     ///   "0x706f703a706f6c6b61646f742e6e6574776f726b2f70656f706c652d6c697465";
@@ -206,7 +208,7 @@ pub trait Account: Send + Sync {
     /// const result = await truapi.account.registerRingVrfKey({
     ///   index: { tag: "Index", value: 0 },
     ///   ring: {
-    ///     chainId: PASEO_NEXT_V2_INDIVIDUALITY.genesis,
+    ///     chainId: people.value.genesisHash,
     ///     junctions: [
     ///       { tag: "CollectionId", value: PEOPLE_COLLECTION_ID },
     ///     ],

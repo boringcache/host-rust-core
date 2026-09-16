@@ -42,7 +42,7 @@ pub enum WireKind {
 /// `TRUAPI_WIRE_SCHEMA_HASH`. A host stamps it on each debug envelope so
 /// the debugger refuses to decode a frame whose contract differs from
 /// its own, even when the coarse handshake codec version is unchanged.
-pub const TRUAPI_WIRE_SCHEMA_HASH: &str = "fae531303e87af7e";
+pub const TRUAPI_WIRE_SCHEMA_HASH: &str = "37949c72bbcd63be";
 
 /// Wire discriminants for `system_handshake`.
 pub const SYSTEM_HANDSHAKE: MethodIds = MethodIds {
@@ -252,12 +252,6 @@ pub const CHAT_POST_MESSAGE: MethodIds = MethodIds {
 pub const CHAT_ACTION_SUBSCRIBE: MethodIds = MethodIds {
     trait_id: 4,
     method_id: 4,
-};
-
-/// Wire discriminants for `chat_custom_message_render`.
-pub const CHAT_CUSTOM_MESSAGE_RENDER: MethodIds = MethodIds {
-    trait_id: 4,
-    method_id: 5,
 };
 
 /// Wire discriminants for `coin_payment_create_purse`.
@@ -488,15 +482,39 @@ pub const LOCALE_SUBSCRIBE: MethodIds = MethodIds {
     method_id: 0,
 };
 
+/// Wire discriminants for `renderer_render`.
+pub const RENDERER_RENDER: MethodIds = MethodIds {
+    trait_id: 17,
+    method_id: 0,
+};
+
+/// Wire discriminants for `renderer_action_subscribe`.
+pub const RENDERER_ACTION_SUBSCRIBE: MethodIds = MethodIds {
+    trait_id: 17,
+    method_id: 1,
+};
+
+/// Wire discriminants for `pocket_list_subscribe`.
+pub const POCKET_LIST_SUBSCRIBE: MethodIds = MethodIds {
+    trait_id: 18,
+    method_id: 0,
+};
+
+/// Wire discriminants for `pocket_remove_card`.
+pub const POCKET_REMOVE_CARD: MethodIds = MethodIds {
+    trait_id: 18,
+    method_id: 1,
+};
+
 /// Wire discriminants for `pill_declare_pill`.
 pub const PILL_DECLARE_PILL: MethodIds = MethodIds {
-    trait_id: 17,
+    trait_id: 19,
     method_id: 0,
 };
 
 /// Wire discriminants for `pill_withdraw_pill`.
 pub const PILL_WITHDRAW_PILL: MethodIds = MethodIds {
-    trait_id: 17,
+    trait_id: 19,
     method_id: 1,
 };
 
@@ -643,10 +661,6 @@ pub const WIRE_TABLE: &[WireEntry] = &[
     WireEntry {
         method: "chat_action_subscribe",
         kind: WireKind::Subscription(CHAT_ACTION_SUBSCRIBE),
-    },
-    WireEntry {
-        method: "chat_custom_message_render",
-        kind: WireKind::Subscription(CHAT_CUSTOM_MESSAGE_RENDER),
     },
     WireEntry {
         method: "coin_payment_create_purse",
@@ -799,6 +813,22 @@ pub const WIRE_TABLE: &[WireEntry] = &[
     WireEntry {
         method: "locale_subscribe",
         kind: WireKind::Subscription(LOCALE_SUBSCRIBE),
+    },
+    WireEntry {
+        method: "renderer_render",
+        kind: WireKind::Subscription(RENDERER_RENDER),
+    },
+    WireEntry {
+        method: "renderer_action_subscribe",
+        kind: WireKind::Subscription(RENDERER_ACTION_SUBSCRIBE),
+    },
+    WireEntry {
+        method: "pocket_list_subscribe",
+        kind: WireKind::Subscription(POCKET_LIST_SUBSCRIBE),
+    },
+    WireEntry {
+        method: "pocket_remove_card",
+        kind: WireKind::Request(POCKET_REMOVE_CARD),
     },
     WireEntry {
         method: "pill_declare_pill",
