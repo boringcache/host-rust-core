@@ -30,7 +30,7 @@ struct ProductNetworkAccessTests {
         }
         defer { first.cancel() }
         try await pause.waitUntilSuspended()
-        try #require(try await networkTestOperation("first settings write") { await writes.next() } != nil)
+        try #require(try await withNetworkTestTimeout("first settings write") { await writes.next() } != nil)
         let second = Task {
             try await product.installation.setPermissionAuthorizationStatus(
                 request: .remote(RemotePermissionRequest(permission: .remote(domains: ["127.0.0.1"]))),
@@ -38,10 +38,10 @@ struct ProductNetworkAccessTests {
             )
         }
         defer { second.cancel() }
-        try #require(try await networkTestOperation("second settings write") { await writes.next() } != nil)
+        try #require(try await withNetworkTestTimeout("second settings write") { await writes.next() } != nil)
         pause.resume()
-        try await networkTestOperation("first settings refresh") { try await first.value }
-        try await networkTestOperation("second settings refresh") { try await second.value }
+        try await withNetworkTestTimeout("first settings refresh") { try await first.value }
+        try await withNetworkTestTimeout("second settings refresh") { try await second.value }
 
         let expectedResponse = status == .authorized ? "allowed" : "denied"
         let expectedRequests = status == .authorized ? 3 : 2
@@ -75,8 +75,8 @@ struct ProductNetworkAccessTests {
         try await pause.waitUntilSuspended()
         other.installation.dispose()
         pause.resume()
-        try await networkTestOperation("settings refresh after other view disposal") { try await update.value }
-        let remainingRules = try await networkTestOperation("disposed view rule removal callbacks") {
+        try await withNetworkTestTimeout("settings refresh after other view disposal") { try await update.value }
+        let remainingRules = try await withNetworkTestTimeout("disposed view rule removal callbacks") {
             Set(try #require(await store.availableIdentifiers()))
         }
         #expect(otherRules.isDisjoint(with: remainingRules))
@@ -106,19 +106,16 @@ struct ProductNetworkAccessTests {
             bridge: bridge,
             configuration: ProductExecutionConfig(productId: "network.paseo", executionKind: .app)
         )
-        defer { closeNetworkTestExecution(execution) }
+        defer { execution.close() }
         let ready = ProductPageReady()
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        let configuration = networkTestConfiguration()
         configuration.userContentController.add(ready, name: "testReady")
         let webView = WKWebView(frame: .zero, configuration: configuration)
         let productURL = server.url(host: "localhost", path: "/product")
-        let installation = try await networkTestOperation("install callback test network gate") {
-            try await TrUAPIHost.installProductScripts(
-                into: webView, execution: execution,
-                endpoint: execution.startWsBridge(bindPort: 0), productURL: productURL
-            )
-        }
+        let installation = try await TrUAPIHost.installProductScripts(
+            into: webView, execution: execution,
+            endpoint: execution.startWsBridge(bindPort: 0), productURL: productURL
+        )
         bridge.installation = installation
         defer { installation.dispose() }
         try await ready.load(webView, url: productURL)
@@ -132,7 +129,7 @@ struct ProductNetworkAccessTests {
         let server = try await NetworkTestServer.start()
         defer { server.stop() }
         for hostname in ["localhost", "127.0.0.1", "[::1]"] {
-            let status = try await networkTestOperation("loopback probe \(hostname)") {
+            let status = try await withNetworkTestTimeout("loopback probe \(hostname)") {
                 let (_, response) = try await URLSession.shared.data(for: URLRequest(
                     url: server.url(host: hostname, path: "/probe"), timeoutInterval: 15
                 ))
@@ -154,7 +151,7 @@ struct ProductNetworkAccessTests {
             bridge: bridge,
             configuration: ProductExecutionConfig(productId: "network.paseo", executionKind: .app)
         )
-        defer { closeNetworkTestExecution(execution) }
+        defer { execution.close() }
         let endpoint = try execution.startWsBridge(bindPort: 0)
         let productURL = server.url(host: "localhost", path: "/product")
         await #expect(throws: ProductScriptInstallationError.persistentDataStoreUnsupported) {
@@ -164,8 +161,7 @@ struct ProductNetworkAccessTests {
             )
         }
         let ready = ProductPageReady()
-        let occupiedConfiguration = WKWebViewConfiguration()
-        occupiedConfiguration.websiteDataStore = .nonPersistent()
+        let occupiedConfiguration = networkTestConfiguration()
         let occupiedView = WKWebView(frame: .zero, configuration: occupiedConfiguration)
         occupiedView.navigationDelegate = ready
         await #expect(throws: ProductScriptInstallationError.navigationDelegateAlreadyInstalled) {
@@ -173,15 +169,12 @@ struct ProductNetworkAccessTests {
                 into: occupiedView, execution: execution, endpoint: endpoint, productURL: productURL
             )
         }
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        let configuration = networkTestConfiguration()
         configuration.userContentController.add(ready, name: "testReady")
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        let installation = try await networkTestOperation("install grant test network gate") {
-            try await TrUAPIHost.installProductScripts(
-                into: webView, execution: execution, endpoint: endpoint, productURL: productURL
-            )
-        }
+        let installation = try await TrUAPIHost.installProductScripts(
+            into: webView, execution: execution, endpoint: endpoint, productURL: productURL
+        )
         defer { installation.dispose() }
         try await ready.load(webView, url: productURL)
         await #expect(throws: ProductScriptInstallationError.webViewAlreadyLoaded) {
@@ -197,7 +190,7 @@ struct ProductNetworkAccessTests {
         let permission = PermissionAuthorizationRequest.remote(
             RemotePermissionRequest(permission: .remote(domains: ["127.0.0.1"]))
         )
-        try await networkTestOperation("grant remote permission") {
+        try await withNetworkTestTimeout("grant remote permission") {
             try await installation.setPermissionAuthorizationStatus(request: permission, status: .authorized)
         }
         #expect(try await fetch(webView, remote) == "allowed")
@@ -207,7 +200,7 @@ struct ProductNetworkAccessTests {
         #expect(try await fetch(webView, redirect) == "denied")
         #expect(server.requests(path: "/blocked") == 0)
 
-        try await networkTestOperation("grant redirect target permission") {
+        try await withNetworkTestTimeout("grant redirect target permission") {
             try await installation.setPermissionAuthorizationStatus(
                 request: .remote(RemotePermissionRequest(permission: .remote(domains: ["[::1]"]))),
                 status: .authorized
@@ -220,41 +213,32 @@ struct ProductNetworkAccessTests {
             bridge: bridge,
             configuration: ProductExecutionConfig(productId: "network.paseo", executionKind: .app)
         )
-        defer { closeNetworkTestExecution(secondExecution) }
+        defer { secondExecution.close() }
         let secondReady = ProductPageReady()
-        let secondConfiguration = WKWebViewConfiguration()
-        secondConfiguration.websiteDataStore = .nonPersistent()
+        let secondConfiguration = networkTestConfiguration()
         secondConfiguration.userContentController.add(secondReady, name: "testReady")
         let secondWebView = WKWebView(frame: .zero, configuration: secondConfiguration)
-        let secondInstallation = try await networkTestOperation("install second grant test network gate") {
-            try await TrUAPIHost.installProductScripts(
-                into: secondWebView, execution: secondExecution,
-                endpoint: secondExecution.startWsBridge(bindPort: 0), productURL: productURL
-            )
-        }
+        let secondInstallation = try await TrUAPIHost.installProductScripts(
+            into: secondWebView, execution: secondExecution,
+            endpoint: secondExecution.startWsBridge(bindPort: 0), productURL: productURL
+        )
         defer { secondInstallation.dispose() }
         try await secondReady.load(secondWebView, url: productURL)
         #expect(try await fetch(secondWebView, remote) == "allowed")
         #expect(server.requests(path: "/allowed") == 2)
+        let allowedPreload = server.url(host: "127.0.0.1", path: "/preload-allowed")
+        #expect(try await preload(secondWebView, allowedPreload) == "loaded")
+        #expect(server.requests(path: "/preload-allowed") == 1)
 
-        try await networkTestOperation("revoke remote permission") {
+        try await withNetworkTestTimeout("revoke remote permission") {
             try await installation.setPermissionAuthorizationStatus(request: permission, status: .denied)
         }
         let productRedirect = server.url(host: "localhost", path: "/redirect-revoked")
         #expect(try await fetch(webView, productRedirect) == "denied")
         #expect(server.requests(path: "/allowed") == 2)
-        let preload = try await networkTestOperation("revoked-origin preload") {
-            try await secondWebView.callAsyncJavaScript("""
-            return await new Promise(resolve => {
-              const link = document.createElement('link');
-              link.rel = 'preload'; link.as = 'fetch'; link.crossOrigin = 'anonymous';
-              link.onload = () => resolve('loaded'); link.onerror = () => resolve('blocked');
-              link.href = url; document.head.appendChild(link);
-            });
-            """, arguments: ["url": remote.absoluteString], in: nil, contentWorld: .page) as? String
-        }
-        #expect(preload == "blocked")
-        #expect(server.requests(path: "/allowed") == 2)
+        let revokedPreload = server.url(host: "127.0.0.1", path: "/preload-revoked")
+        #expect(try await preload(secondWebView, revokedPreload) == "blocked")
+        #expect(server.requests(path: "/preload-revoked") == 0)
 
         installation.dispose()
         #expect(try await fetch(webView, remote) == "denied")
@@ -294,11 +278,24 @@ struct ProductNetworkAccessTests {
     }
 
     private func fetch(_ webView: WKWebView, _ url: URL) async throws -> String {
-        try await networkTestOperation("fetch \(url.absoluteString)") {
+        try await withNetworkTestTimeout("fetch \(url.absoluteString)") {
             try await webView.callAsyncJavaScript(
                 "try { const response = await fetch(url); return await response.text(); } catch { return 'denied'; }",
                 arguments: ["url": url.absoluteString], in: nil, contentWorld: .page
             ) as? String ?? "evaluation failed"
+        }
+    }
+
+    private func preload(_ webView: WKWebView, _ url: URL) async throws -> String? {
+        try await withNetworkTestTimeout("preload \(url.absoluteString)") {
+            try await webView.callAsyncJavaScript("""
+                return await new Promise(resolve => {
+                  const link = document.createElement('link');
+                  link.rel = 'preload'; link.as = 'fetch'; link.crossOrigin = 'anonymous';
+                  link.onload = () => resolve('loaded'); link.onerror = () => resolve('blocked');
+                  link.href = url; document.head.appendChild(link);
+                });
+                """, arguments: ["url": url.absoluteString], in: nil, contentWorld: .page) as? String
         }
     }
 
@@ -313,10 +310,9 @@ private struct NetworkTestTimeout: Error, CustomStringConvertible {
 }
 
 @MainActor
-private func networkTestOperation<Value: Sendable>(
+private func withNetworkTestTimeout<Value: Sendable>(
     _ stage: String, operation: @escaping @MainActor () async throws -> Value
 ) async throws -> Value {
-    print("Network test started: \(stage)")
     let result = AsyncThrowingStream<Value, Error>.makeStream()
     let timeout = Task {
         try await Task.sleep(for: .seconds(15))
@@ -336,14 +332,15 @@ private func networkTestOperation<Value: Sendable>(
     }
     var iterator = result.stream.makeAsyncIterator()
     guard let value = try await iterator.next() else { throw CancellationError() }
-    print("Network test completed: \(stage)")
     return value
 }
 
-private func closeNetworkTestExecution(_ execution: any TrUAPIProductExecutionProtocol) {
-    print("Network test started: close execution")
-    execution.close()
-    print("Network test completed: close execution")
+@MainActor
+private func networkTestConfiguration() -> WKWebViewConfiguration {
+    let configuration = WKWebViewConfiguration()
+    configuration.websiteDataStore = .nonPersistent()
+    configuration.preferences.inactiveSchedulingPolicy = .none
+    return configuration
 }
 
 @MainActor
@@ -371,17 +368,14 @@ private struct NetworkTestProduct {
             )
             let execution = PausedPermissionExecution(inner)
             let ready = ProductPageReady()
-            let configuration = WKWebViewConfiguration()
-            configuration.websiteDataStore = .nonPersistent()
+            let configuration = networkTestConfiguration()
             configuration.userContentController.add(ready, name: "testReady")
             let webView = WKWebView(frame: .zero, configuration: configuration)
             let productURL = server.url(host: "localhost", path: "/product")
-            let installation = try await networkTestOperation("install lifecycle test network gate") {
-                try await TrUAPIHost.installProductScripts(
-                    into: webView, execution: execution,
-                    endpoint: execution.startWsBridge(bindPort: 0), productURL: productURL
-                )
-            }
+            let installation = try await TrUAPIHost.installProductScripts(
+                into: webView, execution: execution,
+                endpoint: execution.startWsBridge(bindPort: 0), productURL: productURL
+            )
             do { try await ready.load(webView, url: productURL) }
             catch {
                 installation.dispose()
@@ -398,7 +392,7 @@ private struct NetworkTestProduct {
 
     func close() {
         installation.dispose()
-        closeNetworkTestExecution(execution)
+        execution.close()
         server.stop()
     }
 }
@@ -427,7 +421,7 @@ private final class NetworkTestPause {
         for signal: (stream: AsyncStream<Void>, continuation: AsyncStream<Void>.Continuation),
         stage: String
     ) async throws {
-        try await networkTestOperation(stage) {
+        try await withNetworkTestTimeout(stage) {
             var iterator = signal.stream.makeAsyncIterator()
             guard await iterator.next() != nil else { throw CancellationError() }
         }
@@ -521,7 +515,7 @@ private final class ProductPageReady: NSObject, WKScriptMessageHandler, WKNaviga
         }
         defer { onReady = nil }
         webView.load(URLRequest(url: url))
-        try await networkTestOperation("page ready \(url.absoluteString)") {
+        try await withNetworkTestTimeout("page ready \(url.absoluteString)") {
             var iterator = ready.stream.makeAsyncIterator()
             guard await iterator.next() != nil else { throw CancellationError() }
         }
@@ -558,7 +552,7 @@ private final class NetworkTestServer: @unchecked Sendable {
         }
         server.listener.start(queue: DispatchQueue(label: "network-test-server"))
         do {
-            try await networkTestOperation("loopback listener ready") {
+            try await withNetworkTestTimeout("loopback listener ready") {
                 var iterator = ready.stream.makeAsyncIterator()
                 guard try await iterator.next() != nil else { throw CancellationError() }
             }
