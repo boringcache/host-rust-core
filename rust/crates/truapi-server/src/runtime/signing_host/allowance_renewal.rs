@@ -20,17 +20,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures::lock::Mutex;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use parity_scale_codec::{Decode, Encode};
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::debug;
 #[cfg(any(test, not(target_arch = "wasm32")))]
 use tracing::info;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use tracing::warn;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use truapi_platform::{CoreStorage, CoreStorageKey};
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use super::SigningHost;
 #[cfg(not(target_arch = "wasm32"))]
 use super::sso_responder::current_unix_secs;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use crate::host_logic::product_account::derive_root_keypair_from_entropy;
 #[cfg(any(test, not(target_arch = "wasm32")))]
 use crate::host_logic::product_account::{derive_identity_keypair, derive_sr25519_hard_path};
@@ -58,6 +63,7 @@ const CLOCK_FAILURE_TICK_DELAY: Duration = Duration::from_secs(3_600);
 /// Entropy-derived variants are recipes, not raw account ids, so the ledger
 /// survives root-entropy rotation (the CLI rotates auto-managed accounts on
 /// slot exhaustion).
+#[cfg(any(test, not(target_arch = "wasm32")))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StatementRenewalTarget {
     /// `//allowance//statement-store//{product_id}` from the active root entropy.
@@ -76,6 +82,7 @@ pub enum StatementRenewalTarget {
     },
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 impl StatementRenewalTarget {
     /// These legacy entries cannot identify the artifact-scoped decision that
     /// authorized them. Never infer authorization from host-global storage.
@@ -95,12 +102,14 @@ impl StatementRenewalTarget {
 /// not re-derive, so it records the root public key that promised it and is
 /// ignored under any other identity: without that, a later account would spend
 /// its own slot-table capacity keeping a previous account's peer allowed.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LedgerEntry {
     target: StatementRenewalTarget,
     owner: Option<[u8; 32]>,
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 impl LedgerEntry {
     /// Record `target` under `owner`, which only raw account ids retain.
     fn new(target: StatementRenewalTarget, owner: [u8; 32]) -> Self {
@@ -121,6 +130,7 @@ impl LedgerEntry {
 
 /// Root public key of the identity rooted at `entropy`, used to own raw ledger
 /// entries.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn owner_key(entropy: &[u8]) -> Result<[u8; 32], String> {
     derive_root_keypair_from_entropy(entropy)
         .map(|pair| pair.public.to_bytes())
@@ -135,6 +145,7 @@ pub(super) struct RenewalState {
     registration_lock: Mutex<()>,
     /// Serializes read-modify-write cycles on the ledger so a concurrent
     /// allocation cannot drop another's entry.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     ledger_lock: Mutex<()>,
     #[cfg(not(target_arch = "wasm32"))]
     loop_started: AtomicBool,
@@ -152,6 +163,7 @@ impl RenewalState {
         &self.registration_lock
     }
 
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     fn ledger_lock(&self) -> &Mutex<()> {
         &self.ledger_lock
     }
@@ -178,6 +190,7 @@ impl RenewalState {
 /// the pass: the entries are recipes and raw account ids that
 /// [`track_targets`] rebuilds on the next allocation or pairing, so refusing to
 /// renew anything is strictly worse than starting over.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 async fn read_entries(storage: &(impl CoreStorage + ?Sized)) -> Result<Vec<LedgerEntry>, String> {
     let Some(blob) = storage
         .read_core_storage(CoreStorageKey::StatementRenewalTargets)
@@ -197,6 +210,7 @@ async fn read_entries(storage: &(impl CoreStorage + ?Sized)) -> Result<Vec<Ledge
 
 /// Append `new_targets` to the ledger, preserving order and skipping entries
 /// already present.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 async fn track_targets(
     storage: &(impl CoreStorage + ?Sized),
     ledger_lock: &Mutex<()>,
@@ -252,6 +266,7 @@ async fn untrack_account(
     Ok(true)
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 async fn write_entries(
     storage: &(impl CoreStorage + ?Sized),
     entries: &[LedgerEntry],
@@ -262,6 +277,7 @@ async fn write_entries(
         .map_err(|err| format!("renewal ledger write failed: {}", err.reason))
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn decode_entries(blob: &[u8]) -> Result<Vec<LedgerEntry>, String> {
     let mut input = blob;
     let entries = Vec::<LedgerEntry>::decode(&mut input)
@@ -321,6 +337,7 @@ fn resolve_target(
 }
 
 /// Record `targets` in the ledger under the active identity.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(super) async fn track(
     signing_host: &SigningHost,
     targets: Vec<StatementRenewalTarget>,
