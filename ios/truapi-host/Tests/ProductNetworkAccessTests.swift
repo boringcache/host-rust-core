@@ -77,10 +77,12 @@ struct ProductNetworkAccessTests {
         other.installation.dispose()
         pause.resume()
         try await withNetworkTestTimeout("settings refresh after other view disposal") { try await update.value }
-        let remainingRules = try await withNetworkTestTimeout("disposed view rule removal callbacks") {
-            Set(try #require(await store.availableIdentifiers()))
+        try await withNetworkTestTimeout("disposed view cache cleanup") {
+            // Older WebKit versions read and remove cached rules on separate queues.
+            while !otherRules.isDisjoint(with: try #require(await store.availableIdentifiers())) {
+                try await Task.sleep(for: .milliseconds(20))
+            }
         }
-        #expect(otherRules.isDisjoint(with: remainingRules))
 
         let redirect = product.server.url(host: "localhost", path: "/redirect-revoked")
         #expect(try await fetch(product.webView, redirect) == "allowed")
