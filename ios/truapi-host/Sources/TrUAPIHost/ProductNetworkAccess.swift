@@ -55,7 +55,8 @@ enum ProductNetworkRules {
         remoteOrigins: Set<ProductNetworkOrigin>
     ) throws -> String {
         var rules: [[String: Any]] = [
-            ["trigger": ["url-filter": "^(https?|wss?)://"], "action": ["type": "block"]],
+            ["trigger": ["url-filter": "^https?://"], "action": ["type": "block"]],
+            ["trigger": ["url-filter": "^wss?://"], "action": ["type": "block"]],
             allow("^" + NSRegularExpression.escapedPattern(for: productOrigin.prefix)),
             allow("^" + NSRegularExpression.escapedPattern(for: bridgeURL) + "$"),
         ]
