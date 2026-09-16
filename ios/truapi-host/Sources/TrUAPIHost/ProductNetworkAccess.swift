@@ -146,7 +146,7 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
         )
         do { try validate(webView) }
         catch {
-            store.removeContentRuleList(forIdentifier: identifier + "-base", completionHandler: nil)
+            try? await store.removeContentRuleList(forIdentifier: identifier + "-base")
             throw error
         }
         let installation = ProductScriptInstallation(
@@ -318,7 +318,7 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
             store: store, identifier: replacementIdentifier, rules: rules
         )
         guard !disposed else {
-            store.removeContentRuleList(forIdentifier: replacementIdentifier, completionHandler: nil)
+            try? await store.removeContentRuleList(forIdentifier: replacementIdentifier)
             return
         }
         guard revision == policyRevision else { return }
