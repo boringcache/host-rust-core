@@ -228,7 +228,7 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
         pendingRefresh?.cancel()
         pendingRefresh = nil
         for suffix in ["-base", "-0", "-1"] {
-            store.removeContentRuleList(forIdentifier: identifier + suffix, completionHandler: nil)
+            store.removeContentRuleList(forIdentifier: identifier + suffix) { _ in }
         }
         Self.installations.removeAll { $0.installation == nil || $0.installation === self }
     }
