@@ -19,6 +19,7 @@ use futures::{FutureExt, StreamExt, pin_mut};
 use parity_scale_codec::{Decode, Encode};
 use thiserror::Error;
 use tracing::instrument;
+use truapi::latest::GenericError;
 use truapi::v01;
 use truapi::{CallContext, CancellationReason};
 use truapi_platform::{ChatPlatform, PermissionStatusHost, PocketPlatform};
@@ -999,7 +1000,7 @@ impl HostAdmin {
     pub async fn authorize_network_access(
         &self,
         url: String,
-    ) -> Result<PermissionAuthorizationStatus, v01::GenericError> {
+    ) -> Result<PermissionAuthorizationStatus, GenericError> {
         self.product_runtime.authorize_network_access(url).await
     }
 
@@ -1609,6 +1610,7 @@ mod tests {
     use crate::test_support::{StubPlatform, runtime_config, test_spawner, wait_until};
     use parity_scale_codec::Encode;
     use std::sync::atomic::Ordering;
+    use truapi::latest::{RemotePermission, RemotePermissionRequest, RemotePermissionResponse};
 
     #[derive(Default)]
     struct RecordingSink {
@@ -1671,8 +1673,8 @@ mod tests {
     fn assert_send_sync<T: Send + Sync>() {}
 
     fn network_permission(domains: &[&str]) -> PermissionAuthorizationRequest {
-        PermissionAuthorizationRequest::Remote(v01::RemotePermissionRequest {
-            permission: v01::RemotePermission::Remote {
+        PermissionAuthorizationRequest::Remote(RemotePermissionRequest {
+            permission: RemotePermission::Remote {
                 domains: domains.iter().map(|domain| domain.to_string()).collect(),
             },
         })
@@ -1687,10 +1689,10 @@ mod tests {
             let (config, _) = runtime_config("fetch.dot");
             let runtime = PairingHostRuntime::new(platform.clone(), config, test_spawner());
             let admin = runtime.product_admin(product_context("fetch.dot").unwrap());
-            let PermissionAuthorizationRequest::Remote(request) =
-                network_permission(&["api.example.com"])
-            else {
-                unreachable!()
+            let request = RemotePermissionRequest {
+                permission: RemotePermission::Remote {
+                    domains: vec!["api.example.com".to_string()],
+                },
             };
             let granted = admin
                 .product_runtime
@@ -1724,14 +1726,14 @@ mod tests {
                 (granted, decisions, saved, prompted),
                 (
                     truapi::versioned::permissions::RemotePermissionResponse::V1(
-                        v01::RemotePermissionResponse { granted: true },
+                        RemotePermissionResponse { granted: true },
                     ),
                     vec![PermissionAuthorizationStatus::Authorized; 5],
                     PermissionAuthorizationStatus::Authorized,
                     vec![
                         request,
-                        v01::RemotePermissionRequest {
-                            permission: v01::RemotePermission::Remote {
+                        RemotePermissionRequest {
+                            permission: RemotePermission::Remote {
                                 domains: vec!["xn--bcher-kva.example".to_string()],
                             },
                         },
@@ -1800,8 +1802,8 @@ mod tests {
                     PermissionAuthorizationStatus::Denied,
                     PermissionAuthorizationStatus::Authorized,
                     vec![PermissionAuthorizationStatus::Denied; 2],
-                    vec![v01::RemotePermissionRequest {
-                        permission: v01::RemotePermission::Remote {
+                    vec![RemotePermissionRequest {
+                        permission: RemotePermission::Remote {
                             domains: vec!["other.example.com".to_string()],
                         },
                     }],
@@ -1870,8 +1872,8 @@ mod tests {
                             .request_remote_permission(
                                 &truapi::CallContext::default(),
                                 truapi::versioned::permissions::RemotePermissionRequest::V1(
-                                    v01::RemotePermissionRequest {
-                                        permission: v01::RemotePermission::Remote {
+                                    RemotePermissionRequest {
+                                        permission: RemotePermission::Remote {
                                             domains: vec!["api.example.com".to_string()],
                                         },
                                     },

@@ -1022,6 +1022,7 @@ class TrUAPIProductExecution internal constructor(
     @Throws(HostRejection::class)
     fun sessionChatIdentityKey(): ByteArray? = inner.sessionChatIdentityKey()
 
+    /** Checks or prompts for this execution's product permission to contact the URL's destination. */
     @Throws(HostRejection::class)
     suspend fun authorizeNetworkAccess(url: String): PermissionAuthorizationStatus =
         inner.authorizeNetworkAccess(url)

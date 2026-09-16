@@ -321,7 +321,7 @@ jobs:
         with:
           name: codegen-output
 
-      # Simulator slice only, debug profile. This gate compiles Swift and ships
+      # Simulator slice only, debug profile. This gate tests Swift and ships
       # no binary, so the device slice and release codegen are waste. The
       # published binary is older than the current Rust surface, so
       # TRUAPI_USE_LOCAL_BINARY points the manifest at this build instead.
@@ -342,6 +342,7 @@ jobs:
       - name: Build the lockdown container bundle
         run: |
           npm --prefix js/container install --no-fund --no-audit
+          npm --prefix js/container run typecheck
           npm --prefix js/container run build
 
       - name: Build the simulator XCFramework for TrUAPIProvider
@@ -392,6 +393,18 @@ jobs:
             -scheme TrUAPIProvider \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/TrUAPIProviderDerivedData" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Test native product network permissions in WKWebView
+        run: |
+          set -euo pipefail
+          simulator="$(node --input-type=module -e 'import { selectSimulator } from "./scripts/lib/ios-simulator.mjs"; console.log(selectSimulator().udid)')"
+          cd "$RUNNER_TEMP/tag-probe"
+          xcodebuild test-without-building \
+            -scheme TrUAPIHost \
+            -destination "platform=iOS Simulator,id=$simulator" \
+            -derivedDataPath "$RUNNER_TEMP/TrUAPIHostDerivedData" \
+            -only-testing:TrUAPIHostTests/ProductNetworkAccessTests \
             CODE_SIGNING_ALLOWED=NO
 
   # Compile gate for the Android host module: regenerates the UniFFI Kotlin

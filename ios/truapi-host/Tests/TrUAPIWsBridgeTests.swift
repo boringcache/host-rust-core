@@ -134,11 +134,26 @@ final class StubStorage: HostStorageBackend, @unchecked Sendable {
 }
 
 final class StubCoreStorage: HostCoreStorageBackend, @unchecked Sendable {
+    private let lock = NSLock()
     private var store: [Data: Data] = [:]
 
-    func read(key: Data) throws -> Data? { store[key] }
-    func write(key: Data, value: Data) throws { store[key] = value }
-    func clear(key: Data) throws { store[key] = nil }
+    func read(key: Data) throws -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return store[key]
+    }
+
+    func write(key: Data, value: Data) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        store[key] = value
+    }
+
+    func clear(key: Data) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        store[key] = nil
+    }
 }
 
 // Conforms to HostBridge rather than the generated HostCallbacks, so the

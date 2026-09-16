@@ -905,6 +905,7 @@ public protocol TrUAPIProductExecutionProtocol: AnyObject, Sendable {
     func publishChatAction(_ action: HostChatActionSubscribeItem) throws
     func render(_ request: ProductRendererRenderRequest) throws -> AsyncThrowingStream<RendererNode, Error>
     func publishRendererAction(_ item: HostRendererActionSubscribeItem) throws
+    /// Checks or prompts for this product's destination permission; only `.authorized` permits the request.
     func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus
     func permissionAuthorizationStatus(
         request: PermissionAuthorizationRequest
@@ -978,6 +979,7 @@ public final class TrUAPIProductExecution: TrUAPIProductExecutionProtocol, @unch
         inner.notifyPocketCardsChanged(cards: cards)
     }
 
+    /// Applies the shared permission policy to an outgoing URL, prompting for this execution's product if needed.
     public func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus {
         try await inner.authorizeNetworkAccess(url: url)
     }

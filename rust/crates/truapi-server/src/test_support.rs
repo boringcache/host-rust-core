@@ -81,6 +81,7 @@ pub(crate) struct StubPlatform {
     /// Every `remote_permission` request, in order, so a test can assert which
     /// domains reached the prompt and that a stored grant suppresses a re-ask.
     pub(crate) remote_permission_requests: Arc<Mutex<Vec<v01::RemotePermissionRequest>>>,
+    /// Suspend a prompt to exercise permission changes before it resolves.
     pub(crate) remote_permission_hook: Mutex<Option<RemotePermissionHook>>,
     /// URLs handed to `navigate_to`. Empty means the gate blocked before the
     /// platform was ever reached.

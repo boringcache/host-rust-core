@@ -3,6 +3,7 @@
 import Foundation
 import WebKit
 
+/// Conditions that prevent installing the product's WebKit network boundary.
 public enum ProductScriptInstallationError: Error, Equatable {
     case invalidProductURL
     case webViewAlreadyLoaded
@@ -12,6 +13,7 @@ public enum ProductScriptInstallationError: Error, Equatable {
 }
 
 struct ProductNetworkOrigin: Hashable {
+    private static let defaultPorts = ["http": 80, "https": 443, "ws": 80, "wss": 443]
     let scheme: String
     let host: String
     let port: Int?
@@ -26,8 +28,7 @@ struct ProductNetworkOrigin: Hashable {
         }
         self.scheme = scheme
         self.host = host
-        let defaultPort = ["http": 80, "https": 443, "ws": 80, "wss": 443][scheme]
-        port = components.port == defaultPort ? nil : components.port
+        port = components.port == Self.defaultPorts[scheme] ? nil : components.port
     }
 
     var prefix: String {
@@ -40,8 +41,7 @@ struct ProductNetworkOrigin: Hashable {
     }
 
     func matches(_ securityOrigin: WKSecurityOrigin) -> Bool {
-        let defaultPort = ["http": 80, "https": 443, "ws": 80, "wss": 443][scheme]
-        let otherPort = securityOrigin.port == 0 || securityOrigin.port == defaultPort
+        let otherPort = securityOrigin.port == 0 || securityOrigin.port == Self.defaultPorts[scheme]
             ? nil : securityOrigin.port
         return scheme == securityOrigin.protocol.lowercased()
             && host == securityOrigin.host.lowercased() && port == otherPort
@@ -99,7 +99,8 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
     private let identifier: String
     private let baseline: WKContentRuleList
     private var current: WKContentRuleList
-    private var remoteOrigins: Set<ProductNetworkOrigin> = []
+    private var registeredOrigins: Set<ProductNetworkOrigin> = []
+    private var allowedOrigins: Set<ProductNetworkOrigin> = []
     private var pending: Task<Bool, Never>?
     private var pendingRefresh: Task<Void, Error>?
     private var generation = 0
@@ -143,7 +144,11 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
             store: store, identifier: identifier + "-base",
             rules: ProductNetworkRules.encode(productOrigin: origin, bridgeURL: bridgeURL, remoteOrigins: [])
         )
-        try validate(webView)
+        do { try validate(webView) }
+        catch {
+            store.removeContentRuleList(forIdentifier: identifier + "-base", completionHandler: nil)
+            throw error
+        }
         let installation = ProductScriptInstallation(
             webView: webView, execution: execution, productOrigin: origin,
             bridgeURL: bridgeURL, store: store, identifier: identifier, baseline: baseline
@@ -206,27 +211,12 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
     ) async throws {
         guard !disposed else { throw CancellationError() }
         let active = Self.installations.compactMap { $0.installation }.filter { !$0.disposed }
-        let snapshots = active.map { installation in
-            let origins = installation.remoteOrigins
-            installation.restrictToProduct()
-            return (installation, origins)
-        }
+        for installation in active { installation.restrictToProduct() }
         try execution.setPermissionAuthorizationStatus(request: request, status: status)
-        let updates = snapshots.map { installation, origins in
-            Task { @MainActor in
-                do {
-                    try await installation.refresh(origins)
-                    return !installation.disposed
-                } catch {
-                    return false
-                }
-            }
-        }
-        for update in updates {
-            guard await update.value else { throw ProductScriptInstallationError.contentRulesUnavailable }
-        }
+        for installation in active { try await installation.refresh() }
     }
 
+    /// Ends authorization and leaves the view restricted until its owner discards it.
     public func dispose() {
         guard !disposed else { return }
         disposed = true
@@ -263,7 +253,7 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
             controller?.remove(current)
         }
         current = baseline
-        remoteOrigins = []
+        allowedOrigins = []
     }
 
     private func authorize(_ rawURL: String) async -> Bool {
@@ -271,32 +261,32 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
               let origin = try? ProductNetworkOrigin(url) else { return false }
         let revision = policyRevision
         do {
-            var candidates = remoteOrigins
             if origin != productOrigin {
                 guard ["http", "https"].contains(origin.scheme),
                       try await execution.authorizeNetworkAccess(url: rawURL) == .authorized else {
-                    try await refresh(candidates)
+                    try await refresh()
                     return false
                 }
-                candidates.insert(origin)
+                registeredOrigins.insert(origin)
             }
-            try await refresh(candidates)
-            return !disposed && (origin == productOrigin || remoteOrigins.contains(origin))
+            try await refresh()
+            return !disposed && (origin == productOrigin || allowedOrigins.contains(origin))
         } catch {
             if revision == policyRevision { restrictToProduct() }
             return false
         }
     }
 
-    private func refresh(_ candidates: Set<ProductNetworkOrigin>) async throws {
+    private func refresh() async throws {
         let previous = pendingRefresh
         let revision = policyRevision
         let task = Task { @MainActor in
             _ = try? await previous?.value
             do {
-                try await self.refreshRules(candidates.union(self.remoteOrigins), revision: revision)
+                try await self.refreshRules(revision: revision)
             } catch {
-                if revision == self.policyRevision { self.restrictToProduct() }
+                guard !self.disposed, revision == self.policyRevision else { return }
+                self.restrictToProduct()
                 throw error
             }
         }
@@ -304,19 +294,17 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
         try await task.value
     }
 
-    private func refreshRules(
-        _ candidates: Set<ProductNetworkOrigin>, revision: Int
-    ) async throws {
-        guard !disposed, revision == policyRevision else { throw CancellationError() }
+    private func refreshRules(revision: Int) async throws {
+        guard !disposed, revision == policyRevision else { return }
         var approved: Set<ProductNetworkOrigin> = []
-        for origin in candidates {
+        for origin in registeredOrigins {
             let status = try await execution.permissionAuthorizationStatus(request: .remote(
                 RemotePermissionRequest(permission: .remote(domains: [origin.host]))
             ))
             if status == .authorized { approved.insert(origin) }
         }
-        guard !disposed, revision == policyRevision else { throw CancellationError() }
-        guard approved != remoteOrigins else { return }
+        guard !disposed, revision == policyRevision else { return }
+        guard approved != allowedOrigins else { return }
         if approved.isEmpty {
             useBaseline()
             return
@@ -325,14 +313,19 @@ public final class ProductScriptInstallation: NSObject, WKScriptMessageHandlerWi
         let rules = try ProductNetworkRules.encode(
             productOrigin: productOrigin, bridgeURL: bridgeURL, remoteOrigins: approved
         )
+        let replacementIdentifier = identifier + "-\(generation % 2)"
         let replacement = try await Self.compile(
-            store: store, identifier: identifier + "-\(generation % 2)", rules: rules
+            store: store, identifier: replacementIdentifier, rules: rules
         )
-        guard !disposed, revision == policyRevision else { throw CancellationError() }
+        guard !disposed else {
+            store.removeContentRuleList(forIdentifier: replacementIdentifier, completionHandler: nil)
+            return
+        }
+        guard revision == policyRevision else { return }
         controller?.add(replacement)
         controller?.remove(current)
         current = replacement
-        remoteOrigins = approved
+        allowedOrigins = approved
     }
 
     private static func compile(
