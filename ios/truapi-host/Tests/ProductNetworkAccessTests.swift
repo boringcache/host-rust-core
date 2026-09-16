@@ -1,8 +1,9 @@
-#if canImport(WebKit)
+#if canImport(UIKit) && canImport(WebKit)
 
 import Foundation
 import Network
 import Testing
+import UIKit
 import WebKit
 @testable import TrUAPIHost
 
@@ -111,6 +112,8 @@ struct ProductNetworkAccessTests {
         let configuration = networkTestConfiguration()
         configuration.userContentController.add(ready, name: "testReady")
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        let window = try NetworkTestWindow(webView)
+        defer { window.close() }
         let productURL = server.url(host: "localhost", path: "/product")
         let installation = try await TrUAPIHost.installProductScripts(
             into: webView, execution: execution,
@@ -172,6 +175,8 @@ struct ProductNetworkAccessTests {
         let configuration = networkTestConfiguration()
         configuration.userContentController.add(ready, name: "testReady")
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        let window = try NetworkTestWindow(webView)
+        defer { window.close() }
         let installation = try await TrUAPIHost.installProductScripts(
             into: webView, execution: execution, endpoint: endpoint, productURL: productURL
         )
@@ -218,6 +223,8 @@ struct ProductNetworkAccessTests {
         let secondConfiguration = networkTestConfiguration()
         secondConfiguration.userContentController.add(secondReady, name: "testReady")
         let secondWebView = WKWebView(frame: .zero, configuration: secondConfiguration)
+        let secondWindow = try NetworkTestWindow(secondWebView)
+        defer { secondWindow.close() }
         let secondInstallation = try await TrUAPIHost.installProductScripts(
             into: secondWebView, execution: secondExecution,
             endpoint: secondExecution.startWsBridge(bindPort: 0), productURL: productURL
@@ -339,8 +346,30 @@ private func withNetworkTestTimeout<Value: Sendable>(
 private func networkTestConfiguration() -> WKWebViewConfiguration {
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
-    configuration.preferences.inactiveSchedulingPolicy = .none
     return configuration
+}
+
+@MainActor
+private final class NetworkTestWindow {
+    private let window: UIWindow
+
+    init(_ webView: WKWebView) throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }, "Run WebKit tests in NetworkTestHost")
+        window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 480)
+        let controller = UIViewController()
+        controller.view = webView
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        #expect(webView.window === window)
+    }
+
+    func close() {
+        window.isHidden = true
+        window.rootViewController = nil
+        window.windowScene = nil
+    }
 }
 
 @MainActor
@@ -349,6 +378,7 @@ private struct NetworkTestProduct {
     let execution: PausedPermissionExecution
     let webView: WKWebView
     let installation: ProductScriptInstallation
+    let window: NetworkTestWindow
 
     static func open() async throws -> NetworkTestProduct {
         let server = try await NetworkTestServer.start()
@@ -371,19 +401,26 @@ private struct NetworkTestProduct {
             let configuration = networkTestConfiguration()
             configuration.userContentController.add(ready, name: "testReady")
             let webView = WKWebView(frame: .zero, configuration: configuration)
+            let window = try NetworkTestWindow(webView)
             let productURL = server.url(host: "localhost", path: "/product")
-            let installation = try await TrUAPIHost.installProductScripts(
-                into: webView, execution: execution,
-                endpoint: execution.startWsBridge(bindPort: 0), productURL: productURL
-            )
-            do { try await ready.load(webView, url: productURL) }
-            catch {
-                installation.dispose()
+            do {
+                let installation = try await TrUAPIHost.installProductScripts(
+                    into: webView, execution: execution,
+                    endpoint: execution.startWsBridge(bindPort: 0), productURL: productURL
+                )
+                do { try await ready.load(webView, url: productURL) }
+                catch {
+                    installation.dispose()
+                    throw error
+                }
+                return NetworkTestProduct(
+                    server: server, execution: execution, webView: webView,
+                    installation: installation, window: window
+                )
+            } catch {
+                window.close()
                 throw error
             }
-            return NetworkTestProduct(
-                server: server, execution: execution, webView: webView, installation: installation
-            )
         } catch {
             server.stop()
             throw error
@@ -392,6 +429,7 @@ private struct NetworkTestProduct {
 
     func close() {
         installation.dispose()
+        window.close()
         execution.close()
         server.stop()
     }
