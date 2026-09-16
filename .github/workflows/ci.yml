@@ -420,7 +420,30 @@ jobs:
             -destination "platform=iOS Simulator,arch=arm64,id=$TRUAPI_TEST_SIMULATOR" \
             -derivedDataPath "$RUNNER_TEMP/TrUAPIHostDerivedData" \
             -only-testing:TrUAPIHostTests/ProductNetworkAccessTests \
+            -resultBundlePath "$RUNNER_TEMP/TrUAPINetworkTests.xcresult" \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Export native test diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/TrUAPINetworkTests.xcresult"
+          if [[ -d "$result" ]]; then
+            xcrun xcresulttool get test-results summary --path "$result"
+            xcrun xcresulttool get test-results tests --path "$result"
+            xcrun xcresulttool export diagnostics --path "$result" \
+              --output-path "$RUNNER_TEMP/TrUAPINetworkDiagnostics"
+          fi
+
+      - name: Upload native test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-network-test-results
+          path: |
+            ${{ runner.temp }}/TrUAPINetworkTests.xcresult
+            ${{ runner.temp }}/TrUAPINetworkDiagnostics
+          if-no-files-found: ignore
 
   # Compile gate for the Android host module: regenerates the UniFFI Kotlin
   # bindings and compiles the shell against them. No cross-compile, no
