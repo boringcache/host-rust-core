@@ -42,6 +42,14 @@ export const DEV_ACCOUNTS: Record<DevAccountName, Uint8Array> = {
   dave: entropyFor(0xd4),
 };
 
+/**
+ * The built-in dev account names.
+ *
+ * Exported under `@parity/host-api-test-sdk`'s name so a migrating suite that
+ * iterates the roster keeps working.
+ */
+export const DEV_ACCOUNT_NAMES = Object.keys(DEV_ACCOUNTS) as DevAccountName[];
+
 /** Whether `name` is one of the built-in dev accounts. */
 export function isDevAccountName(name: string): name is DevAccountName {
   return name in DEV_ACCOUNTS;

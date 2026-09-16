@@ -33,7 +33,18 @@ export {
   PASEO_ASSET_HUB,
   liveChain,
 } from "./dev-accounts.js";
+export { DEV_ACCOUNT_NAMES } from "./dev-accounts.js";
 export type { DevAccount, DevAccountName } from "./dev-accounts.js";
+
+// Log entry types under the names `@parity/host-api-test-sdk` exports them by,
+// so a suite that annotates a control-surface result compiles unchanged.
+export type {
+  ChatMessageRecord as ChatMessageLogEntry,
+  PermissionDecision as PermissionLogEntry,
+  PermissionPolicy as PermissionBehavior,
+  SigningLogEntry,
+} from "../web/create-mock-host.js";
+export type { LoginBehavior } from "./host-page.js";
 
 /** Selector for the product iframe the host page creates. */
 const PRODUCT_FRAME = `#${PRODUCT_FRAME_ID}`;
