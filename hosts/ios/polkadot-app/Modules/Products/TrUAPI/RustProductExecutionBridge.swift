@@ -69,9 +69,16 @@ class RustProductExecutionBridge: HostBridge, @unchecked Sendable {
     }
 
     func remotePermission(request: RemotePermission) async throws -> Bool {
-        try await dependencies.permissionGuard.requestPermissionsBatched(
+        // A permission this host has no presentation for is refused here rather
+        // than passed on: `requestPermissionsBatched` has nothing to prompt for
+        // on an empty list and answers yes, which would grant silently what the
+        // user was never shown.
+        guard let domainRequest = request.toDomainRequest() else {
+            return false
+        }
+        return try await dependencies.permissionGuard.requestPermissionsBatched(
             productId: dependencies.productId,
-            permissions: request.toDomainRequest().toDomainPermissions()
+            permissions: domainRequest.toDomainPermissions()
         )
     }
 
@@ -188,14 +195,22 @@ extension HostDevicePermissionRequest {
 }
 
 extension RemotePermission {
-    /// Maps the TrUAPI remote permission to the Products domain request.
-    func toDomainRequest() -> Products.RemotePermissionRequest {
+    /// Maps the TrUAPI remote permission to the Products domain request, or
+    /// `nil` for one this host cannot yet present to the user.
+    ///
+    /// `credential` (RFC 0025) attaches a host-derived caller identity to an
+    /// outbound request, so what the prompt says is the whole of what the user
+    /// is consenting to. Until that prompt exists the caller refuses; mapping
+    /// it onto a neighbouring permission would ask the wrong question and
+    /// record the answer against the wrong grant.
+    func toDomainRequest() -> Products.RemotePermissionRequest? {
         switch self {
         case let .remote(domains): .remote(domains: domains)
         case .webRtc: .webRTC
         case .chainSubmit: .chainSubmit
         case .preimageSubmit: .preimageSubmit
         case .statementSubmit: .statementSubmit
+        case .credential: nil
         }
     }
 }
