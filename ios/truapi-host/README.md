@@ -9,7 +9,7 @@ The package lives in the truapi repo next to the Rust core it wraps. `Package.sw
 The `TrUAPIHost` SPM package an iOS host app imports directly. It carries:
 
 - [`Sources/TrUAPIHost/TrUAPIHost.swift`](Sources/TrUAPIHost/TrUAPIHost.swift) — the hand-written shell: `TrUAPIHostRuntime`, `TrUAPIProductExecution`, their configuration and bridge protocols, and `LocalhostBridgeBootstrap`.
-- [`Sources/TrUAPIHost/ProductScripts.swift`](Sources/TrUAPIHost/ProductScripts.swift) — `TrUAPIHost.installProductScripts(into:execution:endpoint:)`, which registers the bootstrap and the lockdown container with the frame scopes the lockdown depends on and peeks the WebRTC decision. The supported way to wire a product web view.
+- [`Sources/TrUAPIHost/ProductScripts.swift`](Sources/TrUAPIHost/ProductScripts.swift) registers the shared container in every frame. Its web-view overload installs permission-controlled networking and returns a `ProductScriptInstallation` to retain with the view.
 - the Rust core as a binary target — a GitHub release asset by default (`publishedBinaryURL` in the root `Package.swift`), or the locally built `Binaries/truapi_server.xcframework` when `useLocalBinary` is flipped to true.
 - `Sources/TrUAPIHost/truapi_server.swift` and `Sources/truapi_serverFFI/include/` — the generated UniFFI bindings.
 - [`js/container/`](../../js/container) — the TS lockdown container; built into `Sources/TrUAPIHost/Resources/truapi-container.js` and exposed via `ContainerScriptBundle.load()`.
@@ -408,31 +408,46 @@ execution.notifyPreimageChanged(key: preimageKey, value: preimageBytesOrNil)
 runtime.notifyChainResponse(connectionId: chainConnectionId, json: jsonRpcResponse)
 runtime.notifyChainClosed(connectionId: chainConnectionId)
 
-// Register the bootstrap + lockdown container before the web view loads the
-// product page. `installProductScripts` owns the two properties that are easy to
-// get wrong and silently fatal: the container goes into EVERY frame (a frame
-// without it has pristine fetch/WebSocket/RTCPeerConnection, and a product
-// reaches one through an `<iframe>` in its own HTML), while the bootstrap stays
-// main-frame-only so a subframe has no bridge and no policy and fails closed. It
-// also resolves the WebRTC decision by peeking the execution rather than prompting.
-// Do not register these scripts by hand.
-let contentController = WKUserContentController()
-try await TrUAPIHost.installProductScripts(
-    into: contentController,
+// Install before loading. The product URL comes from trusted host resolution.
+let configuration = WKWebViewConfiguration()
+configuration.websiteDataStore = .nonPersistent()
+let webView = WKWebView(frame: .zero, configuration: configuration)
+let productURL = URL(string: "https://your-product.example/")!
+let installation = try await TrUAPIHost.installProductScripts(
+    into: webView,
     execution: execution,
-    endpoint: endpoint
+    endpoint: endpoint,
+    productURL: productURL
+)
+webView.load(URLRequest(url: productURL))
+
+// Retain installation with the view. Use this setter while views exist so
+// native request rules are restricted before the shared Rust decision changes.
+try await installation.setPermissionAuthorizationStatus(
+    request: .remote(RemotePermissionRequest(permission: .remote(domains: ["api.example.com"]))),
+    status: .denied
 )
 
-let configuration = WKWebViewConfiguration()
-configuration.userContentController = contentController
-let webView = WKWebView(frame: .zero, configuration: configuration)
-webView.load(URLRequest(url: URL(string: "https://your-product.example/")!))
+// On view teardown, before closing its execution:
+installation.dispose()
+execution.close()
 
 // On logout:
 runtime.disconnect()
 ```
 
 The product page reads `window.__truapi_localhost.url` (set by the bootstrap script) and passes it to `@parity/truapi`'s `createWebSocketProvider(url)`.
+
+The web-view installation calls Rust's `authorizeNetworkAccess(url:)` through a native WebKit reply handler. It installs content rules that block unapproved network destinations, including fetch redirects, while preserving the exact product origin and bridge endpoint. A successful remote fetch registers that origin for WebKit's `raw` resource category. Remote images, scripts, and other resource categories remain blocked. The container still runs in every frame; only the main frame receives the authorization bridge.
+
+The helper requires an unloaded web view, a nonpersistent website data store and an empty navigation delegate, then installs its own product-origin navigation check. It throws rather than replacing an existing delegate. A host that subsequently composes navigation handling must apply `installation.allowsNavigation(to:)` before allowing any load. Do not remove the installed content rules or message handler while the view is live.
+
+Use `installation.setPermissionAuthorizationStatus` for settings changes while views exist. It first restricts every live package-installed view, then updates Rust and refreshes each view against its own execution. This includes other executions of the same product; other products may briefly have remote loads blocked during the update. Calling the execution's low-level setter directly cannot update existing WebKit rules. Dispose installations before closing executions, switching products or disconnecting the runtime. Discard the view afterwards; create a fresh view for another product or installation.
+
+Redirects to origins that have never been registered by an authorized fetch in this view currently fail closed, even when Rust already stores a grant for the destination. Explicitly fetching the destination registers it. This conservative adapter does not enumerate wildcard grants into browser rules. The older controller-only installation remains available but has no remote authorization hook, so cross-origin fetch stays denied.
+
+Native verification must use the built container in a real WKWebView. `ProductNetworkAccessTests` checks grant/fetch, denied and unseen redirect destinations, revocation across two executions, raw preload after revocation, exact rule matching and disposal. These Apple-only tests cannot run on Linux. Consumer apps that assemble their own scripts must adopt the web-view helper and safe settings/teardown paths; rebuilding this package alone does not update that wiring.
+
 
 ## Build outputs in detail
 
