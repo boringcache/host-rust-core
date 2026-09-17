@@ -141,21 +141,15 @@ final class StubCoreStorage: HostCoreStorageBackend, @unchecked Sendable {
     private var store: [Data: Data] = [:]
 
     func read(key: Data) throws -> Data? {
-        lock.lock()
-        defer { lock.unlock() }
-        return store[key]
+        lock.withLock { store[key] }
     }
 
     func write(key: Data, value: Data) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        store[key] = value
+        lock.withLock { store[key] = value }
     }
 
     func clear(key: Data) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        store[key] = nil
+        lock.withLock { store[key] = nil }
     }
 }
 
@@ -177,22 +171,20 @@ final class StubHostBridge: HostBridge, @unchecked Sendable {
     }
 
     var requestedDevicePermissions: [HostDevicePermissionRequest] {
-        permissionLock.lock()
-        defer { permissionLock.unlock() }
-        return deviceRequests
+        permissionLock.withLock { deviceRequests }
     }
 
     private func nextDeviceDecision(request: HostDevicePermissionRequest) -> PermissionDecision {
-        permissionLock.lock()
-        defer { permissionLock.unlock() }
-        deviceRequests.append(request)
-        return deviceDecisions.isEmpty ? .deny : deviceDecisions.removeFirst()
+        permissionLock.withLock {
+            deviceRequests.append(request)
+            return deviceDecisions.isEmpty ? .deny : deviceDecisions.removeFirst()
+        }
     }
 
     private func nextRemoteDecision() -> PermissionDecision {
-        permissionLock.lock()
-        defer { permissionLock.unlock() }
-        return remoteDecisions.isEmpty ? .deny : remoteDecisions.removeFirst()
+        permissionLock.withLock {
+            remoteDecisions.isEmpty ? .deny : remoteDecisions.removeFirst()
+        }
     }
 
     func navigateTo(url _: String) async throws {}

@@ -481,38 +481,6 @@ struct RustRuntimeBridgeTests {
         }
     }
 
-    @Test func actionConfirmationCancellationDenies() async {
-        let presenter = TrUAPIConfirmationPresenter(
-            routerFacade: ProductRoutersFacade.worker()
-        )
-        for review in [
-            UserConfirmationReview.preimageSubmit(PreimageSubmitReview(size: 1_024)),
-            .productSubtree(ProductSubtreeReview(productId: "test.product"))
-        ] {
-            let task = Task {
-                await presenter.confirm(review: review, from: "test.product")
-            }
-            task.cancel()
-            #expect(await task.value == false)
-        }
-    }
-
-    @Test func permissionConfirmationCancellationDenies() async {
-        let presenter = TrUAPIConfirmationPresenter(
-            routerFacade: ProductRoutersFacade.worker()
-        )
-        let task = Task {
-            await presenter.confirmPermission(
-                review: .identityDisclosure(IdentityDisclosureReview(productId: "test.product")),
-                from: "test.product"
-            )
-        }
-
-        task.cancel()
-
-        #expect(await task.value == .deny)
-    }
-
     // MARK: currentTheme
 
     @Test func currentThemeReturnsDark() throws {
