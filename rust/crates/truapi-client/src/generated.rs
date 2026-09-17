@@ -5,7 +5,7 @@
 use super::*;
 
 /// Fingerprint of the generated wire contract.
-pub const TRUAPI_WIRE_SCHEMA_HASH: &str = "2a2713140f9fb3e1";
+pub const TRUAPI_WIRE_SCHEMA_HASH: &str = "c587cc31e1b00844";
 
 /// `account_connection_status_subscribe` method marker.
 pub struct AccountConnectionStatusSubscribe;
@@ -15,9 +15,9 @@ impl AccountConnectionStatusSubscribe {
         service: "Account",
         method: "connection_status_subscribe",
         wire_name: "account_connection_status_subscribe",
-        request_type: "()",
+        request_type: "truapi::versioned::account::HostAccountConnectionStatusSubscribeRequest",
         response_type: "truapi::versioned::account::HostAccountConnectionStatusSubscribeItem",
-        error_type: Some("truapi::v01::GenericError"),
+        error_type: Some("truapi::versioned::account::HostAccountConnectionStatusSubscribeError"),
         kind: MethodKind::Subscription,
         direction: Direction::ProductToHost,
         required_execution: None,
@@ -28,8 +28,8 @@ impl AccountConnectionStatusSubscribe {
     };
 }
 impl SubscriptionMethod for AccountConnectionStatusSubscribe {
-    type Request = ();
-    type Error = truapi::v01::GenericError;
+    type Request = truapi::versioned::account::HostAccountConnectionStatusSubscribeRequest;
+    type Error = truapi::versioned::account::HostAccountConnectionStatusSubscribeError;
     type Item = truapi::versioned::account::HostAccountConnectionStatusSubscribeItem;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -341,7 +341,7 @@ impl ChainFollowHeadSubscribe {
         wire_name: "chain_follow_head_subscribe",
         request_type: "truapi::versioned::chain::RemoteChainHeadFollowRequest",
         response_type: "truapi::versioned::chain::RemoteChainHeadFollowItem",
-        error_type: Some("truapi::v01::GenericError"),
+        error_type: Some("truapi::versioned::chain::RemoteChainHeadFollowError"),
         kind: MethodKind::Subscription,
         direction: Direction::ProductToHost,
         required_execution: None,
@@ -353,7 +353,7 @@ impl ChainFollowHeadSubscribe {
 }
 impl SubscriptionMethod for ChainFollowHeadSubscribe {
     type Request = truapi::versioned::chain::RemoteChainHeadFollowRequest;
-    type Error = truapi::v01::GenericError;
+    type Error = truapi::versioned::chain::RemoteChainHeadFollowError;
     type Item = truapi::versioned::chain::RemoteChainHeadFollowItem;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -771,9 +771,9 @@ impl ChatListSubscribe {
         service: "Chat",
         method: "list_subscribe",
         wire_name: "chat_list_subscribe",
-        request_type: "()",
+        request_type: "truapi::versioned::chat::HostChatListSubscribeRequest",
         response_type: "truapi::versioned::chat::HostChatListSubscribeItem",
-        error_type: Some("truapi::v01::GenericError"),
+        error_type: Some("truapi::versioned::chat::HostChatListSubscribeError"),
         kind: MethodKind::Subscription,
         direction: Direction::ProductToHost,
         required_execution: Some(ExecutionKind::Worker),
@@ -784,8 +784,8 @@ impl ChatListSubscribe {
     };
 }
 impl SubscriptionMethod for ChatListSubscribe {
-    type Request = ();
-    type Error = truapi::v01::GenericError;
+    type Request = truapi::versioned::chat::HostChatListSubscribeRequest;
+    type Error = truapi::versioned::chat::HostChatListSubscribeError;
     type Item = truapi::versioned::chat::HostChatListSubscribeItem;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -825,9 +825,9 @@ impl ChatActionSubscribe {
         service: "Chat",
         method: "action_subscribe",
         wire_name: "chat_action_subscribe",
-        request_type: "()",
+        request_type: "truapi::versioned::chat::HostChatActionSubscribeRequest",
         response_type: "truapi::versioned::chat::HostChatActionSubscribeItem",
-        error_type: Some("truapi::v01::GenericError"),
+        error_type: Some("truapi::versioned::chat::HostChatActionSubscribeError"),
         kind: MethodKind::Subscription,
         direction: Direction::ProductToHost,
         required_execution: Some(ExecutionKind::Worker),
@@ -838,8 +838,8 @@ impl ChatActionSubscribe {
     };
 }
 impl SubscriptionMethod for ChatActionSubscribe {
-    type Request = ();
-    type Error = truapi::v01::GenericError;
+    type Request = truapi::versioned::chat::HostChatActionSubscribeRequest;
+    type Error = truapi::versioned::chat::HostChatActionSubscribeError;
     type Item = truapi::versioned::chat::HostChatActionSubscribeItem;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -1203,9 +1203,9 @@ impl LocaleSubscribe {
         service: "Locale",
         method: "subscribe",
         wire_name: "locale_subscribe",
-        request_type: "()",
+        request_type: "truapi::versioned::locale::HostLocaleSubscribeRequest",
         response_type: "truapi::versioned::locale::HostLocaleSubscribeItem",
-        error_type: Some("truapi::v01::GenericError"),
+        error_type: Some("truapi::versioned::locale::HostLocaleSubscribeError"),
         kind: MethodKind::Subscription,
         direction: Direction::ProductToHost,
         required_execution: None,
@@ -1216,8 +1216,8 @@ impl LocaleSubscribe {
     };
 }
 impl SubscriptionMethod for LocaleSubscribe {
-    type Request = ();
-    type Error = truapi::v01::GenericError;
+    type Request = truapi::versioned::locale::HostLocaleSubscribeRequest;
+    type Error = truapi::versioned::locale::HostLocaleSubscribeError;
     type Item = truapi::versioned::locale::HostLocaleSubscribeItem;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -1438,6 +1438,60 @@ impl RequestMethod for PermissionsRequestRemotePermission {
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
 
+/// `pocket_list_subscribe` method marker.
+pub struct PocketListSubscribe;
+impl PocketListSubscribe {
+    /// Canonical metadata and frame ids for this method.
+    pub const DESCRIPTOR: MethodDescriptor = MethodDescriptor {
+        service: "Pocket",
+        method: "list_subscribe",
+        wire_name: "pocket_list_subscribe",
+        request_type: "truapi::versioned::pocket::HostPocketListSubscribeRequest",
+        response_type: "truapi::versioned::pocket::HostPocketListSubscribeItem",
+        error_type: Some("truapi::versioned::pocket::HostPocketListSubscribeError"),
+        kind: MethodKind::Subscription,
+        direction: Direction::ProductToHost,
+        required_execution: Some(ExecutionKind::Worker),
+        wire: MethodWire::Subscription(MethodIds {
+            trait_id: 18,
+            method_id: 0,
+        }),
+    };
+}
+impl SubscriptionMethod for PocketListSubscribe {
+    type Request = truapi::versioned::pocket::HostPocketListSubscribeRequest;
+    type Error = truapi::versioned::pocket::HostPocketListSubscribeError;
+    type Item = truapi::versioned::pocket::HostPocketListSubscribeItem;
+    const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
+}
+
+/// `pocket_remove_card` method marker.
+pub struct PocketRemoveCard;
+impl PocketRemoveCard {
+    /// Canonical metadata and frame ids for this method.
+    pub const DESCRIPTOR: MethodDescriptor = MethodDescriptor {
+        service: "Pocket",
+        method: "remove_card",
+        wire_name: "pocket_remove_card",
+        request_type: "truapi::versioned::pocket::HostPocketRemoveCardRequest",
+        response_type: "truapi::versioned::pocket::HostPocketRemoveCardResponse",
+        error_type: Some("truapi::versioned::pocket::HostPocketRemoveCardError"),
+        kind: MethodKind::Request,
+        direction: Direction::ProductToHost,
+        required_execution: Some(ExecutionKind::Worker),
+        wire: MethodWire::Request(MethodIds {
+            trait_id: 18,
+            method_id: 1,
+        }),
+    };
+}
+impl RequestMethod for PocketRemoveCard {
+    type Request = truapi::versioned::pocket::HostPocketRemoveCardRequest;
+    type Response = truapi::versioned::pocket::HostPocketRemoveCardResponse;
+    type Error = truapi::versioned::pocket::HostPocketRemoveCardError;
+    const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
+}
+
 /// `preimage_lookup_subscribe` method marker.
 pub struct PreimageLookupSubscribe;
 impl PreimageLookupSubscribe {
@@ -1448,7 +1502,7 @@ impl PreimageLookupSubscribe {
         wire_name: "preimage_lookup_subscribe",
         request_type: "truapi::versioned::preimage::RemotePreimageLookupSubscribeRequest",
         response_type: "truapi::versioned::preimage::RemotePreimageLookupSubscribeItem",
-        error_type: Some("truapi::v01::GenericError"),
+        error_type: Some("truapi::versioned::preimage::RemotePreimageLookupSubscribeError"),
         kind: MethodKind::Subscription,
         direction: Direction::ProductToHost,
         required_execution: None,
@@ -1460,7 +1514,7 @@ impl PreimageLookupSubscribe {
 }
 impl SubscriptionMethod for PreimageLookupSubscribe {
     type Request = truapi::versioned::preimage::RemotePreimageLookupSubscribeRequest;
-    type Error = truapi::v01::GenericError;
+    type Error = truapi::versioned::preimage::RemotePreimageLookupSubscribeError;
     type Item = truapi::versioned::preimage::RemotePreimageLookupSubscribeItem;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -1502,7 +1556,7 @@ impl RendererRender {
         wire_name: "renderer_render",
         request_type: "truapi::versioned::renderer::ProductRendererRenderRequest",
         response_type: "truapi::versioned::renderer::ProductRendererRenderItem",
-        error_type: Some("truapi::v01::GenericError"),
+        error_type: Some("truapi::versioned::renderer::ProductRendererRenderError"),
         kind: MethodKind::Subscription,
         direction: Direction::HostToProduct,
         required_execution: Some(ExecutionKind::Worker),
@@ -1514,7 +1568,7 @@ impl RendererRender {
 }
 impl HostSubscriptionMethod for RendererRender {
     type Request = truapi::versioned::renderer::ProductRendererRenderRequest;
-    type Error = truapi::v01::GenericError;
+    type Error = truapi::versioned::renderer::ProductRendererRenderError;
     type Item = truapi::versioned::renderer::ProductRendererRenderItem;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -1527,9 +1581,9 @@ impl RendererActionSubscribe {
         service: "Renderer",
         method: "action_subscribe",
         wire_name: "renderer_action_subscribe",
-        request_type: "()",
+        request_type: "truapi::versioned::renderer::HostRendererActionSubscribeRequest",
         response_type: "truapi::versioned::renderer::HostRendererActionSubscribeItem",
-        error_type: Some("truapi::v01::GenericError"),
+        error_type: Some("truapi::versioned::renderer::HostRendererActionSubscribeError"),
         kind: MethodKind::Subscription,
         direction: Direction::ProductToHost,
         required_execution: Some(ExecutionKind::Worker),
@@ -1540,8 +1594,8 @@ impl RendererActionSubscribe {
     };
 }
 impl SubscriptionMethod for RendererActionSubscribe {
-    type Request = ();
-    type Error = truapi::v01::GenericError;
+    type Request = truapi::versioned::renderer::HostRendererActionSubscribeRequest;
+    type Error = truapi::versioned::renderer::HostRendererActionSubscribeError;
     type Item = truapi::versioned::renderer::HostRendererActionSubscribeItem;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -1887,7 +1941,7 @@ impl StatementStoreSubmit {
         method: "submit",
         wire_name: "statement_store_submit",
         request_type: "truapi::versioned::statement_store::RemoteStatementStoreSubmitRequest",
-        response_type: "()",
+        response_type: "truapi::versioned::statement_store::RemoteStatementStoreSubmitResponse",
         error_type: Some("truapi::versioned::statement_store::RemoteStatementStoreSubmitError"),
         kind: MethodKind::Request,
         direction: Direction::ProductToHost,
@@ -1900,7 +1954,7 @@ impl StatementStoreSubmit {
 }
 impl RequestMethod for StatementStoreSubmit {
     type Request = truapi::versioned::statement_store::RemoteStatementStoreSubmitRequest;
-    type Response = ();
+    type Response = truapi::versioned::statement_store::RemoteStatementStoreSubmitResponse;
     type Error = truapi::versioned::statement_store::RemoteStatementStoreSubmitError;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -2048,9 +2102,9 @@ impl ThemeSubscribe {
         service: "Theme",
         method: "subscribe",
         wire_name: "theme_subscribe",
-        request_type: "()",
+        request_type: "truapi::versioned::theme::HostThemeSubscribeRequest",
         response_type: "truapi::versioned::theme::HostThemeSubscribeItem",
-        error_type: Some("truapi::v01::GenericError"),
+        error_type: Some("truapi::versioned::theme::HostThemeSubscribeError"),
         kind: MethodKind::Subscription,
         direction: Direction::ProductToHost,
         required_execution: None,
@@ -2061,8 +2115,8 @@ impl ThemeSubscribe {
     };
 }
 impl SubscriptionMethod for ThemeSubscribe {
-    type Request = ();
-    type Error = truapi::v01::GenericError;
+    type Request = truapi::versioned::theme::HostThemeSubscribeRequest;
+    type Error = truapi::versioned::theme::HostThemeSubscribeError;
     type Item = truapi::versioned::theme::HostThemeSubscribeItem;
     const DESCRIPTOR: MethodDescriptor = Self::DESCRIPTOR;
 }
@@ -2268,6 +2322,8 @@ pub const WORKER_METHODS: &[MethodDescriptor] = &[
     PaymentTopUp::DESCRIPTOR,
     PermissionsRequestDevicePermission::DESCRIPTOR,
     PermissionsRequestRemotePermission::DESCRIPTOR,
+    PocketListSubscribe::DESCRIPTOR,
+    PocketRemoveCard::DESCRIPTOR,
     PreimageLookupSubscribe::DESCRIPTOR,
     PreimageSubmit::DESCRIPTOR,
     RendererRender::DESCRIPTOR,
@@ -2300,6 +2356,8 @@ pub const WORKER_ONLY_METHODS: &[MethodDescriptor] = &[
     ChatListSubscribe::DESCRIPTOR,
     ChatPostMessage::DESCRIPTOR,
     ChatActionSubscribe::DESCRIPTOR,
+    PocketListSubscribe::DESCRIPTOR,
+    PocketRemoveCard::DESCRIPTOR,
     RendererRender::DESCRIPTOR,
     RendererActionSubscribe::DESCRIPTOR,
 ];
