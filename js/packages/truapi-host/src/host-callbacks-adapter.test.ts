@@ -37,6 +37,29 @@ import { makeHostCallbacks, settle } from "./test-support.js";
 
 const GENESIS = `0x${"11".repeat(32)}` as `0x${string}`;
 
+it("preserves one-use permission decisions across the WASM callback", async () => {
+  const review = {
+    tag: "IdentityDisclosure" as const,
+    value: { productId: "playground.dot" },
+  };
+  for (const decision of ["AllowOnce", "AllowAlways", "Deny"] as const) {
+    const reviews: UserConfirmationReview[] = [];
+    const raw = createWasmRawCallbacks(makeHostCallbacks({
+      userConfirmation: {
+        confirmPermission: async (request) => {
+          reviews.push(request);
+          return decision;
+        },
+      },
+    }));
+    const encoded = await raw.confirmPermission(UserConfirmationReview.enc(review));
+    expect({ decision: PermissionDecision.dec(encoded), reviews }).toEqual({
+      decision,
+      reviews: [review],
+    });
+  }
+});
+
 const defaultTheme = (variant: ThemeVariant): HostThemeSubscribeItemValue => ({
   name: { tag: "Default" },
   variant,

@@ -473,7 +473,7 @@ impl From<NativePermissionDecision> for PermissionDecision {
 /// executor's worker threads, and blocking one of those threads can stall
 /// the entire bridge — not just the request being served. Async callbacks
 /// (`navigate_to`, `push_notification`, `device_permission`,
-/// `remote_permission`, `feature_supported`, `confirm_user_action`,
+/// `remote_permission`, `feature_supported`, `confirm_user_action`, `confirm_permission`,
 /// `lookup_preimage`) are awaited by the core — implementations hop to the
 /// main thread for any UI and may keep the future pending arbitrarily long,
 /// but must suspend rather than block the polling thread (foreign
@@ -566,6 +566,12 @@ pub trait HostCallbacks: Send + Sync {
         &self,
         review: UserConfirmationReview,
     ) -> Result<bool, HostRejection>;
+
+    /// Preserve the lifetime of consent for identity and account disclosures.
+    async fn confirm_permission(
+        &self,
+        review: UserConfirmationReview,
+    ) -> Result<NativePermissionDecision, HostRejection>;
 
     /// Look up one preimage value by key. The native shim emits this as the
     /// current item in its subscription stream.
@@ -1967,6 +1973,21 @@ impl AuthPresenter for CallbackPlatform {
 
 #[async_trait]
 impl UserConfirmation for CallbackPlatform {
+    async fn confirm_permission(
+        &self,
+        review: UserConfirmationReview,
+    ) -> Result<PermissionDecision, v01::GenericError> {
+        self.callbacks.on_core_log(
+            "truapi.native.callback.confirm_permission".to_string(),
+            String::new(),
+        );
+        self.callbacks
+            .confirm_permission(review)
+            .await
+            .map(PermissionDecision::from)
+            .map_err(v01::GenericError::from)
+    }
+
     async fn confirm_user_action(
         &self,
         review: UserConfirmationReview,
@@ -2468,6 +2489,8 @@ mod tests {
         os_refused: Option<v01::HostDevicePermissionRequest>,
         /// Configurable prompt outcome for grant, denial, and callback failure tests.
         remote_permission_result: Result<NativePermissionDecision, HostRejection>,
+        /// Disclosure consent is distinct from boolean action confirmation.
+        permission_confirmation_result: NativePermissionDecision,
         /// Allows tests to close an execution before its permission prompt returns.
         remote_permission_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     }
@@ -2508,6 +2531,7 @@ mod tests {
                 worker_demand: Mutex::new(Vec::new()),
                 os_refused: None,
                 remote_permission_result: Ok(NativePermissionDecision::Deny),
+                permission_confirmation_result: NativePermissionDecision::Deny,
                 remote_permission_hook: Mutex::new(None),
             }
         }
@@ -2600,6 +2624,12 @@ mod tests {
             _review: UserConfirmationReview,
         ) -> Result<bool, HostRejection> {
             Ok(false)
+        }
+        async fn confirm_permission(
+            &self,
+            _review: UserConfirmationReview,
+        ) -> Result<NativePermissionDecision, HostRejection> {
+            Ok(self.permission_confirmation_result)
         }
         async fn lookup_preimage(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>, HostRejection> {
             Ok(self
@@ -3861,6 +3891,13 @@ mod tests {
         struct Noop;
         #[async_trait::async_trait]
         impl HostCallbacks for Noop {
+            async fn confirm_permission(
+                &self,
+                _review: UserConfirmationReview,
+            ) -> Result<NativePermissionDecision, HostRejection> {
+                Ok(NativePermissionDecision::Deny)
+            }
+
             fn on_core_log(&self, _marker: String, _detail: String) {}
             fn worker_demand_changed(&self, _product_id: String, _transition: WorkerTransition) {}
             async fn navigate_to(&self, _url: String) -> Result<(), HostNavigateRejection> {
@@ -4007,6 +4044,13 @@ mod tests {
 
         #[async_trait::async_trait]
         impl HostCallbacks for GatedPermissionCallbacks {
+            async fn confirm_permission(
+                &self,
+                _review: UserConfirmationReview,
+            ) -> Result<NativePermissionDecision, HostRejection> {
+                Ok(NativePermissionDecision::Deny)
+            }
+
             fn on_core_log(&self, _marker: String, _detail: String) {}
             fn worker_demand_changed(&self, _product_id: String, _transition: WorkerTransition) {}
             async fn navigate_to(&self, _url: String) -> Result<(), HostNavigateRejection> {
@@ -4441,6 +4485,37 @@ mod tests {
             .unwrap();
             assert_eq!(result, expected);
         }
+    }
+
+    #[test]
+    fn native_permission_confirmation_preserves_consent_lifetime() {
+        futures::executor::block_on(async {
+            for decision in [
+                NativePermissionDecision::AllowOnce,
+                NativePermissionDecision::AllowAlways,
+                NativePermissionDecision::Deny,
+            ] {
+                let platform = CallbackPlatform {
+                    callbacks: Arc::new(EventCallbacks {
+                        permission_confirmation_result: decision,
+                        ..EventCallbacks::new()
+                    }),
+                    events: Arc::default(),
+                };
+                let review = UserConfirmationReview::IdentityDisclosure(
+                    truapi_platform::IdentityDisclosureReview {
+                        product_id: "product.dot".to_string(),
+                    },
+                );
+                assert_eq!(
+                    (
+                        platform.confirm_permission(review.clone()).await.unwrap(),
+                        platform.confirm_user_action(review).await.unwrap(),
+                    ),
+                    (PermissionDecision::from(decision), false),
+                );
+            }
+        });
     }
 
     #[test]

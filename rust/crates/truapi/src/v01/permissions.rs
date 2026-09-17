@@ -64,18 +64,15 @@ pub enum RemotePermission {
     #[display("access to {}", domains.join(", "))]
     Remote {
         /// Domain patterns requested by the product. Each is an exact host, a
-        /// single-level wildcard (`*.example.com`), or `*` for any host.
+        /// wildcard covering every descendant (`*.example.com`), or `*` for any host.
         domains: Vec<String>,
     },
     /// WebRTC access.
     ///
-    /// Enforced inside the product's own realm rather than at a network layer:
-    /// ICE reaches an arbitrary host over UDP, so no content rule list, request
-    /// interceptor, or CSP directive observes it. A host peeks this decision
-    /// before the product realm exists and the lockdown container removes
-    /// `RTCPeerConnection` — and its vendor-prefixed aliases — unless the answer
-    /// was an explicit grant. Resolving it up front is what makes the gate
-    /// unforgeable, and it means a fresh grant applies from the next load.
+    /// The container authorizes each peer connection through Rust before its
+    /// first network method. Later methods on that connection share the same
+    /// decision, so a one-use grant permits one connection. New connections
+    /// check current permissions without requiring a page reload.
     ///
     /// Camera and microphone capture is gated by the OS permission prompts and
     /// [`HostDevicePermissionRequest`], not by this permission.

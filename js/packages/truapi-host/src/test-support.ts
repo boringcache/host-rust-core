@@ -36,7 +36,10 @@ export function makeHostCallbacks(
       clearCoreStorage: async () => {},
     },
     auth: { authStateChanged: () => {} },
-    userConfirmation: { confirmUserAction: async () => false },
+    userConfirmation: {
+      confirmUserAction: async () => false,
+      confirmPermission: async () => "Deny",
+    },
     preimage: {
       async *lookupPreimage() {},
     },

@@ -47,6 +47,32 @@ struct ProductNetworkAccessTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func allowOnceAuthorizesOneWebRtcConnection() async throws {
+        let product = try await NetworkTestProduct.open(
+            bridge: StubHostBridge(remoteDecisions: [.allowOnce, .deny])
+        )
+        defer { product.close() }
+
+        let decisions = try await withNetworkTestTimeout("WebRTC permission") {
+            try await product.webView.callAsyncJavaScript("""
+                const first = new RTCPeerConnection({ iceServers: [] });
+                const second = new RTCPeerConnection({ iceServers: [] });
+                try {
+                  const offers = [await first.createOffer(), await first.createOffer()];
+                  let secondDecision = 'allowed';
+                  try { await second.createOffer(); } catch { secondDecision = 'denied'; }
+                  return [...offers.map(offer => offer.type), secondDecision];
+                } finally {
+                  first.close();
+                  second.close();
+                }
+                """, arguments: [:], in: nil, contentWorld: .page) as? [String]
+        }
+
+        #expect(decisions == ["offer", "offer", "denied"])
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func stylesheetsAndFontsKeepTheirNativeLoadingBehavior() async throws {
         let product = try await NetworkTestProduct.open()
         defer { product.close() }
@@ -161,8 +187,8 @@ private struct NetworkTestProduct {
             webView.navigationDelegate = ready
             let window = try NetworkTestWindow(webView)
             do {
-                try await TrUAPIHost.installProductScripts(
-                    into: webView, execution: execution, endpoint: execution.startWsBridge(bindPort: 0)
+                try TrUAPIHost.installProductScripts(
+                    into: webView, endpoint: execution.startWsBridge(bindPort: 0)
                 )
                 #expect(webView.navigationDelegate === ready)
                 #expect(webView.configuration.websiteDataStore.isPersistent)

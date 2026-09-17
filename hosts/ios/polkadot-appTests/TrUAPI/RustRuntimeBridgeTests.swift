@@ -331,6 +331,22 @@ struct RustRuntimeBridgeTests {
         #expect(presenter.receivedReview == review)
     }
 
+    @Test(arguments: [TrUAPIPermissionDecision.allowOnce, .allowAlways, .deny])
+    func confirmPermissionPreservesLifetime(decision: TrUAPIPermissionDecision) async throws {
+        let presenter = MockConfirmationPresenter()
+        presenter.permissionDecisionToReturn = decision
+        let bridge = makeBridge(productId: "caller.dot", confirmationPresenter: presenter)
+        let review = UserConfirmationReview.accountAccess(
+            AccountAccessReview(requestingProductId: "caller.dot", targetProductId: "target.dot")
+        )
+
+        let result = try await bridge.confirmPermission(review: review)
+
+        #expect(result == decision)
+        #expect(presenter.receivedReview == review)
+        #expect(presenter.receivedRequesterName == "caller.dot")
+    }
+
     // MARK: lookupPreimage
 
     @Test func lookupPreimageAwaitsFetchOnColdMiss() async throws {
@@ -424,12 +440,28 @@ struct RustRuntimeBridgeTests {
             routerFacade: ProductRoutersFacade.worker()
         )
 
-        let verdict = await presenter.confirm(
+        let verdict = await presenter.confirmPermission(
             review: .productSubtree(ProductSubtreeReview(productId: "test.product")),
             from: "test.product"
         )
 
-        #expect(!verdict)
+        #expect(verdict == .deny)
+    }
+
+    @Test func permissionConfirmationCancellationDenies() async {
+        let presenter = TrUAPIConfirmationPresenter(
+            routerFacade: ProductRoutersFacade.worker()
+        )
+        let task = Task {
+            await presenter.confirmPermission(
+                review: .identityDisclosure(IdentityDisclosureReview(productId: "test.product")),
+                from: "test.product"
+            )
+        }
+
+        task.cancel()
+
+        #expect(await task.value == .deny)
     }
 
     // MARK: currentTheme

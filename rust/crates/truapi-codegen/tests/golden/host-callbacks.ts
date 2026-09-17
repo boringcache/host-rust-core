@@ -1397,6 +1397,13 @@ export interface ThemeHost {
  */
 export interface UserConfirmation {
   /**
+   * Preserve the lifetime of consent for identity and account disclosures.
+   */
+  confirmPermission?(
+    review: UserConfirmationReview,
+  ): Promise<PermissionDecision>;
+
+  /**
    * Confirm a reviewed action before the core continues.
    */
   confirmUserAction(review: UserConfirmationReview): Promise<boolean>;

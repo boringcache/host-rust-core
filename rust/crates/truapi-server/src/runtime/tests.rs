@@ -29,7 +29,7 @@ use truapi::versioned::local_storage::{
 };
 use truapi::versioned::notifications::{
     HostPushNotificationCancelRequest, HostPushNotificationCancelResponse,
-    HostPushNotificationRequest, HostPushNotificationResponse,
+    HostPushNotificationError, HostPushNotificationRequest, HostPushNotificationResponse,
 };
 use truapi::versioned::permissions::{HostDevicePermissionRequest, HostDevicePermissionResponse};
 use truapi::versioned::preimage::{
@@ -1459,13 +1459,162 @@ fn push_notification_delegates_payload_and_returns_host_id() {
 }
 
 #[test]
+fn push_notification_consumes_allow_once_before_scheduling() {
+    for request_upfront in [false, true] {
+        let platform = Arc::new(StubPlatform {
+            device_permission_decisions: Mutex::new(
+                [
+                    truapi_platform::PermissionDecision::AllowOnce,
+                    truapi_platform::PermissionDecision::Deny,
+                ]
+                .into(),
+            ),
+            notification_id: 42,
+            ..Default::default()
+        });
+        let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
+        let cx = CallContext::default();
+        let notification = v01::HostPushNotificationRequest {
+            text: "Hello".to_string(),
+            deeplink: None,
+            scheduled_at: None,
+        };
+
+        if request_upfront {
+            assert_eq!(
+                futures::executor::block_on(host.request_device_permission(
+                    &cx,
+                    HostDevicePermissionRequest::V1(
+                        v01::HostDevicePermissionRequest::Notifications
+                    ),
+                ))
+                .unwrap(),
+                HostDevicePermissionResponse::V1(v01::HostDevicePermissionResponse {
+                    granted: true
+                })
+            );
+        }
+        let first = futures::executor::block_on(
+            host.send_push_notification(&cx, HostPushNotificationRequest::V1(notification.clone())),
+        );
+        let second = futures::executor::block_on(
+            host.send_push_notification(&cx, HostPushNotificationRequest::V1(notification.clone())),
+        );
+
+        assert_eq!(
+            (
+                first,
+                second,
+                platform.pushed_notifications.lock().unwrap().clone(),
+                platform.device_permission_requests.lock().unwrap().clone(),
+            ),
+            (
+                Ok(HostPushNotificationResponse::V1(
+                    v01::HostPushNotificationResponse { id: 42 }
+                )),
+                Err(CallError::Domain(HostPushNotificationError::V1(
+                    v01::HostPushNotificationError::Unknown {
+                        reason: "Notifications permission denied".to_string(),
+                    },
+                ))),
+                vec![notification],
+                vec![v01::HostDevicePermissionRequest::Notifications; 2],
+            ),
+            "request_upfront={request_upfront}"
+        );
+    }
+}
+
+#[test]
+fn push_notification_denial_never_reaches_scheduler() {
+    let platform = Arc::new(StubPlatform {
+        device_permission_decisions: Mutex::new([truapi_platform::PermissionDecision::Deny].into()),
+        ..Default::default()
+    });
+    let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
+    let cx = CallContext::default();
+    let request = HostPushNotificationRequest::V1(v01::HostPushNotificationRequest {
+        text: "Hello".to_string(),
+        deeplink: None,
+        scheduled_at: None,
+    });
+
+    let response = futures::executor::block_on(host.send_push_notification(&cx, request));
+
+    assert_eq!(
+        (
+            response,
+            platform.pushed_notifications.lock().unwrap().clone(),
+            platform.device_permission_requests.lock().unwrap().clone(),
+        ),
+        (
+            Err(CallError::Domain(HostPushNotificationError::V1(
+                v01::HostPushNotificationError::Unknown {
+                    reason: "Notifications permission denied".to_string(),
+                },
+            ))),
+            vec![],
+            vec![v01::HostDevicePermissionRequest::Notifications],
+        )
+    );
+}
+
+#[test]
+fn push_notification_reuses_allow_always() {
+    let platform = Arc::new(StubPlatform {
+        device_permission_decisions: Mutex::new(
+            [
+                truapi_platform::PermissionDecision::AllowAlways,
+                truapi_platform::PermissionDecision::Deny,
+            ]
+            .into(),
+        ),
+        notification_id: 42,
+        ..Default::default()
+    });
+    let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
+    let cx = CallContext::default();
+    let notification = v01::HostPushNotificationRequest {
+        text: "Hello".to_string(),
+        deeplink: None,
+        scheduled_at: None,
+    };
+    let first = futures::executor::block_on(
+        host.send_push_notification(&cx, HostPushNotificationRequest::V1(notification.clone())),
+    );
+    let second = futures::executor::block_on(
+        host.send_push_notification(&cx, HostPushNotificationRequest::V1(notification.clone())),
+    );
+
+    assert_eq!(
+        (
+            first,
+            second,
+            platform.pushed_notifications.lock().unwrap().clone(),
+            platform.device_permission_requests.lock().unwrap().clone(),
+        ),
+        (
+            Ok(HostPushNotificationResponse::V1(
+                v01::HostPushNotificationResponse { id: 42 }
+            )),
+            Ok(HostPushNotificationResponse::V1(
+                v01::HostPushNotificationResponse { id: 42 }
+            )),
+            vec![notification; 2],
+            vec![v01::HostDevicePermissionRequest::Notifications],
+        )
+    );
+}
+
+#[test]
 fn cancel_notification_delegates_host_id() {
     let cancelled_notifications = Arc::new(Mutex::new(Vec::new()));
     let platform = Arc::new(StubPlatform {
         cancelled_notifications: cancelled_notifications.clone(),
+        device_permission_decisions: Mutex::new([truapi_platform::PermissionDecision::Deny].into()),
         ..Default::default()
     });
-    let host = ProductRuntimeHost::new_compat(platform, test_spawner());
+    let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
     let cx = CallContext::default();
     let request =
         HostPushNotificationCancelRequest::V1(v01::HostPushNotificationCancelRequest { id: 42 });
@@ -1473,13 +1622,13 @@ fn cancel_notification_delegates_host_id() {
     let response =
         futures::executor::block_on(host.cancel_push_notification(&cx, request)).unwrap();
 
-    assert_eq!(response, HostPushNotificationCancelResponse::V1);
     assert_eq!(
-        cancelled_notifications
-            .lock()
-            .expect("notification cancellation list mutex poisoned")
-            .as_slice(),
-        &[42]
+        (
+            response,
+            cancelled_notifications.lock().unwrap().clone(),
+            platform.device_permission_requests.lock().unwrap().clone(),
+        ),
+        (HostPushNotificationCancelResponse::V1, vec![42], vec![])
     );
 }
 
@@ -1630,6 +1779,68 @@ fn get_account_other_product_accepts_confirmation_then_derives_key() {
         inner.account.public_key,
         test_product_account_public("other.dot", 0).to_vec()
     );
+}
+
+#[test]
+fn get_account_allow_once_does_not_authorize_the_next_disclosure() {
+    futures::executor::block_on(async {
+        let platform = Arc::new(StubPlatform {
+            permission_confirmation_decisions: Mutex::new(
+                [
+                    truapi_platform::PermissionDecision::AllowOnce,
+                    truapi_platform::PermissionDecision::Deny,
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        });
+        let host = ProductRuntimeHost::new(
+            platform.clone(),
+            runtime_config("myapp.dot"),
+            test_spawner(),
+        );
+        let session = sso_session_info();
+        install_pairing_session(&host, session.clone());
+        cache_test_product_subtree(&host, &session, "other.dot");
+        let request = HostAccountGetRequest::V1(v01::HostAccountGetRequest {
+            product_account_id: account_id("other.dot", 0),
+        });
+        let response = host
+            .get_account(&CallContext::default(), request.clone())
+            .await
+            .unwrap();
+        let HostAccountGetResponse::V1(response) = response;
+        let saved = platform
+            .read_core_storage(CoreStorageKey::account_access_authorization(
+                "myapp", "other",
+            ))
+            .await
+            .unwrap();
+        let mut rejected = Vec::new();
+        for _ in 0..2 {
+            rejected.push(matches!(
+                host.get_account(&CallContext::default(), request.clone())
+                    .await,
+                Err(CallError::Domain(HostAccountGetError::V1(
+                    v01::HostAccountGetError::Rejected
+                )))
+            ));
+        }
+        assert_eq!(
+            (
+                response.account.public_key,
+                saved,
+                rejected,
+                platform.account_access_reviews.lock().unwrap().len(),
+            ),
+            (
+                test_product_account_public("other.dot", 0).to_vec(),
+                None,
+                vec![true, true],
+                2,
+            ),
+        );
+    });
 }
 
 #[test]
@@ -1996,6 +2207,57 @@ fn get_user_id_caches_identity_disclosure_grant() {
     )
     .unwrap();
     assert_eq!(status, PermissionAuthorizationStatus::Authorized);
+}
+
+#[test]
+fn get_user_id_allow_once_does_not_authorize_the_next_disclosure() {
+    futures::executor::block_on(async {
+        let platform = Arc::new(StubPlatform {
+            permission_confirmation_decisions: Mutex::new(
+                [
+                    truapi_platform::PermissionDecision::AllowOnce,
+                    truapi_platform::PermissionDecision::Deny,
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        });
+        let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
+        install_pairing_session(&host, session_info());
+        let response = host
+            .get_user_id(&CallContext::default(), HostGetUserIdRequest::V1)
+            .await
+            .unwrap();
+        let HostGetUserIdResponse::V1(response) = response;
+        let status = host
+            .permission_authorization_status(PermissionAuthorizationRequest::IdentityDisclosure)
+            .await
+            .unwrap();
+        let mut rejected = Vec::new();
+        for _ in 0..2 {
+            rejected.push(matches!(
+                host.get_user_id(&CallContext::default(), HostGetUserIdRequest::V1)
+                    .await,
+                Err(CallError::Domain(HostGetUserIdError::V1(
+                    v01::HostGetUserIdError::PermissionDenied
+                )))
+            ));
+        }
+        assert_eq!(
+            (
+                response.primary_username,
+                status,
+                rejected,
+                platform.identity_disclosure_calls.load(Ordering::SeqCst),
+            ),
+            (
+                "Alice Smith".to_string(),
+                PermissionAuthorizationStatus::NotDetermined,
+                vec![true, true],
+                2,
+            ),
+        );
+    });
 }
 
 #[test]

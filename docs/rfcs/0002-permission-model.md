@@ -150,14 +150,14 @@ Each string entry is matched against the host portion of the URL. The matching
 rules are:
 
 - **Exact domain**: `"api.coingecko.com"` matches requests to `https://api.coingecko.com` only.
-- **Wildcard subdomain**: `"*.coingecko.com"` matches any single subdomain level, e.g. `api.coingecko.com`, `cdn.coingecko.com`, but NOT `coingecko.com` itself or `deep.api.coingecko.com` (two levels).
+- **Wildcard subdomain**: `"*.coingecko.com"` matches descendants at every depth, e.g. `api.coingecko.com`, `cdn.coingecko.com`, and `deep.api.coingecko.com`, but not `coingecko.com` itself.
 - **Wildcard all**: `"*"` matches any HTTP(S) host. This is a broad grant and host implementations SHOULD present a more prominent warning to the user when this entry appears.
 
-A pattern one label deep — `"*.com"`, `"*.dot"` — is a legal wildcard subdomain
-and is matched like any other. It is nearly as broad as `"*"`, so the prominent
-warning above applies to it too. Nothing narrower is enforced at match time: a
-pattern a host can persist is a pattern the core must consult, or a product would
-keep prompting for hosts the user already approved.
+Wildcard expansion stops at parents with at least two labels, matching legacy
+native coverage. A stored `"*.com"` or `"*.dot"` does not authorize concrete hosts;
+`"*"` remains the universal pattern. This is a label rule rather than a public
+suffix rule, so `"*.co.uk"` covers `example.co.uk`. A grant for a bare parent,
+such as `"coingecko.com"`, does not cover its subdomains.
 
 Matching is case-insensitive and runs on the IDNA ASCII form of the host, so
 every spelling of the same site — case, trailing root dot, Unicode or punycode —

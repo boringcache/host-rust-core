@@ -261,6 +261,8 @@ The core's `Permissions` platform trait has two methods, and so does `HostCallba
 
 Both return `PermissionDecision`: `.allowOnce`, `.allowAlways`, or `.deny`. Preserve the user’s choice; the core keeps one-use grants in memory and consumes them at the authorized operation. OS refusal after app consent should throw instead of returning `.deny`, which records a product denial. The same typed values drive the `TrUAPIProductExecution` permission admin API (`permissionAuthorizationStatus`, `setPermissionAuthorizationStatus`), which reads and updates the persisted decisions without prompting.
 
+Identity and account access reviews use `confirmPermission(review:)`, which also returns `PermissionDecision`. Override it to preserve Allow once. Its compatibility default maps `confirmUserAction`'s Boolean approval to `.allowAlways`; signing and other single-action reviews continue to use that Boolean callback.
+
 Fetch and existing remote-operation gates consume temporary grants. The current iOS camera/microphone checks only inspect status, so device one-use enforcement still requires a consuming operation path.
 
 ## SSO session handling
@@ -278,7 +280,7 @@ func prepareDisconnectRequest() -> Data
 - `.disconnected` — the peer ended the session; tear down the transport and records on the wallet side.
 - `.ignored` — the message was not a request; nothing to post.
 
-Confirmation-gated requests suspend on `confirmUserAction`, so `handleSsoRequest` can take arbitrarily long. Always call it from a `Task`, never the main thread.
+Confirmation-gated requests suspend on `confirmUserAction` or `confirmPermission`, so `handleSsoRequest` can take arbitrarily long. Always call it from a `Task`, never the main thread.
 
 `prepareDisconnectRequest()` returns the SCALE-encoded `Disconnected` message to post when the wallet is ending the session. Posting and record cleanup (host entry, device record, device-removed broadcast) stay with the wallet.
 
@@ -349,7 +351,7 @@ An account id must be exactly 32 bytes. Anything else is rejected as `NativeRene
 > (`MainActor` / `DispatchQueue.main`) before touching UIKit, WebKit, or the
 > `WKWebView`. The `async` callbacks (`navigateTo`, `pushNotification`,
 > `devicePermission`, `remotePermission`, `featureSupported`,
-> `confirmUserAction`, `lookupPreimage`) are awaited by the core, so an
+> `confirmUserAction`, `confirmPermission`, `lookupPreimage`) are awaited by the core, so an
 > implementation may suspend for as long as the user takes to decide (e.g.
 > `await MainActor.run { ... }` or an `withCheckedContinuation` around a
 > prompt); other TrUAPI traffic keeps flowing while you wait. The remaining
@@ -438,6 +440,10 @@ final class MyBridge: HostBridge, @unchecked Sendable {
         await MainActor.run { /* render review; */ false }
     }
 
+    func confirmPermission(review: UserConfirmationReview) async throws -> PermissionDecision {
+        await MainActor.run { /* render permission review; */ PermissionDecision.deny }
+    }
+
     func lookupPreimage(key: Data) async throws -> Data? { nil }
 
     func currentTheme() throws -> HostThemeSubscribeItem {
@@ -484,9 +490,8 @@ runtime.notifyChainClosed(connectionId: chainConnectionId)
 let configuration = WKWebViewConfiguration()
 let webView = WKWebView(frame: .zero, configuration: configuration)
 let productURL = URL(string: "https://your-product.example/")!
-try await TrUAPIHost.installProductScripts(
+try TrUAPIHost.installProductScripts(
     into: webView,
-    execution: execution,
     endpoint: endpoint
 )
 webView.load(URLRequest(url: productURL))
@@ -509,13 +514,15 @@ The product page reads `window.__truapi_localhost.url` (set by the bootstrap scr
 
 The shared container captures a private WebSocket connection to the product execution and asks Rust to authorize each fetch before invoking the native browser fetch. Swift supplies the endpoint and handles native permission prompts; it does not relay individual fetch permission messages. An upfront permission request and a fetch are separate operations, so an Allow once decision is consumed by the next permitted operation rather than persisted.
 
+WebRTC uses the same private transport. Each peer connection asks Rust for permission at its first network method, such as `createOffer`, and shares that decision across later methods on the connection. Allow once permits one connection. New connections check the current permission without requiring a page reload.
+
 The installer adds the bootstrap and container scripts before loading. It preserves the host's website data store and navigation delegate. Hosts that assemble their own script lists can keep using `LocalhostBridgeBootstrap.script` followed by `ContainerScriptBundle.load()`, with the container injected into every frame.
 
 Redirects and stylesheet/font loads retain native WebKit behavior. They are not separately checked by the fetch wrapper. There is no content-rule registration, global settings refresh or installation disposal requirement. Close the execution when its product stops, and maintain the host's existing web-view navigation and teardown behavior.
 
 Build the generated JavaScript SDK before the container: from the repository root, run `npm ci --ignore-scripts`, `npm run build --prefix js/packages/truapi`, then `npm run build --prefix js/container`. A protocol change also requires regenerating the SDK through the repository's normal build pipeline.
 
-`ProductNetworkAccessTests` exercises grant/deny/revocation, one-use fetch authorization, native redirects, stylesheet/font requests, and preserving a persistent store and existing navigation delegate. The tests require the built container, current Rust bindings and a real WKWebView in the UIKit test host. These Apple-only tests cannot run on Linux.
+`ProductNetworkAccessTests` exercises grant/deny/revocation, one-use fetch and WebRTC authorization, native redirects, stylesheet/font requests, and preserving a persistent store and existing navigation delegate. The tests require the built container, current Rust bindings and a real WKWebView in the UIKit test host. These Apple-only tests cannot run on Linux.
 
 
 ## Build outputs in detail

@@ -748,8 +748,8 @@ mod tests {
                 .await
                 .unwrap();
             let (first, second) = futures::join!(
-                service.authorize_remote(remote_domains(&["a.example.com"])),
-                service.authorize_remote(remote_domains(&["b.example.com"])),
+                service.authorize_remote(remote_domains(&["deep.a.example.com"])),
+                service.authorize_remote(remote_domains(&["deeper.deep.b.example.com"])),
             );
             assert_eq!(
                 (
@@ -1155,7 +1155,7 @@ mod tests {
     }
 
     #[test]
-    fn a_wildcard_grant_covers_one_subdomain_level_only() {
+    fn a_wildcard_grant_covers_descendants_but_not_its_root() {
         let storage = MemStorage::default();
         let prompt = ScriptedPrompt::new(vec![], vec![true]);
         let service = PermissionsService::new(&storage, &prompt, "product.dot");
@@ -1165,19 +1165,24 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            futures::executor::block_on(service.peek_remote(&remote_domains(&["api.example.com"])))
-                .unwrap(),
-            PermissionAuthorizationStatus::Authorized
-        );
-        // RFC 0002: a wildcard spans exactly one label, so a two-level host is
-        // still undecided and the bare parent is not covered either.
-        for uncovered in ["deep.api.example.com", "example.com"] {
+        for covered in [
+            "api.example.com",
+            "deep.api.example.com",
+            "deeper.deep.api.example.com",
+        ] {
+            assert_eq!(
+                futures::executor::block_on(service.peek_remote(&remote_domains(&[covered])))
+                    .unwrap(),
+                PermissionAuthorizationStatus::Authorized,
+                "{covered} is a descendant of example.com"
+            );
+        }
+        for uncovered in ["example.com", "notexample.com", "example.com.other"] {
             assert_eq!(
                 futures::executor::block_on(service.peek_remote(&remote_domains(&[uncovered])))
                     .unwrap(),
                 PermissionAuthorizationStatus::NotDetermined,
-                "{uncovered} is outside a single-level wildcard"
+                "{uncovered} is not a descendant of example.com"
             );
         }
     }
@@ -1214,6 +1219,25 @@ mod tests {
             PermissionAuthorizationStatus::Denied,
             "a host with no decision of its own inherits the wildcard denial"
         );
+
+        futures::executor::block_on(service.set_authorization_status(
+            &PermissionAuthorizationRequest::Remote(remote_domains(&["*.example.com"])),
+            PermissionAuthorizationStatus::Authorized,
+        ))
+        .unwrap();
+        futures::executor::block_on(service.set_authorization_status(
+            &PermissionAuthorizationRequest::Remote(remote_domains(&["*.api.example.com"])),
+            PermissionAuthorizationStatus::Denied,
+        ))
+        .unwrap();
+        for denied in ["deep.api.example.com", "deeper.deep.api.example.com"] {
+            assert_eq!(
+                futures::executor::block_on(service.peek_remote(&remote_domains(&[denied])))
+                    .unwrap(),
+                PermissionAuthorizationStatus::Denied,
+                "the narrower wildcard denial overrides the ancestor's grant"
+            );
+        }
     }
 
     #[test]
@@ -1299,29 +1323,29 @@ mod tests {
     }
 
     #[test]
-    fn a_tld_wildcard_grant_is_consulted_like_any_other_pattern() {
+    fn a_tld_wildcard_grant_does_not_cover_concrete_hosts() {
         let storage = MemStorage::default();
-        let prompt = ScriptedPrompt::new(vec![], vec![true]);
+        let prompt = ScriptedPrompt::new(vec![], vec![false, true]);
         let service = PermissionsService::new(&storage, &prompt, "product.dot");
 
         futures::executor::block_on(service.check_or_prompt_remote(remote_domains(&["*.com"])))
             .unwrap();
 
-        // A pattern that can be granted but never read would leave the product
-        // prompting for every host under a wildcard the user already approved.
-        assert_eq!(
-            futures::executor::block_on(service.peek_remote(&remote_domains(&["example.com"])))
-                .unwrap(),
-            PermissionAuthorizationStatus::Authorized
-        );
+        for domain in ["example.com", "api.example.com", "deep.api.example.com"] {
+            assert_eq!(
+                futures::executor::block_on(service.peek_remote(&remote_domains(&[domain])))
+                    .unwrap(),
+                PermissionAuthorizationStatus::NotDetermined
+            );
+        }
         assert_eq!(
             futures::executor::block_on(
                 service.check_or_prompt_remote(remote_domains(&["example.com"]))
             )
             .unwrap(),
-            PermissionAuthorizationStatus::Authorized
+            PermissionAuthorizationStatus::Denied
         );
-        assert_eq!(prompt.remote_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(prompt.remote_calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

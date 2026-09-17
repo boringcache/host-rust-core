@@ -1,8 +1,7 @@
 // ============================================================================
 // TrUAPI mode lockdown. Runs AFTER LocalhostBridgeBootstrap (native injects
 // the bootstrap first), which publishes the bridge endpoint on
-// window.__truapi_localhost, the pre-resolved permission decisions on
-// window.__truapi_policy__, and exposes __HOST_API_PORT__ /
+// window.__truapi_localhost and exposes __HOST_API_PORT__ /
 // __HOST_WEBVIEW_MARK__.
 // The bootstrap dials its WebSocket lazily (inside port.start()), so
 // window.WebSocket must remain constructible for exactly the bridge URL.
@@ -12,7 +11,7 @@
 // product can reach one through any iframe path that skips
 // `document.createElement` (innerHTML, document.write, createElementNS,
 // srcdoc). Only the bootstrap is main-frame-only: a subframe with no bridge
-// endpoint and no policy fails closed on every gate below.
+// endpoint fails closed on every gate below.
 // ============================================================================
 
 // =============================================================================
@@ -27,9 +26,9 @@ import {
 } from './freeze.js';
 import { consumeWebRtcPolicy, installWebRtcPolicy } from './webrtc.js';
 import { installFetchGate } from './network.js';
-import { createNetworkAuthorization } from './network-transport.js';
+import { createPermissionAuthorization } from './network-transport.js';
 
-const _authorizeNetwork = createNetworkAuthorization(window);
+const _authorize = createPermissionAuthorization(window);
 
 const _NativeWebSocket = window.WebSocket;
 const _bridgeUrl: string | undefined = (window as any).__truapi_localhost?.url;
@@ -54,7 +53,7 @@ freezeCustom(
   (current) => current === _GatedWebSocket,
 );
 
-installFetchGate(window, _authorizeNetwork);
+installFetchGate(window, _authorize.network);
 
 // --- Network: delete (no future permission path) ---
 freezeAndDelete(window, 'XMLHttpRequest');
@@ -100,11 +99,11 @@ freezeValue(document, 'createElement', (tagName: string, options?: ElementCreati
   return _createElement(tagName, options);
 });
 
-// --- WebRTC: gated on the decision the host resolved before this realm ---
-// Read and clear the policy global first so nothing downstream can observe or
-// rewrite it. An absent policy denies, which is what makes a subframe (no
-// bootstrap, so no policy) fail closed.
-installWebRtcPolicy(window, consumeWebRtcPolicy(window));
+// Hosts without WebRTC support can disable it regardless of product consent.
+installWebRtcPolicy(
+  window,
+  consumeWebRtcPolicy(window) === false ? false : _authorize.webRtc,
+);
 
 // --- Report: every lock above has been attempted, so a failure can throw ---
 // A lock that did not take is a hole in the sandbox. Reporting last means the
