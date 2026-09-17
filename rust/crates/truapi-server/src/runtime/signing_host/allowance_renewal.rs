@@ -92,6 +92,7 @@ struct LedgerEntry {
 ///
 /// Mirrors the persisted entry rather than resolving it: resolution needs root
 /// entropy, and a host inspecting its slots may hold none.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrackedStatementRenewalTarget {
     /// The account, or the recipe for one, that the host promised to renew.
@@ -223,6 +224,7 @@ async fn track_targets(
 ///
 /// Takes the ledger lock so a listing taken while a track or a prune is running
 /// reports the settled ledger rather than the state it is replacing.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 async fn list_entries(
     storage: &(impl CoreStorage + ?Sized),
     ledger_lock: &Mutex<()>,
@@ -353,6 +355,7 @@ pub(super) async fn track(
 /// Reads storage alone. A host that has not unlocked an identity still gets
 /// the list, which is the case a scheduled task runs in: it wakes, asks what
 /// its finite slots are spent on, and decides whether to renew at all.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(super) async fn list(
     signing_host: &SigningHost,
 ) -> Result<Vec<TrackedStatementRenewalTarget>, String> {
@@ -368,6 +371,7 @@ pub(super) async fn list(
 /// Pairs with [`list`], which reports each entry's owner as stored: comparing
 /// the two is how a host tells the entries it will actually renew from the ones
 /// a pass will prune.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(super) fn active_owner_key(signing_host: &SigningHost) -> Result<[u8; 32], String> {
     let entropy = signing_host.root_entropy().map_err(|err| err.to_string())?;
     owner_key(&entropy)
