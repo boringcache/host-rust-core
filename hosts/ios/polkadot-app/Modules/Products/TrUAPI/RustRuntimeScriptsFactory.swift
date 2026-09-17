@@ -1,11 +1,8 @@
-import Foundation
 import Products
 import TrUAPIHost
 
-/// Scripts for the rust chat runtime: bootstrap publishes the ws-bridge
-/// endpoint, then the truapi container gates the page.
-/// Bootstrap-before-container ordering is load-bearing.
-final class ChatRustRuntimeScriptsFactory {
+/// Bootstrap must publish the bridge endpoint before the container runs.
+final class RustRuntimeScriptsFactory {
     private let bootstrapScript: String
 
     init(bootstrapScript: String) {

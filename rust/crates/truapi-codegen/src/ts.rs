@@ -217,7 +217,7 @@ fn preserve_version_prefixed_types_referenced_by_emitted_types(
             {
                 continue;
             }
-            collect_preserved_version_prefixed_type_refs_from_type(ty, aliases, names);
+            preserve_version_prefixed_names(type_dependencies(ty), aliases, names);
         }
         if names.len() == before {
             break;
@@ -225,47 +225,16 @@ fn preserve_version_prefixed_types_referenced_by_emitted_types(
     }
 }
 
-fn collect_preserved_version_prefixed_type_refs_from_type(
-    ty: &TypeDef,
+fn preserve_version_prefixed_names(
+    dependencies: BTreeSet<String>,
     aliases: &BTreeMap<String, String>,
     names: &mut BTreeSet<String>,
 ) {
-    match &ty.kind {
-        TypeDefKind::Alias(type_ref) => {
-            collect_preserved_version_prefixed_type_refs(type_ref, aliases, names);
-        }
-        TypeDefKind::Struct(fields) => {
-            for field in fields {
-                collect_preserved_version_prefixed_type_refs(&field.type_ref, aliases, names);
-            }
-        }
-        TypeDefKind::TupleStruct(fields) => {
-            for field in fields {
-                collect_preserved_version_prefixed_type_refs(field, aliases, names);
-            }
-        }
-        TypeDefKind::Enum(variants) => {
-            for variant in variants {
-                match &variant.fields {
-                    VariantFields::Unit => {}
-                    VariantFields::Unnamed(fields) => {
-                        for field in fields {
-                            collect_preserved_version_prefixed_type_refs(field, aliases, names);
-                        }
-                    }
-                    VariantFields::Named(fields) => {
-                        for field in fields {
-                            collect_preserved_version_prefixed_type_refs(
-                                &field.type_ref,
-                                aliases,
-                                names,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
+    names.extend(
+        dependencies
+            .into_iter()
+            .filter(|name| version_prefixed_type(name).is_some() && !aliases.contains_key(name)),
+    );
 }
 
 fn collect_preserved_version_prefixed_types(
@@ -276,34 +245,8 @@ fn collect_preserved_version_prefixed_types(
     match kind {
         VersionedKind::Unit => {}
         VersionedKind::Tuple(inner) => {
-            collect_preserved_version_prefixed_type_refs(inner, aliases, names);
+            preserve_version_prefixed_names(type_ref_dependencies(inner), aliases, names);
         }
-    }
-}
-
-fn collect_preserved_version_prefixed_type_refs(
-    ty: &TypeRef,
-    aliases: &BTreeMap<String, String>,
-    names: &mut BTreeSet<String>,
-) {
-    match ty {
-        TypeRef::Named { name, args } => {
-            if version_prefixed_type(name).is_some() && !aliases.contains_key(name) {
-                names.insert(name.clone());
-            }
-            for arg in args {
-                collect_preserved_version_prefixed_type_refs(arg, aliases, names);
-            }
-        }
-        TypeRef::Vec(inner) | TypeRef::Option(inner) | TypeRef::Array(inner, _) => {
-            collect_preserved_version_prefixed_type_refs(inner, aliases, names);
-        }
-        TypeRef::Tuple(items) => {
-            for item in items {
-                collect_preserved_version_prefixed_type_refs(item, aliases, names);
-            }
-        }
-        TypeRef::Primitive(_) | TypeRef::Generic(_) | TypeRef::Unit => {}
     }
 }
 

@@ -70,13 +70,13 @@ extension SPARustRuntime: SPARuntimeProtocol {
 
         try checkNotDisposed()
         let bootstrapScript = try executionModel.startBridge()
-        let scriptsFactory = SPARustRuntimeScriptsFactory(bootstrapScript: bootstrapScript)
+        let scriptsFactory = RustRuntimeScriptsFactory(bootstrapScript: bootstrapScript)
 
         await engine.registerJSDeviceCapabilityHandler(
             executionModel.osPermissionAsker.makeDeviceCapabilityHandler()
         )
 
-        try await engine.initialize(with: scriptsFactory.makeScripts())
+        try await engine.initialize(with: scriptsFactory.makeScripts() + [.disableZoom])
 
         // Disposed while initializing: dispose captured nil for the engine,
         // so this start is the only owner left — destroy before bailing.

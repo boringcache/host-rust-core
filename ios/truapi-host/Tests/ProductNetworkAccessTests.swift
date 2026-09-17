@@ -335,9 +335,7 @@ private final class NetworkTestServer: @unchecked Sendable {
     }
 
     func requests(path: String) -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return counts[path, default: 0]
+        lock.withLock { counts[path, default: 0] }
     }
 
     private func accept(_ connection: NWConnection) {
@@ -361,9 +359,7 @@ private final class NetworkTestServer: @unchecked Sendable {
                 connection.cancel()
                 return
             }
-            self.lock.lock()
-            self.counts[String(path), default: 0] += 1
-            self.lock.unlock()
+            self.lock.withLock { self.counts[String(path), default: 0] += 1 }
             var status = "200 OK"
             var headers = "Access-Control-Allow-Origin: *\r\nContent-Type: text/html\r\nCache-Control: no-store\r\n"
             var body = "allowed"
