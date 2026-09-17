@@ -29,10 +29,17 @@ pub trait Permissions: Send + Sync {
     ///
     /// ```ts
     /// const result = await truapi.permissions.requestRemotePermission({
-    ///   permission: { tag: "Remote", value: { domains: ["api.example.com"] } },
+    ///   permission: { tag: "Remote", value: { domains: ["api.frankfurter.dev"] } },
     /// });
     /// assert(result.isOk(), "requestRemotePermission failed:", result);
     /// console.log("remote permission result:", result.value);
+    /// assert(result.value.granted, "Remote permission was denied");
+    ///
+    /// const response = await fetch("https://api.frankfurter.dev/v2/rates?base=EUR&quotes=USD");
+    /// assert(response.ok, "Fetch after permission grant failed:", response.status);
+    /// const rates = await response.json();
+    /// assert(Array.isArray(rates) && rates.length > 0, "Expected exchange rates:", rates);
+    /// console.log("exchange rates:", rates);
     /// ```
     #[wire(id = 1)]
     async fn request_remote_permission(
