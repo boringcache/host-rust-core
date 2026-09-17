@@ -18,8 +18,8 @@ export function makeHostCallbacks(
       cancelNotification: async () => {},
     },
     permissions: {
-      devicePermission: async () => ({ granted: false }),
-      remotePermission: async () => ({ granted: false }),
+      devicePermission: async () => "Deny",
+      remotePermission: async () => "Deny",
     },
     features: {
       featureSupported: async () => ({ supported: false }),
@@ -36,7 +36,10 @@ export function makeHostCallbacks(
       clearCoreStorage: async () => {},
     },
     auth: { authStateChanged: () => {} },
-    userConfirmation: { confirmUserAction: async () => false },
+    userConfirmation: {
+      confirmUserAction: async () => false,
+      confirmPermission: async () => "Deny",
+    },
     preimage: {
       async *lookupPreimage() {},
     },

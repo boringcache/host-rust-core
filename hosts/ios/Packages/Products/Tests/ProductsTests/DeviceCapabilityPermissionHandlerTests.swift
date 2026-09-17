@@ -298,4 +298,34 @@ struct DeviceCapabilityPermissionHandlerTests {
 
         #expect(!result)
     }
+
+    @Test(arguments: [PermissionDecision.allowOnce, .allowAlways, .deny])
+    func requestDecisionPreservesConsentWithoutDuplicatingGrants(decision: PermissionDecision) async throws {
+        let (handler, repository, _, _) = makeSUT(osStatus: .allowed, promptDecision: decision)
+        let result = try await handler.requestDecision(productId: productId, capability: capability)
+        #expect(result == decision)
+        #expect(try await repository.getPermissionState(
+            productId: productId, permission: .deviceCapability(capability)
+        ) == .notDetermined)
+    }
+
+    @Test
+    func requestDecisionTransfersAnExistingOneTimeGrant() async throws {
+        let (handler, repository, _, _) = makeSUT(osStatus: .allowed, promptDecision: .deny)
+        repository.grantOneTime(productId: productId, permission: .deviceCapability(capability))
+        let first = try await handler.requestDecision(productId: productId, capability: capability)
+        let second = try await handler.requestDecision(productId: productId, capability: capability)
+        #expect([first, second] == [.allowOnce, .deny])
+    }
+
+    @Test
+    func requestDecisionDoesNotTurnOsRefusalIntoProductDenial() async throws {
+        let (handler, repository, _, _) = makeSUT(osRequestResult: false, promptDecision: .allowAlways)
+        await #expect(throws: DevicePermissionRequestError.self) {
+            try await handler.requestDecision(productId: productId, capability: capability)
+        }
+        #expect(try await repository.getPermissionState(
+            productId: productId, permission: .deviceCapability(capability)
+        ) == .notDetermined)
+    }
 }

@@ -281,11 +281,11 @@ public protocol HostBridge: AnyObject, Sendable {
     /// Cancel a previously scheduled notification id.
     func cancelNotification(id: UInt32) throws
 
-    /// Prompt for a device-level permission. Returns the granted flag. Invoked
+    /// Prompt for a device-level permission. Preserve the approval lifetime. Invoked
     /// on a blocking-pool thread; present the prompt on the main thread and
     /// block the calling thread until the user decides. Blocking here does
     /// not stall other TrUAPI traffic.
-    func devicePermission(request: HostDevicePermissionRequest) async throws -> Bool
+    func devicePermission(request: HostDevicePermissionRequest) async throws -> PermissionDecision
 
     /// Report the OS status of a device capability without prompting. Answer
     /// from the platform's authorization APIs, for example
@@ -304,7 +304,7 @@ public protocol HostBridge: AnyObject, Sendable {
     /// blocking-pool thread; present the prompt on the main thread and block
     /// the calling thread until the user decides. Blocking here does not
     /// stall other TrUAPI traffic.
-    func remotePermission(request: RemotePermission) async throws -> Bool
+    func remotePermission(request: RemotePermission) async throws -> PermissionDecision
 
     /// Observe an auth state change, in transition order: render `.pairing` as
     /// the pairing QR UI, `.connected`/`.disconnected` as the account badge,
@@ -331,6 +331,9 @@ public protocol HostBridge: AnyObject, Sendable {
 
     /// Confirm one user-reviewed core action before it continues.
     func confirmUserAction(review: UserConfirmationReview) async throws -> Bool
+
+    /// Preserve the selected lifetime for identity and account access consent.
+    func confirmPermission(review: UserConfirmationReview) async throws -> PermissionDecision
 
     /// Return the current preimage value for `key`, or nil for a miss.
     func lookupPreimage(key: Data) async throws -> Data?
@@ -446,6 +449,9 @@ public extension HostBridge {
     func chainSend(connectionId: UInt32, request: String) throws {}
     func chainClose(connectionId: UInt32) throws {}
     func confirmUserAction(review: UserConfirmationReview) async throws -> Bool { false }
+    func confirmPermission(review: UserConfirmationReview) async throws -> PermissionDecision {
+        try await confirmUserAction(review: review) ? .allowAlways : .deny
+    }
     func lookupPreimage(key: Data) async throws -> Data? { nil }
     func currentTheme() throws -> HostThemeSubscribeItem {
         HostThemeSubscribeItem(name: .default, variant: .dark)
@@ -539,6 +545,16 @@ private final class PocketCallbackAdapter: NativePocketCallbacks, @unchecked Sen
     }
 }
 
+private extension PermissionDecision {
+    var native: NativePermissionDecision {
+        switch self {
+        case .allowOnce: .allowOnce
+        case .allowAlways: .allowAlways
+        case .deny: .deny
+        }
+    }
+}
+
 /// Adapter that bridges the public `HostBridge` to the generated UniFFI
 /// `HostCallbacks` protocol. Kept private so the generated names never
 /// leak into consumers.
@@ -575,9 +591,9 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
         }
     }
 
-    func devicePermission(request: HostDevicePermissionRequest) async throws -> Bool {
+    func devicePermission(request: HostDevicePermissionRequest) async throws -> NativePermissionDecision {
         try await withHostRejection {
-            try await bridge.devicePermission(request: request)
+            try await bridge.devicePermission(request: request).native
         }
     }
 
@@ -589,9 +605,9 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
         }
     }
 
-    func remotePermission(request: RemotePermission) async throws -> Bool {
+    func remotePermission(request: RemotePermission) async throws -> NativePermissionDecision {
         try await withHostRejection {
-            try await bridge.remotePermission(request: request)
+            try await bridge.remotePermission(request: request).native
         }
     }
 
@@ -638,6 +654,12 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
     func confirmUserAction(review: UserConfirmationReview) async throws -> Bool {
         try await withHostRejection {
             try await bridge.confirmUserAction(review: review)
+        }
+    }
+
+    func confirmPermission(review: UserConfirmationReview) async throws -> NativePermissionDecision {
+        try await withHostRejection {
+            try await bridge.confirmPermission(review: review).native
         }
     }
 
@@ -968,6 +990,8 @@ public protocol TrUAPIProductExecutionProtocol: AnyObject, Sendable {
     func publishChatAction(_ action: HostChatActionSubscribeItem) throws
     func render(_ request: ProductRendererRenderRequest) throws -> AsyncThrowingStream<RendererNode, Error>
     func publishRendererAction(_ item: HostRendererActionSubscribeItem) throws
+    /// Checks or prompts for this product's destination permission; only `.authorized` permits the request.
+    func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus
     func permissionAuthorizationStatus(
         request: PermissionAuthorizationRequest
     ) async throws -> PermissionAuthorizationStatus
@@ -1040,12 +1064,18 @@ public final class TrUAPIProductExecution: TrUAPIProductExecutionProtocol, @unch
         inner.notifyPocketCardsChanged(cards: cards)
     }
 
+    /// Applies the shared permission policy to an outgoing URL, prompting for this execution's product if needed.
+    public func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus {
+        try await inner.authorizeNetworkAccess(url: url)
+    }
+
     public func permissionAuthorizationStatus(
         request: PermissionAuthorizationRequest
     ) async throws -> PermissionAuthorizationStatus {
         try await inner.permissionAuthorizationStatus(request: request)
     }
 
+    /// Updates the product decision used by subsequent permission checks.
     public func setPermissionAuthorizationStatus(
         request: PermissionAuthorizationRequest,
         status: PermissionAuthorizationStatus

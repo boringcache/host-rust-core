@@ -14,7 +14,6 @@ import {
   HostChatRegisterBotRequest,
   HostChatRegisterBotResponse,
   HostDevicePermissionRequest,
-  HostDevicePermissionResponse,
   HostFeatureSupportedRequest,
   HostFeatureSupportedResponse,
   HostLocaleSubscribeItem,
@@ -24,7 +23,6 @@ import {
   HostPushNotificationResponse,
   HostThemeSubscribeItem,
   RemotePermissionRequest,
-  RemotePermissionResponse,
 } from "@parity/truapi";
 import type { GenericError, NotificationId } from "@parity/truapi";
 import {
@@ -32,6 +30,7 @@ import {
   CoreStorageKey,
   DevicePermissionStatus,
   HostChainSet,
+  PermissionDecision,
   ProductContext,
   UserConfirmationReview,
 } from "./host-callbacks.js";
@@ -98,6 +97,7 @@ export interface RawCallbacks {
     sendItem: (item?: Uint8Array) => void,
     sendError: (error: GenericError) => void,
   ): (() => void) | void;
+  confirmPermission(review: Uint8Array): Promise<Uint8Array>;
   confirmUserAction(review: Uint8Array): Promise<boolean>;
 }
 /** Adapt typed host callbacks into the raw SCALE callback surface the
@@ -186,13 +186,13 @@ export function createWasmRawCallbacks(
         }
       : {}),
     devicePermission: async (request) =>
-      HostDevicePermissionResponse.enc(
+      PermissionDecision.enc(
         await callbacks.permissions.devicePermission(
           HostDevicePermissionRequest.dec(request),
         ),
       ),
     remotePermission: async (request) =>
-      RemotePermissionResponse.enc(
+      PermissionDecision.enc(
         await callbacks.permissions.remotePermission(
           RemotePermissionRequest.dec(request),
         ),
@@ -227,6 +227,12 @@ export function createWasmRawCallbacks(
         callbacks.theme.subscribeTheme(),
         (item) => sendItem(HostThemeSubscribeItem.enc(item)),
         sendError,
+      ),
+    confirmPermission: async (review) =>
+      PermissionDecision.enc(
+        await callbacks.userConfirmation.confirmPermission(
+          UserConfirmationReview.dec(review),
+        ),
       ),
     confirmUserAction: async (review) =>
       await callbacks.userConfirmation.confirmUserAction(
