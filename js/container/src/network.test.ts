@@ -471,7 +471,10 @@ describe('container fetch authorization', () => {
     await expect(realm.fetch('https://denied.example/data')).rejects.toThrow(
       'Network access is not allowed',
     );
-    expect(realm.requests).toEqual([]);
+    expect({
+      requests: realm.requests,
+      peerConnection: realm.context.RTCPeerConnection,
+    }).toEqual({ requests: [], peerConnection: undefined });
   });
 
   it('fails closed when the host authorization fails', async () => {

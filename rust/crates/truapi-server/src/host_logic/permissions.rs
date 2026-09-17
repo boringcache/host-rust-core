@@ -15,9 +15,9 @@
 //!
 //! Domain grants (`RemotePermission::Remote`) are the one request that does not
 //! occupy a single slot. A product may ask for several domains at once, while
-//! enforcement — outbound navigation, and any future outbound-request gate —
-//! only ever asks about one host. So a grant is stored as one authorization per
-//! domain pattern, and a lookup for a concrete host resolves through the
+//! outbound-request authorization checks one host at a time. So a grant is
+//! stored as one authorization per domain pattern, and a lookup for a concrete
+//! host resolves through the
 //! RFC 0002 candidate list ([`remote_domain_candidates`]), letting the most
 //! specific stored decision win.
 //!

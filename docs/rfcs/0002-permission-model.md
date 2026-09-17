@@ -139,12 +139,11 @@ The return value is a single `bool`. A `true` result means all requested permiss
 
 ### Domain Matching Semantics
 
-`Remote(Vec<String>)` is one grant per host covering everything a product does
-with that host: outbound HTTP/WS requests, and sending the user there with
-`host_navigate_to`. Both hand the same third party the same thing — that the user
-is here, plus whatever the product puts in the URL — so they are one question,
-asked once. `DevicePermission::OpenUrl` is not part of this: it is about handing
-a URL to the operating system at all, not about which hosts are reachable.
+`Remote(Vec<String>)` authorizes outbound HTTP/WS requests to matching hosts.
+External `host_navigate_to` calls use `DevicePermission::OpenUrl`, covering
+HTTP(S) URLs and allowed application schemes such as mail, phone, messages and
+maps. A one-use grant authorizes one handoff. Internal dotNS, localhost and
+host-handled Pocket navigation do not consume an external-navigation grant.
 
 Each string entry is matched against the host portion of the URL. The matching
 rules are:
@@ -308,7 +307,7 @@ Migration is straightforward for implementors following semantic versioning: bum
 
 2. **Permission query API**: Should there be a `remote_permission_status` / `host_device_permission_status` call that returns the current persisted state without prompting? This would allow products to check permission state on startup and adapt their UI accordingly without triggering a prompt.
 
-3. **`OpenUrl` scope** — settled. Which hosts a product may send the user to is `RemotePermission::Remote`, at the same per-host granularity as outbound requests to them, because it is the same disclosure to the same third party (see [Domain Matching Semantics](#domain-matching-semantics)). `OpenUrl` keeps the narrower device-permission meaning it already had — handing a URL to the operating system at all — and names no destination.
+3. **`OpenUrl` scope**: settled. External navigation requires `OpenUrl`, matching legacy behavior. Remote-domain permission applies to outbound requests; opening a link does not require both grants (see [Domain Matching Semantics](#domain-matching-semantics)).
 
 4. **HTTP/WS permission enforcement point**: The RFC specifies that `RemotePermission::Remote` governs outbound HTTP/WS requests, but the transport layer routes all network calls through the Host. How the Host enforces HTTP domain matching at the transport level (interception vs. validation before handing off) is an implementation detail left unspecified — should this RFC say more?
 
