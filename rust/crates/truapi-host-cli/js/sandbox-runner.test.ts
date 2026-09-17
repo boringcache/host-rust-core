@@ -342,7 +342,7 @@ test("product frames cannot use the interceptor's reserved request IDs", async (
   expect(frames).toEqual([]);
 }, 20_000);
 
-test("private authorization and concurrent SDK responses cannot consume each other's request IDs", async () => {
+test("denied media preserves private authorization and concurrent SDK response routing", async () => {
   let receive!: (frame: Uint8Array) => void;
   let grant = false;
   let initialGrant = true;
@@ -412,6 +412,12 @@ test("private authorization and concurrent SDK responses cannot consume each oth
   try {
     await runBrowserScript({
       source: `
+        try {
+          await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+          throw new Error('CLI media capture was allowed');
+        } catch (error) {
+          assert(error instanceof DOMException && error.name === 'NotAllowedError');
+        }
         const permission = { permission: { tag: 'Remote', value: { domains: ['127.0.0.1'] } } };
         assert((await truapi.permissions.requestRemotePermission(permission))._unsafeUnwrap().granted);
         const [response, publicResult] = await Promise.all([

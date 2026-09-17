@@ -336,7 +336,7 @@ export async function runBrowserScript(
       window.__HOST_WEBVIEW_MARK__ = true;
       window.__truapi_product_id__ = ${JSON.stringify(options.productId)};
       window.__truapi_network_port__ = networkPort;
-      window.__truapi_policy__ = { webRtcAllowed: false };
+      window.__truapi_policy__ = { webRtcAllowed: false, mediaAllowed: false };
       delete window.__truapi_network_intent__;
       delete window.__truapi_send__;
     })();`;
