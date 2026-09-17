@@ -26,6 +26,7 @@ import {
 } from './freeze.js';
 import { consumeWebRtcPolicy, installWebRtcPolicy } from './webrtc.js';
 import { installFetchGate } from './network.js';
+import { installXhrGate } from './xhr.js';
 import { installMediaPolicy } from './media.js';
 import { createPermissionAuthorization } from './network-transport.js';
 
@@ -55,13 +56,13 @@ freezeCustom(
 );
 
 installFetchGate(window, _authorize.network);
+installXhrGate(window, _authorize.network);
 installMediaPolicy(
   window,
   (window as any).__truapi_policy__?.mediaAllowed === false ? false : _authorize.media,
 );
 
 // --- Network: delete (no future permission path) ---
-freezeAndDelete(window, 'XMLHttpRequest');
 freezeAndDelete(window, 'EventSource');
 freezeAndDelete(window, 'WebTransport');
 

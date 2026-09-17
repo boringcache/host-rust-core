@@ -43,6 +43,20 @@ pub trait Permissions: Send + Sync {
     /// const rates = await response.json();
     /// assert(Array.isArray(rates) && rates.length > 0, "Expected exchange rates:", rates);
     /// console.log("exchange rates:", rates);
+    ///
+    /// const xhrRates = await new Promise((resolve, reject) => {
+    ///   const request = new XMLHttpRequest();
+    ///   request.open("GET", "https://api.frankfurter.dev/v2/rates?base=EUR&quotes=USD");
+    ///   request.responseType = "json";
+    ///   request.timeout = 15000;
+    ///   request.onload = () => request.status === 200
+    ///     ? resolve(request.response)
+    ///     : reject(new Error(`XHR failed: ${request.status}`));
+    ///   request.onerror = request.ontimeout = () => reject(new Error("XHR failed"));
+    ///   request.send();
+    /// });
+    /// assert(Array.isArray(xhrRates) && xhrRates.length > 0, "Expected XHR exchange rates:", xhrRates);
+    /// console.log("XHR exchange rates:", xhrRates);
     /// ```
     #[wire(id = 1)]
     async fn request_remote_permission(
@@ -52,8 +66,8 @@ pub trait Permissions: Send + Sync {
     ) -> Result<RemotePermissionResponse, CallError<RemotePermissionError>>;
 
     /// Authorize one network operation for the current product, consuming an
-    /// available one-use grant. Used by the host's fetch wrapper immediately
-    /// before invoking native fetch.
+    /// available one-use grant. Used by the host's fetch and XHR wrappers
+    /// immediately before sending the request.
     ///
     /// ```ts
     /// const result = await truapi.permissions.authorizeNetworkAccess({
