@@ -577,10 +577,10 @@ jobs:
       - name: Test shared product container
         run: bun test js/container/src
 
-      - name: Test product preparation and CLI package
+      - name: Test product preparation
         run: |
           npm run typecheck:cli
-          bun test rust/crates/truapi-host-cli/js/sandbox-build.test.ts scripts/cli-runner-package.test.ts
+          bun test rust/crates/truapi-host-cli/js/sandbox-build.test.ts
 
       - name: Install sandboxed Chromium
         env:

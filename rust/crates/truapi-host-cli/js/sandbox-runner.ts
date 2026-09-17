@@ -20,6 +20,7 @@ import { wsProvider } from "./ws-provider.ts";
 import {
   createWebSocketBroker,
   installWebSocketBackend,
+  type Authorization,
 } from "./sandbox-websocket.ts";
 
 export interface BrowserScriptOptions {
@@ -41,10 +42,7 @@ const authorizationResponse = scale.Result(
 interface NetworkOperation {
   url: string;
   active: boolean;
-  authorization?: {
-    result: Promise<boolean>;
-    cancel: () => void;
-  };
+  authorization?: Authorization;
 }
 export function browserAssets(): Promise<BrowserAssets> {
   return (assetPromise ??= (async () => {
@@ -430,9 +428,7 @@ export async function runBrowserScript(
     return request;
   }
 
-  function authorizeNetworkRequest(
-    url: string,
-  ): NonNullable<NetworkOperation["authorization"]> {
+  function authorizeNetworkRequest(url: string): Authorization {
     if (options.authorize) {
       return {
         result: Promise.resolve()

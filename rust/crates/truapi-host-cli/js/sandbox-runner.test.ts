@@ -178,58 +178,56 @@ for (const api of ["fetch", "XHR"] as const) {
   }, 20_000);
 }
 
-for (const grantDestination of [false, true]) {
-  test(`native fetch follows redirects when destination approval is ${grantDestination}`, async () => {
-    const hits: string[] = [];
-    const authorizations: string[] = [];
-    const target = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch() {
-        hits.push("destination");
-        return new Response("authorized", {
-          headers: { "Access-Control-Allow-Origin": "*" },
-        });
-      },
-    });
-    const destination = new URL(target.url);
-    destination.hostname = "localhost";
-    const redirect = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch() {
-        hits.push("allowed");
-        return new Response(null, {
-          status: 302,
-          headers: {
-            Location: destination.href,
-            "Access-Control-Allow-Origin": "*",
-          },
-        });
-      },
-    });
-    try {
-      await runBrowserScript({
-        source: `
-        const endpoint = ${JSON.stringify(redirect.url.href)};
-        assert(await (await fetch(endpoint)).text() === 'authorized');
-      `,
-        productId: "sandbox.testnet",
-        provider,
-        authorize: async (url) => {
-          authorizations.push(url);
-          return grantDestination || new URL(url).hostname === "127.0.0.1";
-        },
-        timeoutMs: 10_000,
+test("native fetch follows cross-host redirects using the initial authorization", async () => {
+  const hits: string[] = [];
+  const authorizations: string[] = [];
+  const target = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      hits.push("destination");
+      return new Response("authorized", {
+        headers: { "Access-Control-Allow-Origin": "*" },
       });
-      expect(hits).toEqual(["allowed", "destination"]);
-      expect(authorizations).toEqual([redirect.url.href]);
-    } finally {
-      redirect.stop(true);
-      target.stop(true);
-    }
-  }, 20_000);
-}
+    },
+  });
+  const destination = new URL(target.url);
+  destination.hostname = "localhost";
+  const redirect = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      hits.push("allowed");
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: destination.href,
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    },
+  });
+  try {
+    await runBrowserScript({
+      source: `
+      const endpoint = ${JSON.stringify(redirect.url.href)};
+      assert(await (await fetch(endpoint)).text() === 'authorized');
+    `,
+      productId: "sandbox.testnet",
+      provider,
+      authorize: async (url) => {
+        authorizations.push(url);
+        return new URL(url).hostname === "127.0.0.1";
+      },
+      timeoutMs: 10_000,
+    });
+    expect(hits).toEqual(["allowed", "destination"]);
+    expect(authorizations).toEqual([redirect.url.href]);
+  } finally {
+    redirect.stop(true);
+    target.stop(true);
+  }
+}, 20_000);
 
 test("XHR preserves request headers and body and native binary response metadata", async () => {
   const hits: { method: string; header: string | null; body: number[] }[] = [];

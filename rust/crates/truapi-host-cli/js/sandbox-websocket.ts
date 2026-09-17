@@ -1,8 +1,10 @@
+import type { WebSocketBackendFactory } from "../../../../js/container/src/websocket.ts";
+
 const HostWebSocket = WebSocket as unknown as {
   new (url: string, options: Bun.WebSocketOptions): WebSocket;
 };
 
-interface Authorization {
+export interface Authorization {
   result: Promise<boolean>;
   cancel(): void;
 }
@@ -204,10 +206,7 @@ export function createWebSocketBroker(
 export function installWebSocketBackend(): void {
   const bootstrap = window as unknown as {
     __truapi_websocket__?: (command: unknown) => Promise<SocketEvent | void>;
-    __truapi_websocket_connect__?: (
-      url: string,
-      protocols: string[],
-    ) => EventTarget;
+    __truapi_websocket_connect__?: WebSocketBackendFactory;
   };
   const command = bootstrap.__truapi_websocket__!;
   delete bootstrap.__truapi_websocket__;
