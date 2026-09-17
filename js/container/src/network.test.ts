@@ -37,6 +37,7 @@ function browser(
   transformReply: (bytes: Uint8Array) => Uint8Array = (bytes) => bytes,
   authorizeWebRtc: () => boolean | Promise<boolean> = () => false,
   authorizeMedia: (request: { audio: boolean; video: boolean }) => boolean | Promise<boolean> = () => false,
+  mediaAllowed = true,
 ) {
   class BrowserRequest extends Request {
     constructor(input: RequestInfo | URL, init?: RequestInit) {
@@ -184,6 +185,7 @@ function browser(
       return new Response('received');
     },
     __HOST_API_PORT__: sdkPort,
+    __truapi_policy__: { mediaAllowed },
     __truapi_network_port__:
       authorize && transport === 'port' ? privatePort : undefined,
     __truapi_localhost:
@@ -244,6 +246,17 @@ describe('container fetch authorization', () => {
         captures: [{ audio: true, video: true }],
       });
     }
+  });
+
+  it('lets hosts disable capture without closing fetch authorization', async () => {
+    const realm = browser(() => true, undefined, 'port', (bytes) => bytes,
+      () => false, () => { throw new Error('Unsupported media must not reach the host'); }, false);
+    await expect(runInContext(
+      'navigator.mediaDevices.getUserMedia({ video: true })', realm.context,
+    )).rejects.toMatchObject({ name: 'NotAllowedError' });
+    expect(realm.sent).toEqual([]);
+    await realm.fetch('https://api.example/data');
+    expect(realm.requests.map(request => request.url)).toEqual(['https://api.example/data']);
   });
 
   it('does not accept a WebRTC reply as capture approval', async () => {
