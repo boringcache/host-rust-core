@@ -2,6 +2,7 @@ import {
   encodeWireMessage,
   MESSAGE_TYPE_REQUEST,
   MESSAGE_TYPE_RESPONSE,
+  type MethodIds,
   scale,
   VersionedAuthorizeNetworkAccessRequest,
   VersionedAuthorizeNetworkAccessResponse,
@@ -87,80 +88,68 @@ export function createPermissionAuthorization(
   const requestId = '0000000000000000';
   const idLength = scale.str.enc(requestId).length;
   const idOffset = idLength - requestId.length;
-  const ids = PERMISSIONS_AUTHORIZE_NETWORK_ACCESS;
-  const requestTemplate = encodeWireMessage({
-    requestId,
-    payload: {
-      traitId: ids.trait,
-      methodId: ids.method,
-      messageType: MESSAGE_TYPE_REQUEST,
-      value: VersionedAuthorizeNetworkAccessRequest.enc({
-        tag: 'V1',
-        value: { url: '' },
-      }),
-    },
-  })._unsafeUnwrap();
+  function template(
+    ids: MethodIds,
+    messageType: number,
+    value: Uint8Array,
+  ): Uint8Array {
+    return encodeWireMessage({
+      requestId,
+      payload: {
+        traitId: ids.trait,
+        methodId: ids.method,
+        messageType,
+        value,
+      },
+    })._unsafeUnwrap();
+  }
+  const requestTemplate = template(
+    PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
+    MESSAGE_TYPE_REQUEST,
+    VersionedAuthorizeNetworkAccessRequest.enc({
+      tag: 'V1',
+      value: { url: '' },
+    }),
+  );
   const requestPrefixLength = requestTemplate.length - scale.str.enc('').length;
-  const responseTemplate = encodeWireMessage({
-    requestId,
-    payload: {
-      traitId: ids.trait,
-      methodId: ids.method,
-      messageType: MESSAGE_TYPE_RESPONSE,
-      value: scale
-        .Result(
-          VersionedAuthorizeNetworkAccessResponse,
-          scale.CallError(VersionedAuthorizeNetworkAccessError),
-        )
-        .enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
-    },
-  })._unsafeUnwrap();
-  const webRtcRequest = encodeWireMessage({
-    requestId,
-    payload: {
-      traitId: PERMISSIONS_AUTHORIZE_WEB_RTC.trait,
-      methodId: PERMISSIONS_AUTHORIZE_WEB_RTC.method,
-      messageType: MESSAGE_TYPE_REQUEST,
-      value: VersionedAuthorizeWebRtcRequest.enc({ tag: 'V1' }),
-    },
-  })._unsafeUnwrap();
-  const webRtcResponse = encodeWireMessage({
-    requestId,
-    payload: {
-      traitId: PERMISSIONS_AUTHORIZE_WEB_RTC.trait,
-      methodId: PERMISSIONS_AUTHORIZE_WEB_RTC.method,
-      messageType: MESSAGE_TYPE_RESPONSE,
-      value: scale.Result(
-        VersionedAuthorizeWebRtcResponse,
-        scale.CallError(VersionedAuthorizeWebRtcError),
-      ).enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
-    },
-  })._unsafeUnwrap();
+  const responseTemplate = template(
+    PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
+    MESSAGE_TYPE_RESPONSE,
+    scale.Result(
+      VersionedAuthorizeNetworkAccessResponse,
+      scale.CallError(VersionedAuthorizeNetworkAccessError),
+    ).enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
+  );
+  const webRtcRequest = template(
+    PERMISSIONS_AUTHORIZE_WEB_RTC,
+    MESSAGE_TYPE_REQUEST,
+    VersionedAuthorizeWebRtcRequest.enc({ tag: 'V1' }),
+  );
+  const webRtcResponse = template(
+    PERMISSIONS_AUTHORIZE_WEB_RTC,
+    MESSAGE_TYPE_RESPONSE,
+    scale.Result(
+      VersionedAuthorizeWebRtcResponse,
+      scale.CallError(VersionedAuthorizeWebRtcError),
+    ).enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
+  );
 
-  const mediaRequests = [0, 1, 2, 3].map((requested) => encodeWireMessage({
-    requestId,
-    payload: {
-      traitId: PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE.trait,
-      methodId: PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE.method,
-      messageType: MESSAGE_TYPE_REQUEST,
-      value: VersionedAuthorizeMediaCaptureRequest.enc({
-        tag: 'V1',
-        value: { audio: (requested & 1) !== 0, video: (requested & 2) !== 0 },
-      }),
-    },
-  })._unsafeUnwrap());
-  const mediaResponse = encodeWireMessage({
-    requestId,
-    payload: {
-      traitId: PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE.trait,
-      methodId: PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE.method,
-      messageType: MESSAGE_TYPE_RESPONSE,
-      value: scale.Result(
-        VersionedAuthorizeMediaCaptureResponse,
-        scale.CallError(VersionedAuthorizeMediaCaptureError),
-      ).enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
-    },
-  })._unsafeUnwrap();
+  const mediaRequests = [0, 1, 2, 3].map((requested) => template(
+    PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE,
+    MESSAGE_TYPE_REQUEST,
+    VersionedAuthorizeMediaCaptureRequest.enc({
+      tag: 'V1',
+      value: { audio: (requested & 1) !== 0, video: (requested & 2) !== 0 },
+    }),
+  ));
+  const mediaResponse = template(
+    PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE,
+    MESSAGE_TYPE_RESPONSE,
+    scale.Result(
+      VersionedAuthorizeMediaCaptureResponse,
+      scale.CallError(VersionedAuthorizeMediaCaptureError),
+    ).enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
+  );
 
   let pending: PendingRequest | undefined;
   let tail: PendingRequest | undefined;

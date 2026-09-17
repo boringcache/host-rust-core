@@ -11,7 +11,7 @@ interface RequestState {
   pending: boolean;
   nativeStarted: boolean;
   body: boolean;
-  overrideState: number | undefined;
+  overrideState: 0 | 4 | undefined;
   startedAt: number;
   waited: number;
   timeout: number;
@@ -336,8 +336,7 @@ export function installXhrGate(
       if (
         current(this, state) &&
         oldState === 1 &&
-        previous?.overrideState !== undefined &&
-        previous.overrideState !== 1
+        previous?.overrideState !== undefined
       )
         apply(dispatch, this, [new NativeEvent('readystatechange')]);
     },
@@ -391,10 +390,8 @@ export function installXhrGate(
       fail(this, state, 'abort');
       if (current(this, state) && state.overrideState === 4)
         state.overrideState = 0;
-    } else if (state?.overrideState !== undefined) {
-      state.overrideState = 0;
-      apply(nativeAbort, this, []);
     } else {
+      if (state?.overrideState !== undefined) state.overrideState = 0;
       apply(nativeAbort, this, []);
     }
   });

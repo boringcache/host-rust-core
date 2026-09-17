@@ -59,8 +59,7 @@ actor ChatRustRuntime: ChatRuntimeProtocol {
         guard !started, !disposed else { throw CancellationError() }
         started = true
 
-        let bootstrapScript = try await executionModel.startBridge()
-        try checkNotDisposed()
+        let bootstrapScript = try executionModel.startBridge()
         let scriptsFactory = ChatRustRuntimeScriptsFactory(bootstrapScript: bootstrapScript)
         let jsEngine = try await bootEngine(scripts: scriptsFactory.makeScripts())
         try checkNotDisposed()
