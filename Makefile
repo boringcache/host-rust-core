@@ -94,9 +94,9 @@ CLI_DIST_DIR := target/dist
 # Published Linux binaries use musl; Chromium has separate host library requirements.
 CLI_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p' | sed 's/-linux-gnu$$/-linux-musl/')
 CLI_VERSION ?= $(shell awk -F'"' '/^version = /{print $$2; exit}' rust/crates/truapi-host-cli/Cargo.toml)
-CLI_ARCHIVE := truapi-host-$(CLI_VERSION)-$(CLI_TARGET).tar.gz
+CLI_ARCHIVE = truapi-host-$(CLI_VERSION)-$(CLI_TARGET).tar.gz
 CLI_RUNNER := $(CLI_DIST_DIR)/runner.js
-CLI_STAGE := $(CLI_DIST_DIR)/$(CLI_TARGET)
+CLI_STAGE = $(CLI_DIST_DIR)/$(CLI_TARGET)
 # macOS ships shasum, most Linux images ship only sha256sum.
 SHA256 := $(shell command -v sha256sum >/dev/null 2>&1 && echo "sha256sum" || echo "shasum -a 256")
 
