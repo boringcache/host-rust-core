@@ -821,13 +821,19 @@ and unsupported module loaders fail preparation. `@parity/truapi` resolves to
 the browser SDK shipped with the host. Product preparation does not execute
 package hooks or compile-time product code.
 
-The container sends fetch intent through its private port. The trusted launcher
+The container sends fetch and XHR intent through its private port. The trusted launcher
 intercepts the actual request and asks Rust to authorize its initial URL on the
 product's existing connection. Chromium request IDs associate CORS preflights
 and redirects with that one decision, so one-use grants are consumed once.
+Aborting a request invalidates its pending authorization. XHR keeps native request
+headers, response types and events after authorization; synchronous XHR is unavailable.
 Redirect destinations are not separately authorized. CORS remains
-browser-enforced. Workers, subframes, WebSockets, WebRTC and WebTransport are
-unavailable in the CLI product realm. Product code has no Bun/Node filesystem,
+browser-enforced. Remote WebSockets are opened by a trusted launcher broker after
+one Rust authorization per connection. The broker forwards text/binary messages and
+subprotocols, sends the product Origin and closes its connections at teardown. It
+does not share browser cookies. `bufferedAmount` tracks the relay queue rather than
+the launcher's socket buffer. Direct browser WebSockets remain blocked by CSP.
+Workers, subframes, WebRTC and WebTransport are unavailable in the CLI product realm. Product code has no Bun/Node filesystem,
 subprocess or host-environment access.
 
 The browser execution phase times out after five minutes. Success, failure or

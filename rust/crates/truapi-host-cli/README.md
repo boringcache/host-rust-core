@@ -496,11 +496,21 @@ so its pairing runs only for the current process and `/devices` is unavailable.
 A product script is top-level JavaScript or TypeScript run as a browser ES
 module. The CLI uses the same `js/container` code as the native iOS host and
 the shared Rust Remote permission policy. In the CLI, the trusted launcher asks
-Rust to authorize the initial URL when Chromium intercepts the outgoing fetch.
+Rust to authorize the initial URL when Chromium intercepts an outgoing fetch or XHR.
 It uses the product's existing connection and consumes a one-use grant only
-once, including requests with CORS preflights. Native fetch follows redirects
-without asking about each destination. Browser CORS rules still apply. WebSockets, WebRTC,
-WebTransport, workers, and subframes are unavailable in this runner.
+once, including requests with CORS preflights. Native requests follow redirects
+without asking about each destination. XHR supports asynchronous requests with native
+headers and response types; synchronous XHR is unavailable. Browser CORS rules still apply.
+
+Remote WebSockets use the same domain permission. The trusted launcher opens each
+connection only after Rust approval and forwards text/binary messages and subprotocols.
+Allow once permits one connection, including later messages. Closing a pending socket
+cancels it. The launcher sends the product Origin; its sockets do not share browser
+cookies. URL credentials use Bun's preemptive Basic authentication rather than a
+browser's challenge response. `bufferedAmount` reports bytes waiting for the launcher,
+not its socket's remaining output buffer. Direct browser WebSockets stay blocked,
+so page code cannot bypass the launcher. WebRTC, WebTransport, workers and subframes
+are unavailable in this runner.
 
 Imports must resolve inside the script's directory or a `node_modules` tree in
 that directory or an ancestor. Resolved symlinks must stay within these approved

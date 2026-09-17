@@ -15,6 +15,10 @@ import { PERMISSIONS_AUTHORIZE_NETWORK_ACCESS } from "../../../../js/packages/tr
 import { buildProductScript } from "./sandbox-build.ts";
 import { buildBrowserAssets, type BrowserAssets } from "./browser-assets.ts";
 import { wsProvider } from "./ws-provider.ts";
+import {
+  createWebSocketBroker,
+  installWebSocketBackend,
+} from "./sandbox-websocket.ts";
 
 export interface BrowserScriptOptions {
   source: string;
@@ -138,6 +142,7 @@ export async function runBrowserScript(
       resolve: (operation?: NetworkOperation) => void;
     }
   >();
+  const webSockets = createWebSocketBroker(authorizeNetworkRequest, origin);
   // Startup can fail before the caller begins awaiting script completion.
   void completion.catch(() => {});
   const fail = (error: unknown) => {
@@ -167,7 +172,8 @@ export async function runBrowserScript(
     const session = await context.newCDPSession(page);
     session.on("Network.requestWillBeSent", (event) => {
       const request = networkRequest(event.requestId);
-      if (event.type === "Fetch" && !operations.has(event.requestId)) {
+      const needsAuthorization = event.type === "Fetch" || event.type === "XHR";
+      if (needsAuthorization && !operations.has(event.requestId)) {
         const operation = { url: event.request.url, active: true };
         operations.set(event.requestId, operation);
         request.resolve(operation);
@@ -178,7 +184,7 @@ export async function runBrowserScript(
         void networkRequest(event.initiator.requestId).ready.then(
           request.resolve,
         );
-      } else if (event.type !== "Fetch") {
+      } else if (!needsAuthorization) {
         request.resolve();
       }
     });
@@ -249,6 +255,14 @@ export async function runBrowserScript(
     });
 
     await page.exposeBinding(
+      "__truapi_websocket__",
+      ({ frame }, command: unknown) => {
+        if (frame !== page.mainFrame())
+          throw new Error("Invalid WebSocket frame");
+        return webSockets.command(command);
+      },
+    );
+    await page.exposeBinding(
       "__truapi_network_intent__",
       ({ frame }, input: unknown) => {
         if (frame !== page.mainFrame() || !isFrame(input))
@@ -268,7 +282,9 @@ export async function runBrowserScript(
           request.payload.value,
         ).value;
         // CLI authorization belongs to the intercepted request, so cancellation cannot leave a reusable grant.
-        const allowed = ["http:", "https:"].includes(new URL(url).protocol);
+        const allowed = ["http:", "https:", "ws:", "wss:"].includes(
+          new URL(url).protocol,
+        );
         const response = encodeWireMessage({
           requestId: request.requestId,
           payload: {
@@ -340,7 +356,9 @@ export async function runBrowserScript(
       delete window.__truapi_network_intent__;
       delete window.__truapi_send__;
     })();`;
-    await page.addInitScript({ content: `${bootstrap}\n${assets.container}` });
+    await page.addInitScript({
+      content: `${bootstrap}\n(${installWebSocketBackend.toString()})();\n${assets.container}`,
+    });
     let ready = false;
     const pending: Uint8Array[] = [];
     unsubscribe = options.provider.subscribe((message) => {
@@ -388,6 +406,7 @@ export async function runBrowserScript(
     if (timer) clearTimeout(timer);
     unsubscribe?.();
     unsubscribeClose?.();
+    webSockets.dispose();
     for (const finish of privateRequests.values()) finish(false);
     for (const operation of operations.values()) operation.active = false;
     for (const request of networkRequests.values()) request.resolve();
