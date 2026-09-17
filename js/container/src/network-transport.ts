@@ -4,6 +4,8 @@ import {
   MESSAGE_TYPE_RESPONSE,
   type MethodIds,
   scale,
+} from '@parity/truapi';
+import {
   VersionedAuthorizeNetworkAccessRequest,
   VersionedAuthorizeNetworkAccessResponse,
   VersionedAuthorizeNetworkAccessError,
@@ -13,7 +15,7 @@ import {
   VersionedAuthorizeMediaCaptureRequest,
   VersionedAuthorizeMediaCaptureResponse,
   VersionedAuthorizeMediaCaptureError,
-} from '@parity/truapi';
+} from '../../packages/truapi/src/generated/internal.js';
 import {
   PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
   PERMISSIONS_AUTHORIZE_WEB_RTC,
