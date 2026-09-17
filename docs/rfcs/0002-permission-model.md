@@ -188,9 +188,12 @@ behavior. Redirect targets and DOM resource loads are not separately checked
 by this wrapper. Swift supplies native callbacks, such as the permission
 dialog, but does not forward the wrapper's authorization messages.
 
-The current implementation consumes temporary grants for fetch and existing
-remote-operation gates. Native browser camera/microphone checks still inspect
-status without consuming a grant; their operation integration remains incomplete.
+The shared container also calls `permissions.authorizeMediaCapture` before each
+`getUserMedia` request. Rust consumes camera and microphone consent for the
+requested tracks. One-use permission covers one capture request; its returned
+stream remains usable until stopped. Another capture requires new authorization,
+including when WebKit reuses its native permission decision. Native delegates
+resolve OS permission without consuming product consent again.
 
 ### Implicit Permission Triggering by Business Methods
 

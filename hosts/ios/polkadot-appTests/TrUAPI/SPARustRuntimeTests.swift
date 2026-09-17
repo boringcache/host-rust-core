@@ -65,6 +65,7 @@ struct SPARustRuntimeTests {
         #expect(url == directURL)
         #expect(execution.startWsBridgeCallCount == 1)
         #expect(execution.permissionRequests.isEmpty)
+        #expect(engine.mediaHandlerWasInstalledAtInitialization)
 
         // Bootstrap → container → zoom disable, doc-start ordering intact.
         #expect(engine.initializedScripts.count == 3)

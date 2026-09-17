@@ -168,9 +168,25 @@ final class StubHostBridge: HostBridge, @unchecked Sendable {
     let coreStorage: HostCoreStorageBackend = StubCoreStorage()
     private let permissionLock = NSLock()
     private var remoteDecisions: [PermissionDecision]
+    private var deviceDecisions: [PermissionDecision]
+    private var deviceRequests: [HostDevicePermissionRequest] = []
 
-    init(remoteDecisions: [PermissionDecision] = []) {
+    init(remoteDecisions: [PermissionDecision] = [], deviceDecisions: [PermissionDecision] = []) {
         self.remoteDecisions = remoteDecisions
+        self.deviceDecisions = deviceDecisions
+    }
+
+    var requestedDevicePermissions: [HostDevicePermissionRequest] {
+        permissionLock.lock()
+        defer { permissionLock.unlock() }
+        return deviceRequests
+    }
+
+    private func nextDeviceDecision(request: HostDevicePermissionRequest) -> PermissionDecision {
+        permissionLock.lock()
+        defer { permissionLock.unlock() }
+        deviceRequests.append(request)
+        return deviceDecisions.isEmpty ? .deny : deviceDecisions.removeFirst()
     }
 
     private func nextRemoteDecision() -> PermissionDecision {
@@ -180,7 +196,9 @@ final class StubHostBridge: HostBridge, @unchecked Sendable {
     }
 
     func navigateTo(url _: String) async throws {}
-    func devicePermission(request _: HostDevicePermissionRequest) async throws -> PermissionDecision { .deny }
+    func devicePermission(request: HostDevicePermissionRequest) async throws -> PermissionDecision {
+        nextDeviceDecision(request: request)
+    }
     func remotePermission(request _: RemotePermission) async throws -> PermissionDecision { nextRemoteDecision() }
     func featureSupported(request _: HostFeatureSupportedRequest) async throws -> Bool { true }
     func supportedChains() throws -> HostChainSet { HostChainSet(network: "", chains: []) }

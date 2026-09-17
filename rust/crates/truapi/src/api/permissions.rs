@@ -1,6 +1,7 @@
 //! Unified [`Permissions`] trait.
 
 use crate::versioned::permissions::{
+    AuthorizeMediaCaptureError, AuthorizeMediaCaptureRequest, AuthorizeMediaCaptureResponse,
     AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest, AuthorizeNetworkAccessResponse,
     AuthorizeWebRtcError, AuthorizeWebRtcRequest, AuthorizeWebRtcResponse,
     HostDevicePermissionError, HostDevicePermissionRequest, HostDevicePermissionResponse,
@@ -81,4 +82,22 @@ pub trait Permissions: Send + Sync {
         cx: &CallContext,
         request: AuthorizeWebRtcRequest,
     ) -> Result<AuthorizeWebRtcResponse, CallError<AuthorizeWebRtcError>>;
+
+    /// Authorize one media capture, consuming available one-use camera and
+    /// microphone grants for the requested capabilities.
+    ///
+    /// ```ts
+    /// const result = await truapi.permissions.authorizeMediaCapture({
+    ///   audio: true,
+    ///   video: true,
+    /// });
+    /// assert(result.isOk(), "media capture authorization failed:", result);
+    /// console.log("media capture allowed:", result.value.allowed);
+    /// ```
+    #[wire(id = 4)]
+    async fn authorize_media_capture(
+        &self,
+        cx: &CallContext,
+        request: AuthorizeMediaCaptureRequest,
+    ) -> Result<AuthorizeMediaCaptureResponse, CallError<AuthorizeMediaCaptureError>>;
 }

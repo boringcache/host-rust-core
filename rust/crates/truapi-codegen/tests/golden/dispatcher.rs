@@ -1700,7 +1700,7 @@ where
         });
     }
     {
-        let host = host;
+        let host = host.clone();
         dispatcher.on_request(wire_table::PERMISSIONS_AUTHORIZE_WEB_RTC, move |request_id: String, bytes: Vec<u8>| {
             let host = host.clone();
             Box::pin(async move {
@@ -1718,6 +1718,34 @@ where
                 let result: Result<versioned::permissions::AuthorizeWebRtcResponse, truapi::CallError<versioned::permissions::AuthorizeWebRtcError>> =
                     match host.authorize_web_rtc(&cx, request).await {
                         Ok(response) => Ok(<versioned::permissions::AuthorizeWebRtcResponse as truapi::versioned::FromLatest>::from_latest(
+                            truapi::versioned::IntoLatest::into_latest(response),
+                            target_version,
+                        )),
+                        Err(err) => Err(downgrade_call_error(err, target_version)),
+                    };
+                result.encode()
+            })
+        });
+    }
+    {
+        let host = host;
+        dispatcher.on_request(wire_table::PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let request: versioned::permissions::AuthorizeMediaCaptureRequest = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<versioned::permissions::AuthorizeMediaCaptureError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        let result: Result<versioned::permissions::AuthorizeMediaCaptureResponse, truapi::CallError<versioned::permissions::AuthorizeMediaCaptureError>> = Err(error);
+                        return result.encode();
+                    }
+                };
+                let target_version = request.version();
+                let cx = CallContext::with_request_id(request_id);
+                let result: Result<versioned::permissions::AuthorizeMediaCaptureResponse, truapi::CallError<versioned::permissions::AuthorizeMediaCaptureError>> =
+                    match host.authorize_media_capture(&cx, request).await {
+                        Ok(response) => Ok(<versioned::permissions::AuthorizeMediaCaptureResponse as truapi::versioned::FromLatest>::from_latest(
                             truapi::versioned::IntoLatest::into_latest(response),
                             target_version,
                         )),

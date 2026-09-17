@@ -73,6 +73,43 @@ struct ProductNetworkAccessTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func allowOnceReachesStubbedMediaCaptureOnlyOnce() async throws {
+        let bridge = StubHostBridge(deviceDecisions: [.allowOnce, .allowOnce, .deny])
+        let product = try await NetworkTestProduct.open(bridge: bridge, initialScripts: ["""
+            window.__testMediaCalls = [];
+            Object.defineProperty(Object.getPrototypeOf(navigator.mediaDevices), 'getUserMedia', {
+              configurable: true,
+              writable: true,
+              value: async function(constraints) {
+                window.__testMediaCalls.push({ audio: !!constraints.audio, video: !!constraints.video });
+                return { getTracks: () => [] };
+              }
+            });
+            """])
+        defer { product.close() }
+
+        let result = try await withNetworkTestTimeout("media permission") {
+            try await product.webView.callAsyncJavaScript("""
+                const decisions = [];
+                for (let attempt = 0; attempt < 2; attempt++) {
+                  try {
+                    await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                    decisions.push('allowed');
+                  } catch {
+                    decisions.push('denied');
+                  }
+                }
+                return JSON.stringify({ decisions, captures: window.__testMediaCalls });
+                """, arguments: [:], in: nil, contentWorld: .page) as? String
+        }
+
+        #expect(result == """
+            {"decisions":["allowed","denied"],"captures":[{"audio":true,"video":true}]}
+            """)
+        #expect(bridge.requestedDevicePermissions == [.camera, .microphone, .camera])
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func stylesheetsAndFontsKeepTheirNativeLoadingBehavior() async throws {
         let product = try await NetworkTestProduct.open()
         defer { product.close() }
@@ -168,7 +205,10 @@ private struct NetworkTestProduct {
     let window: NetworkTestWindow
     let navigationDelegate: ProductPageReady
 
-    static func open(bridge: StubHostBridge = StubHostBridge()) async throws -> NetworkTestProduct {
+    static func open(
+        bridge: StubHostBridge = StubHostBridge(),
+        initialScripts: [String] = []
+    ) async throws -> NetworkTestProduct {
         let server = try await NetworkTestServer.start()
         do {
             let runtime = try TrUAPIHostRuntime(bridge: bridge, runtimeConfig: HostRuntimeConfig(
@@ -183,6 +223,11 @@ private struct NetworkTestProduct {
             let ready = ProductPageReady()
             let configuration = WKWebViewConfiguration()
             configuration.userContentController.add(ready, name: "testReady")
+            for source in initialScripts {
+                configuration.userContentController.addUserScript(WKUserScript(
+                    source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true
+                ))
+            }
             let webView = WKWebView(frame: .zero, configuration: configuration)
             webView.navigationDelegate = ready
             let window = try NetworkTestWindow(webView)

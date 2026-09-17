@@ -50,3 +50,20 @@ final class MockPermissionGuard: ProductPermissionGuarding, @unchecked Sendable 
         verdictToReturn
     }
 }
+
+final class MockOSPermissionAsker: OSPermissionAsking, @unchecked Sendable {
+    var statusToReturn: OSPermissionStatus = .notDetermined
+    var requestResult = false
+    private(set) var checkedCapabilities: [DeviceCapabilityType] = []
+    private(set) var requestedCapabilities: [DeviceCapabilityType] = []
+
+    func checkPermission(for capability: DeviceCapabilityType) async -> OSPermissionStatus {
+        checkedCapabilities.append(capability)
+        return statusToReturn
+    }
+
+    func requestPermission(for capability: DeviceCapabilityType) async -> Bool {
+        requestedCapabilities.append(capability)
+        return requestResult
+    }
+}

@@ -18,6 +18,7 @@ use truapi::versioned::notifications::{
     HostPushNotificationResponse,
 };
 use truapi::versioned::permissions::{
+    AuthorizeMediaCaptureError, AuthorizeMediaCaptureRequest, AuthorizeMediaCaptureResponse,
     AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest, AuthorizeNetworkAccessResponse,
     AuthorizeWebRtcError, AuthorizeWebRtcRequest, AuthorizeWebRtcResponse,
     HostDevicePermissionError, HostDevicePermissionRequest, HostDevicePermissionResponse,
@@ -130,6 +131,39 @@ impl System for ProductRuntimeHost {
 
 #[truapi::async_trait]
 impl Permissions for ProductRuntimeHost {
+    #[instrument(skip_all, fields(runtime.method = "permissions.authorize_media_capture"))]
+    async fn authorize_media_capture(
+        &self,
+        _cx: &CallContext,
+        request: AuthorizeMediaCaptureRequest,
+    ) -> Result<AuthorizeMediaCaptureResponse, CallError<AuthorizeMediaCaptureError>> {
+        let AuthorizeMediaCaptureRequest::V1(request) = request;
+        let product_id = self.product_id();
+        let service = self.permissions_service(&product_id);
+        let mut allowed = request.audio || request.video;
+        for (requested, capability) in [
+            (request.video, v01::HostDevicePermissionRequest::Camera),
+            (request.audio, v01::HostDevicePermissionRequest::Microphone),
+        ] {
+            if !requested {
+                continue;
+            }
+            let status = service
+                .authorize_device(capability)
+                .await
+                .map_err(|error| CallError::HostFailure {
+                    reason: format!("permission storage failed: {error:?}"),
+                })?;
+            if status != PermissionAuthorizationStatus::Authorized {
+                allowed = false;
+                break;
+            }
+        }
+        Ok(AuthorizeMediaCaptureResponse::V1(
+            v01::AuthorizeNetworkAccessResponse { allowed },
+        ))
+    }
+
     async fn authorize_web_rtc(
         &self,
         _cx: &CallContext,

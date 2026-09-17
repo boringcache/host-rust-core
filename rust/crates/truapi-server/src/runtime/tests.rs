@@ -31,7 +31,10 @@ use truapi::versioned::notifications::{
     HostPushNotificationCancelRequest, HostPushNotificationCancelResponse,
     HostPushNotificationError, HostPushNotificationRequest, HostPushNotificationResponse,
 };
-use truapi::versioned::permissions::{HostDevicePermissionRequest, HostDevicePermissionResponse};
+use truapi::versioned::permissions::{
+    AuthorizeMediaCaptureRequest, AuthorizeMediaCaptureResponse, HostDevicePermissionRequest,
+    HostDevicePermissionResponse,
+};
 use truapi::versioned::preimage::{
     RemotePreimageLookupSubscribeItem, RemotePreimageLookupSubscribeRequest,
     RemotePreimageSubmitRequest,
@@ -1494,6 +1497,287 @@ fn navigate_to_consumes_open_url_allow_once_at_handoff() {
             }
         }
     });
+}
+
+#[test]
+fn media_capture_consumes_allow_once_for_each_requested_capability() {
+    futures::executor::block_on(async {
+        for (audio, video, capabilities) in [
+            (
+                true,
+                false,
+                vec![v01::HostDevicePermissionRequest::Microphone],
+            ),
+            (false, true, vec![v01::HostDevicePermissionRequest::Camera]),
+            (
+                true,
+                true,
+                vec![
+                    v01::HostDevicePermissionRequest::Camera,
+                    v01::HostDevicePermissionRequest::Microphone,
+                ],
+            ),
+        ] {
+            for request_upfront in [false, true] {
+                let platform = Arc::new(StubPlatform {
+                    device_permission_decisions: Mutex::new(
+                        capabilities
+                            .iter()
+                            .map(|_| PermissionDecision::AllowOnce)
+                            .chain([PermissionDecision::Deny])
+                            .collect(),
+                    ),
+                    ..Default::default()
+                });
+                let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
+                let cx = CallContext::default();
+                if request_upfront {
+                    for capability in &capabilities {
+                        for _ in 0..2 {
+                            assert_eq!(
+                                host.request_device_permission(
+                                    &cx,
+                                    HostDevicePermissionRequest::V1(*capability)
+                                )
+                                .await
+                                .unwrap(),
+                                HostDevicePermissionResponse::V1(
+                                    v01::HostDevicePermissionResponse { granted: true }
+                                ),
+                            );
+                        }
+                    }
+                }
+                let request = AuthorizeMediaCaptureRequest::V1(v01::AuthorizeMediaCaptureRequest {
+                    audio,
+                    video,
+                });
+                let first = host.authorize_media_capture(&cx, request.clone()).await;
+                let mut statuses = Vec::new();
+                for capability in &capabilities {
+                    statuses.push(
+                        host.permission_authorization_status(
+                            PermissionAuthorizationRequest::Device(*capability),
+                        )
+                        .await
+                        .unwrap(),
+                    );
+                }
+                let second = host.authorize_media_capture(&cx, request).await;
+                let mut expected_requests = capabilities.clone();
+                expected_requests.push(capabilities[0]);
+                assert_eq!(
+                    (
+                        first,
+                        second,
+                        statuses,
+                        platform.device_permission_requests.lock().unwrap().clone()
+                    ),
+                    (
+                        Ok(AuthorizeMediaCaptureResponse::V1(
+                            v01::AuthorizeNetworkAccessResponse { allowed: true }
+                        )),
+                        Ok(AuthorizeMediaCaptureResponse::V1(
+                            v01::AuthorizeNetworkAccessResponse { allowed: false }
+                        )),
+                        vec![PermissionAuthorizationStatus::NotDetermined; capabilities.len()],
+                        expected_requests,
+                    ),
+                    "audio={audio}, video={video}, request_upfront={request_upfront}",
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn media_capture_concurrent_calls_cannot_share_one_use_grants() {
+    futures::executor::block_on(async {
+        for (audio, video, capabilities) in [
+            (
+                true,
+                false,
+                vec![v01::HostDevicePermissionRequest::Microphone],
+            ),
+            (false, true, vec![v01::HostDevicePermissionRequest::Camera]),
+            (
+                true,
+                true,
+                vec![
+                    v01::HostDevicePermissionRequest::Camera,
+                    v01::HostDevicePermissionRequest::Microphone,
+                ],
+            ),
+        ] {
+            let platform = Arc::new(StubPlatform {
+                device_permission_decisions: Mutex::new(
+                    capabilities
+                        .iter()
+                        .map(|_| PermissionDecision::AllowOnce)
+                        .chain([PermissionDecision::Deny])
+                        .collect(),
+                ),
+                ..Default::default()
+            });
+            let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
+            let cx = CallContext::default();
+            for capability in &capabilities {
+                host.request_device_permission(&cx, HostDevicePermissionRequest::V1(*capability))
+                    .await
+                    .unwrap();
+            }
+            let request = AuthorizeMediaCaptureRequest::V1(v01::AuthorizeMediaCaptureRequest {
+                audio,
+                video,
+            });
+            let (first, second) = futures::join!(
+                host.authorize_media_capture(&cx, request.clone()),
+                host.authorize_media_capture(&cx, request),
+            );
+            let mut expected_requests = capabilities.clone();
+            expected_requests.push(capabilities[0]);
+            assert_eq!(
+                (
+                    first,
+                    second,
+                    platform.device_permission_requests.lock().unwrap().clone()
+                ),
+                (
+                    Ok(AuthorizeMediaCaptureResponse::V1(
+                        v01::AuthorizeNetworkAccessResponse { allowed: true }
+                    )),
+                    Ok(AuthorizeMediaCaptureResponse::V1(
+                        v01::AuthorizeNetworkAccessResponse { allowed: false }
+                    )),
+                    expected_requests,
+                ),
+                "audio={audio}, video={video}",
+            );
+        }
+    });
+}
+
+#[test]
+fn media_capture_requires_every_requested_capability() {
+    futures::executor::block_on(async {
+        for (audio, video, decisions, expected_requests) in [
+            (false, false, vec![], vec![]),
+            (
+                true,
+                true,
+                vec![PermissionDecision::Deny],
+                vec![v01::HostDevicePermissionRequest::Camera],
+            ),
+            (
+                true,
+                true,
+                vec![PermissionDecision::AllowOnce, PermissionDecision::Deny],
+                vec![
+                    v01::HostDevicePermissionRequest::Camera,
+                    v01::HostDevicePermissionRequest::Microphone,
+                ],
+            ),
+        ] {
+            let platform = Arc::new(StubPlatform {
+                device_permission_decisions: Mutex::new(decisions.into()),
+                ..Default::default()
+            });
+            let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
+            let response = host
+                .authorize_media_capture(
+                    &CallContext::default(),
+                    AuthorizeMediaCaptureRequest::V1(v01::AuthorizeMediaCaptureRequest {
+                        audio,
+                        video,
+                    }),
+                )
+                .await;
+            assert_eq!(
+                (
+                    response,
+                    platform.device_permission_requests.lock().unwrap().clone()
+                ),
+                (
+                    Ok(AuthorizeMediaCaptureResponse::V1(
+                        v01::AuthorizeNetworkAccessResponse { allowed: false }
+                    )),
+                    expected_requests
+                ),
+            );
+        }
+    });
+}
+
+#[test]
+fn media_capture_reuses_permanent_grants() {
+    futures::executor::block_on(async {
+        let platform = Arc::new(StubPlatform {
+            device_permission_decisions: Mutex::new(
+                [
+                    PermissionDecision::AllowAlways,
+                    PermissionDecision::AllowAlways,
+                    PermissionDecision::Deny,
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        });
+        let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
+        let request = AuthorizeMediaCaptureRequest::V1(v01::AuthorizeMediaCaptureRequest {
+            audio: true,
+            video: true,
+        });
+        let mut responses = Vec::new();
+        for _ in 0..2 {
+            responses.push(
+                host.authorize_media_capture(&CallContext::default(), request.clone())
+                    .await,
+            );
+        }
+        assert_eq!(
+            (
+                responses,
+                platform.device_permission_requests.lock().unwrap().clone()
+            ),
+            (
+                vec![
+                    Ok(AuthorizeMediaCaptureResponse::V1(
+                        v01::AuthorizeNetworkAccessResponse { allowed: true }
+                    ));
+                    2
+                ],
+                vec![
+                    v01::HostDevicePermissionRequest::Camera,
+                    v01::HostDevicePermissionRequest::Microphone
+                ],
+            ),
+        );
+    });
+}
+
+#[test]
+fn media_capture_storage_failure_does_not_prompt_or_authorize() {
+    let platform = Arc::new(StubPlatform {
+        permission_storage_error: Some("media permission storage unavailable"),
+        ..Default::default()
+    });
+    let host = ProductRuntimeHost::new_compat(platform.clone(), test_spawner());
+    let response = futures::executor::block_on(host.authorize_media_capture(
+        &CallContext::default(),
+        AuthorizeMediaCaptureRequest::V1(v01::AuthorizeMediaCaptureRequest {
+            audio: true,
+            video: true,
+        }),
+    ));
+    assert_eq!(
+        (response, platform.device_permission_requests.lock().unwrap().clone()),
+        (
+            Err(CallError::HostFailure {
+                reason: "permission storage failed: GenericError { reason: \"media permission storage unavailable\" }".to_string(),
+            }),
+            vec![],
+        ),
+    );
 }
 
 #[test]
