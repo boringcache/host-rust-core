@@ -34,7 +34,7 @@ host="target/debug/truapi-host"
 run_phase() {
   local phase="$1" product="$2"
   echo "==> $phase (as $product)"
-  E2E_PHASE="$phase" "$host" signing-host \
+  TRUAPI_SCRIPT_MODE=trusted E2E_PHASE="$phase" "$host" signing-host \
     --network "$network" \
     --base-path "$state" \
     --product-id "$product" \
