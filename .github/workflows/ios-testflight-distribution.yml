@@ -45,6 +45,13 @@ jobs:
           match_auth_required: "true"
           match_repository_pat: ${{ secrets.FASTLANE_RO_PAT }}
 
+      # Package.swift resolves targets at generated paths that are gitignored,
+      # so xcodebuild cannot resolve dependencies until the core is built from
+      # this tree. The app repository got the core as a published package and
+      # needed none of this; here it has to be generated before any build.
+      - name: Bootstrap the in-tree core
+        uses: ./.github/actions/bootstrap-ios-core
+
       - name: Read version and build number
         id: read_marketing_version
         uses: ./hosts/ios/.github/actions/read-build-version
@@ -57,6 +64,9 @@ jobs:
       - name: Distribute TestFlight build
         uses: ./hosts/ios/.github/actions/distribute-testflight
         with:
+          # The caller already checked out, and this action's own checkout
+          # cleans ignored files, which is everything the bootstrap generated.
+          perform_checkout: "false"
           ios_bundle_id: ${{ env.IOS_BUNDLE_ID }}
           ios_extension_bundle_id: ${{ env.IOS_EXTENSION_BUNDLE_ID }}
           provisioning_profile_specifier: ${{ env.PROVISIONING_PROFILE_SPECIFIER }}

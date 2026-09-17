@@ -211,6 +211,13 @@ jobs:
           match_auth_required: "true"
           match_repository_pat: ${{ secrets.FASTLANE_RO_PAT }}
 
+      # Package.swift resolves targets at generated paths that are gitignored,
+      # so xcodebuild cannot resolve dependencies until the core is built from
+      # this tree. The app repository got the core as a published package and
+      # needed none of this; here it has to be generated before any build.
+      - name: Bootstrap the in-tree core
+        uses: ./.github/actions/bootstrap-ios-core
+
       - name: Distribute TestFlight build
         uses: ./hosts/ios/.github/actions/distribute-testflight
         with:
@@ -349,7 +356,15 @@ jobs:
     name: Send Failure Notification
     runs-on: ubuntu-latest
     needs: [prepare_build_metadata, check_and_build, check_build_result]
-    if: failure()
+    # Held until the notification relay exists. This one is given a Telegram
+    # chat id, hardcoded above, but no bot endpoint or token, so it retries and
+    # then reports a failure of its own on top of whatever it was announcing.
+    # The chat it names is not ours either, so restoring this means repointing
+    # it as well.
+    #
+    # The condition this replaces:
+    # if: failure()
+    if: false
     steps:
       - name: Send failure notification
         uses: novasamatech/github-actions/send-notification@8c20aeac07cb19b3c2ce1310d1ef2947a373ca5e # v5
