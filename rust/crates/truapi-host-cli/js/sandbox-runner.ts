@@ -5,12 +5,14 @@ import {
   encodeWireMessage,
   MESSAGE_TYPE_REQUEST,
   MESSAGE_TYPE_RESPONSE,
-  VersionedAuthorizeNetworkAccessRequest,
-  VersionedAuthorizeNetworkAccessResponse,
-  VersionedAuthorizeNetworkAccessError,
   scale,
   type WireProvider,
 } from "../../../../js/packages/truapi/src/index.ts";
+import {
+  VersionedAuthorizeNetworkAccessRequest,
+  VersionedAuthorizeNetworkAccessResponse,
+  VersionedAuthorizeNetworkAccessError,
+} from "../../../../js/packages/truapi/src/generated/internal.ts";
 import { PERMISSIONS_AUTHORIZE_NETWORK_ACCESS } from "../../../../js/packages/truapi/src/generated/wire-table.ts";
 import { buildProductScript } from "./sandbox-build.ts";
 import { buildBrowserAssets, type BrowserAssets } from "./browser-assets.ts";

@@ -5,13 +5,15 @@ import {
   MESSAGE_TYPE_REQUEST,
   MESSAGE_TYPE_RESPONSE,
   scale,
-  VersionedAuthorizeNetworkAccessResponse,
-  VersionedAuthorizeNetworkAccessError,
   VersionedRemotePermissionResponse,
   VersionedRemotePermissionError,
   type ProtocolMessage,
   type WireProvider,
 } from "@parity/truapi";
+import {
+  VersionedAuthorizeNetworkAccessResponse,
+  VersionedAuthorizeNetworkAccessError,
+} from "../../../../js/packages/truapi/src/generated/internal.ts";
 import { PERMISSIONS_AUTHORIZE_NETWORK_ACCESS } from "../../../../js/packages/truapi/src/generated/wire-table.ts";
 import { runBrowserScript } from "./sandbox-runner.ts";
 
