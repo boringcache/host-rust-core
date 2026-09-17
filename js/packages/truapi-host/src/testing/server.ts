@@ -11,6 +11,8 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hostPageUrl } from "./host-page-url.js";
+import type { HostPageConfig } from "./host-page-url.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
@@ -21,9 +23,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const distRoot = resolve(__dirname, "../..", "dist");
 
 /** Options for {@link createTestHostServer}. */
-export interface TestHostServerOptions {
+export interface TestHostServerOptions extends Partial<HostPageConfig> {
   /** Port to listen on. `0` (the default) picks a free one. */
   port?: number;
+  /**
+   * Accepted only to fail with an explanation: TrUAPI derives a product
+   * account from (session root, product id), so it cannot be mapped to a
+   * chosen one. See the error text for what to do instead.
+   */
+  productAccounts?: Record<string, unknown>;
   /**
    * Do not keep the process alive for this server.
    *
@@ -35,7 +43,10 @@ export interface TestHostServerOptions {
 
 /** A running test host server. */
 export interface TestHostServer {
-  /** Base URL; the fixture appends `?product=` and `?mock=`. */
+  /**
+   * URL to open. Carries whatever host configuration was passed here; with no
+   * configuration it is the bare base the fixture appends its own to.
+   */
   url: string;
   /** Stop listening. */
   close(): Promise<void>;
@@ -122,6 +133,14 @@ async function bundle(
 export async function createTestHostServer(
   options: TestHostServerOptions = {},
 ): Promise<TestHostServer> {
+  if (options.productAccounts) {
+    throw new Error(
+      "createTestHostServer `productAccounts` is not supported by the TrUAPI " +
+        "test host: a product account is DERIVED from (session root, product " +
+        "id), so it cannot be mapped to a chosen account. Read the address " +
+        "back from the host and fund that, rather than pinning one.",
+    );
+  }
   // Two bundles: the page entry, and the worker the production topology runs
   // the core in. The worker is a separate script because that is what `new
   // Worker(url)` needs.
@@ -171,7 +190,15 @@ export async function createTestHostServer(
         reject(new Error("test host server reported no address"));
         return;
       }
-      resolveUrl(`http://127.0.0.1:${address.port}`);
+      const base = `http://127.0.0.1:${address.port}`;
+      // With a `productUrl` this server is the whole harness: the returned URL
+      // is ready to open. Without one it is the bare base the Playwright
+      // fixture appends its own per-test configuration to.
+      resolveUrl(
+        options.productUrl
+          ? hostPageUrl(base, options as HostPageConfig)
+          : base,
+      );
     });
   });
 

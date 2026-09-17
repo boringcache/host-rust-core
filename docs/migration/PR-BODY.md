@@ -79,14 +79,16 @@ Nine of product-sdk's example suites, real browser, real core, real wire:
 change: the whole diff for eight of the nine suites is the import line in
 `e2e/fixtures.ts` plus a type import in `e2e/helpers.ts`.
 
-Seven tests out of 31 needed more. Five read the old host's *internal* storage
+Six tests out of 31 needed more. Five read the old host's *internal* storage
 keys rather than product behaviour, and now read through the control surface.
-One asserted that switching the host account leaves the product account
-unchanged -- it does not, because TrUAPI derives the product account from the
-session root, so that is a real behavioural difference rather than churn. One is
-proposed as skipped: the core answers a decided permission from its own storage,
-so a revoked permission never re-reaches the host and no test host can make it
-pass.
+One is proposed as skipped: the core answers a decided permission from its own
+storage, so a revoked permission never re-reaches the host and no test host can
+make it pass.
+
+Account switching needs no rewrite. `switch-account.spec.ts` asserts the
+dapp-scoped product account stays stable across a host account switch, and that
+holds here unchanged -- the host's active account moves while the address the
+signer surfaces does not.
 
 Those rewrites are staged as a patch in `docs/migration/`, with a cover note.
 The patch applies cleanly to a fresh clone of product-sdk main, and product-sdk

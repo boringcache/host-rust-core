@@ -22,6 +22,7 @@ import type {
 
 import { PRODUCT_FRAME_ID } from "./host-page.js";
 import { createTestHostServer } from "./server.js";
+import { hostPageUrl } from "./host-page-url.js";
 import type { TestHostServer } from "./server.js";
 
 // Re-exported so a migrating test file imports from one path, the way
@@ -424,24 +425,15 @@ export function createTestHostFixture(defaults: TestHostFixtureOptions) {
       { page }: { page: Page },
       use: (fixture: TestHost) => Promise<void>,
     ) => {
-      const url = new URL(await hostBase());
-      url.searchParams.set("product", defaults.productUrl);
-      if (mock) {
-        url.searchParams.set("mock", JSON.stringify(mock));
-      }
-      if (defaults.productId) {
-        url.searchParams.set("productId", defaults.productId);
-      }
-      if (runtimeConfig) {
-        url.searchParams.set("runtimeConfig", JSON.stringify(runtimeConfig));
-      }
-      if (accounts) {
-        url.searchParams.set("accounts", accounts.join(","));
-      }
-      if (defaults.loginBehavior) {
-        url.searchParams.set("login", defaults.loginBehavior);
-      }
-      await page.goto(url.toString());
+      const url = hostPageUrl(await hostBase(), {
+        productUrl: defaults.productUrl,
+        productId: defaults.productId,
+        mock,
+        runtimeConfig,
+        accounts,
+        loginBehavior: defaults.loginBehavior,
+      });
+      await page.goto(url);
 
       // The page publishes its control surface only once the WASM core is up
       // and the product has its port, so this doubles as the wire's ready gate.

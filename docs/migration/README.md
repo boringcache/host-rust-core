@@ -48,15 +48,12 @@ amount of API compatibility ports it. They now read through the control surface
 - `signer-demo`: `persistence.spec.ts` (its `STORAGE_KEY` constant also carried
   the `test-host:` prefix, and it used that storage as a flush barrier)
 
-**One behavioural rewrite.** `signer-demo/switch-account.spec.ts` asserted that
-switching the host account leaves the product account unchanged. That held
-because `host-api-test-sdk`'s `productAccounts` option pinned a product account
-to a fixed dev keypair regardless of the active account. TrUAPI derives a
-product account from the session root and has no multi-account session —
-`account.getLegacyAccounts` returns an empty list by design — so switching is
-switching *user*, and the account must change. The test now asserts that,
-plus that switching back restores the same address (derivation is
-deterministic) and that the session stays connected.
+**Account switching needs no rewrite.** `signer-demo/switch-account.spec.ts`
+asserts that switching the host account leaves the dapp-scoped product account
+stable, and it passes here unchanged. Measured rather than assumed: switching
+moves the host's active account (`getActiveAccount` goes `alice` -> `charlie`)
+while the address the signer surfaces does not move. The product reads its
+product account once and holds it, so the observable behaviour matches.
 
 **One skip, proposed rather than decided.** `signer-demo/permission.spec.ts`
 asserts that revoking a permission mid-run and reconnecting re-prompts the host.
