@@ -3,10 +3,7 @@ import Products
 import TrUAPIHost
 
 protocol TrUAPIConfirmationPresenting: Sendable {
-    /// Present a confirmation for the core-reviewed action; returns user's
-    /// decision. The requesting product identity is sourced from the review
-    /// itself, so the presenter is product-agnostic and shared across the host
-    /// and per-execution bridges.
+    /// Present an action review, using the bridge's requester name when the review omits it.
     func confirm(review: UserConfirmationReview, from requesterName: String) async -> Bool
     func confirmPermission(
         review: UserConfirmationReview,
@@ -53,17 +50,9 @@ final class TrUAPIConfirmationPresenter: TrUAPIConfirmationPresenting, @unchecke
             await presentPermission(
                 promptMapper.makePermissionRequest(from: identityReview)
             )
-        case let .preimageSubmit(preimageReview):
-            await presentPermission(
-                promptMapper.makePermissionRequest(from: preimageReview)
-            )
         case let .accountAccess(accessReview):
             await presentPermission(
                 promptMapper.makePermissionRequest(from: accessReview)
-            )
-        case let .productSubtree(subtreeReview):
-            await presentPermission(
-                promptMapper.makePermissionRequest(from: subtreeReview)
             )
         case let .accountAlias(aliasReview):
             await presentPermission(
@@ -86,10 +75,14 @@ private extension TrUAPIConfirmationPresenter {
             await confirmStatementSign(
                 promptMapper.makeStatementSignRequest(from: statementReview)
             )
+        case let .preimageSubmit(preimageReview):
+            await confirmAction(
+                promptMapper.makeActionRequest(from: preimageReview, requester: requesterName)
+            )
+        case let .productSubtree(subtreeReview):
+            await confirmAction(promptMapper.makeActionRequest(from: subtreeReview))
         case .identityDisclosure,
-             .preimageSubmit,
              .accountAccess,
-             .productSubtree,
              .accountAlias:
             await confirmPermission(review: review, from: requesterName) != .deny
         case let .createProof(proofReview):
@@ -154,6 +147,16 @@ private extension TrUAPIConfirmationPresenter {
             }
 
             return decision.hostDecision
+        }
+    }
+
+    func confirmAction(_ request: TrUAPIActionConfirmationRequest) async -> Bool {
+        await awaitDecision(cancelled: false) { [routerFacade] in
+            await withCheckedContinuation { continuation in
+                let context = TrUAPIActionConfirmationContext(request: request)
+                context.setContinuation(continuation)
+                routerFacade.productsRouter.showActionConfirmation(context: context)
+            }
         }
     }
 

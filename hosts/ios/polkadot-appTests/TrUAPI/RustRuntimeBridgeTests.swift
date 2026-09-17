@@ -468,17 +468,33 @@ struct RustRuntimeBridgeTests {
         #expect(!verdict)
     }
 
-    @Test func productSubtreeConfirmationWithoutPresentationDenies() async {
+    @Test func actionConfirmationWithoutPresentationDenies() async {
         let presenter = TrUAPIConfirmationPresenter(
             routerFacade: ProductRoutersFacade.worker()
         )
 
-        let verdict = await presenter.confirmPermission(
-            review: .productSubtree(ProductSubtreeReview(productId: "test.product")),
-            from: "test.product"
-        )
+        for review in [
+            UserConfirmationReview.preimageSubmit(PreimageSubmitReview(size: 1_024)),
+            .productSubtree(ProductSubtreeReview(productId: "test.product"))
+        ] {
+            #expect(await presenter.confirm(review: review, from: "test.product") == false)
+        }
+    }
 
-        #expect(verdict == .deny)
+    @Test func actionConfirmationCancellationDenies() async {
+        let presenter = TrUAPIConfirmationPresenter(
+            routerFacade: ProductRoutersFacade.worker()
+        )
+        for review in [
+            UserConfirmationReview.preimageSubmit(PreimageSubmitReview(size: 1_024)),
+            .productSubtree(ProductSubtreeReview(productId: "test.product"))
+        ] {
+            let task = Task {
+                await presenter.confirm(review: review, from: "test.product")
+            }
+            task.cancel()
+            #expect(await task.value == false)
+        }
     }
 
     @Test func permissionConfirmationCancellationDenies() async {
