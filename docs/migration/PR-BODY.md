@@ -172,6 +172,15 @@ changes is the `@parity/truapi-host` version. Verified by installing pristine
 main with `@parity/truapi` resolved from npm and the host linked locally: the
 suites behave exactly as recorded above.
 
+**What this unblocks immediately.** host-playground#89 ("bump product-sdk to
+0.28") is green on every check except E2E, which fails 53 times with
+`waitForConnection` timeouts. Its test host is `@novasamatech/host-api`, an
+independent codec-1 implementation whose newest published version predates
+codec 2 by three days, so no dependency bump fixes it -- there is no codec-2
+version of that package to bump to. The hermetic host is the route to a green
+E2E there, which is the concrete reason the release matters rather than a
+preference between two test SDKs.
+
 **Three things that are decisions, not work:**
 
 - Funding the derived product accounts (`13B6hYAQ…` for `tx-demo.dot/0`,
