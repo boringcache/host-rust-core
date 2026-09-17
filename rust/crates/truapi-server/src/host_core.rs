@@ -1912,6 +1912,14 @@ mod tests {
                 .authorize_network_access("https://api.example.com/data".to_string())
                 .await
                 .unwrap();
+            let descendant = admin
+                .authorize_network_access("https://deep.api.example.com/data".to_string())
+                .await
+                .unwrap();
+            let root = admin
+                .authorize_network_access("https://example.com/data".to_string())
+                .await
+                .unwrap();
             admin
                 .set_permission_authorization_status(
                     network_permission(&["api.example.com"]),
@@ -1940,6 +1948,8 @@ mod tests {
             assert_eq!(
                 (
                     allowed,
+                    descendant,
+                    root,
                     revoked,
                     sibling,
                     isolated,
@@ -1947,14 +1957,23 @@ mod tests {
                 ),
                 (
                     PermissionAuthorizationStatus::Authorized,
+                    PermissionAuthorizationStatus::Authorized,
+                    PermissionAuthorizationStatus::Denied,
                     PermissionAuthorizationStatus::Denied,
                     PermissionAuthorizationStatus::Authorized,
                     vec![PermissionAuthorizationStatus::Denied; 2],
-                    vec![RemotePermissionRequest {
-                        permission: RemotePermission::Remote {
-                            domains: vec!["other.example.com".to_string()],
+                    vec![
+                        RemotePermissionRequest {
+                            permission: RemotePermission::Remote {
+                                domains: vec!["example.com".to_string()],
+                            },
                         },
-                    }],
+                        RemotePermissionRequest {
+                            permission: RemotePermission::Remote {
+                                domains: vec!["other.example.com".to_string()],
+                            },
+                        },
+                    ],
                 )
             );
         });

@@ -19,6 +19,7 @@ use truapi::versioned::notifications::{
 };
 use truapi::versioned::permissions::{
     AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest, AuthorizeNetworkAccessResponse,
+    AuthorizeWebRtcError, AuthorizeWebRtcRequest, AuthorizeWebRtcResponse,
     HostDevicePermissionError, HostDevicePermissionRequest, HostDevicePermissionResponse,
     RemotePermissionError, RemotePermissionRequest, RemotePermissionResponse,
 };
@@ -130,6 +131,25 @@ impl System for ProductRuntimeHost {
 
 #[truapi::async_trait]
 impl Permissions for ProductRuntimeHost {
+    async fn authorize_web_rtc(
+        &self,
+        _cx: &CallContext,
+        _request: AuthorizeWebRtcRequest,
+    ) -> Result<AuthorizeWebRtcResponse, CallError<AuthorizeWebRtcError>> {
+        let product_id = self.product_id();
+        self.permissions_service(&product_id)
+            .authorize_remote(v01::RemotePermissionRequest {
+                permission: v01::RemotePermission::WebRtc,
+            })
+            .await
+            .map(|status| {
+                AuthorizeWebRtcResponse::V1(v01::AuthorizeNetworkAccessResponse {
+                    allowed: status == PermissionAuthorizationStatus::Authorized,
+                })
+            })
+            .map_err(|error| CallError::Domain(AuthorizeWebRtcError::V1(error)))
+    }
+
     #[instrument(skip_all, fields(runtime.method = "permissions.authorize_network_access"))]
     async fn authorize_network_access(
         &self,
@@ -321,6 +341,21 @@ impl Notifications for ProductRuntimeHost {
         request: HostPushNotificationRequest,
     ) -> Result<HostPushNotificationResponse, CallError<HostPushNotificationError>> {
         let HostPushNotificationRequest::V1(inner) = request;
+        let product_id = self.product_id();
+        let status = self
+            .permissions_service(&product_id)
+            .authorize_device(v01::HostDevicePermissionRequest::Notifications)
+            .await
+            .map_err(|err| CallError::HostFailure {
+                reason: format!("permission storage failed: {err:?}"),
+            })?;
+        if status != PermissionAuthorizationStatus::Authorized {
+            return Err(CallError::Domain(HostPushNotificationError::V1(
+                v01::HostPushNotificationError::Unknown {
+                    reason: "Notifications permission denied".to_string(),
+                },
+            )));
+        }
         self.platform
             .push_notification(inner)
             .await

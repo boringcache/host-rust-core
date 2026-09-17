@@ -2,6 +2,7 @@
 
 use crate::versioned::permissions::{
     AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest, AuthorizeNetworkAccessResponse,
+    AuthorizeWebRtcError, AuthorizeWebRtcRequest, AuthorizeWebRtcResponse,
     HostDevicePermissionError, HostDevicePermissionRequest, HostDevicePermissionResponse,
     RemotePermissionError, RemotePermissionRequest, RemotePermissionResponse,
 };
@@ -66,4 +67,18 @@ pub trait Permissions: Send + Sync {
         cx: &CallContext,
         request: AuthorizeNetworkAccessRequest,
     ) -> Result<AuthorizeNetworkAccessResponse, CallError<AuthorizeNetworkAccessError>>;
+
+    /// Authorize one peer connection, consuming an available one-use grant.
+    ///
+    /// ```ts
+    /// const result = await truapi.permissions.authorizeWebRtc();
+    /// assert(result.isOk(), "WebRTC authorization failed:", result);
+    /// console.log("peer connection allowed:", result.value.allowed);
+    /// ```
+    #[wire(id = 3)]
+    async fn authorize_web_rtc(
+        &self,
+        cx: &CallContext,
+        request: AuthorizeWebRtcRequest,
+    ) -> Result<AuthorizeWebRtcResponse, CallError<AuthorizeWebRtcError>>;
 }

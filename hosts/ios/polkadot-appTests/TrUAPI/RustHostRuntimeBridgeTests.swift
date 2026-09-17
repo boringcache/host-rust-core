@@ -95,6 +95,22 @@ struct RustHostRuntimeBridgeTests {
         #expect(remote == .deny)
     }
 
+    @Test(arguments: [TrUAPIPermissionDecision.allowOnce, .allowAlways, .deny])
+    func confirmPermissionPreservesLifetime(decision: TrUAPIPermissionDecision) async throws {
+        let presenter = MockConfirmationPresenter()
+        presenter.permissionDecisionToReturn = decision
+        let bridge = makeHostBridge(confirmationPresenter: presenter)
+        let review = UserConfirmationReview.identityDisclosure(
+            IdentityDisclosureReview(productId: "caller.dot")
+        )
+
+        let result = try await bridge.confirmPermission(review: review)
+
+        #expect(result == decision)
+        #expect(presenter.receivedReview == review)
+        #expect(presenter.receivedRequesterName == "host")
+    }
+
     /// Core storage is the real host-global backend: writes round-trip.
     @Test func coreStorageRoundTrips() throws {
         let bridge = makeHostBridge()

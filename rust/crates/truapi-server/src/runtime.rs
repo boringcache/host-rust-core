@@ -86,8 +86,8 @@ use truapi::versioned::renderer::{
 use truapi::{CallContext, CallError, CancellationReason, Subscription, v01};
 use truapi_platform::{
     AccountAccessReview, ChatFieldError, IdentityDisclosureReview, PermissionAuthorizationRequest,
-    PermissionAuthorizationStatus, Platform, ProductContext, ProductStorageKey, SessionUiInfo,
-    UserConfirmationReview, normalize_chat_identifier, normalize_product_identifier,
+    PermissionAuthorizationStatus, PermissionDecision, Platform, ProductContext, ProductStorageKey,
+    SessionUiInfo, UserConfirmationReview, normalize_chat_identifier, normalize_product_identifier,
     validate_chat_icon, validate_chat_message_content, validate_chat_name,
 };
 #[cfg(target_arch = "wasm32")]
@@ -724,22 +724,22 @@ impl ProductRuntimeHost {
         // A dismissed/unavailable confirmation has no durable user decision.
         // Fail the current disclosure request closed but keep authorization in
         // the ask/default state so the next request can prompt again.
-        let confirmed = match self
+        let decision = match self
             .platform
-            .confirm_user_action(UserConfirmationReview::IdentityDisclosure(
+            .confirm_permission(UserConfirmationReview::IdentityDisclosure(
                 IdentityDisclosureReview {
                     product_id: product_id.clone(),
                 },
             ))
             .await
         {
-            Ok(confirmed) => confirmed,
+            Ok(decision) => decision,
             Err(_) => return Ok(PermissionAuthorizationStatus::NotDetermined),
         };
-        let status = if confirmed {
-            PermissionAuthorizationStatus::Authorized
-        } else {
-            PermissionAuthorizationStatus::Denied
+        let status = match decision {
+            PermissionDecision::AllowOnce => return Ok(PermissionAuthorizationStatus::Authorized),
+            PermissionDecision::AllowAlways => PermissionAuthorizationStatus::Authorized,
+            PermissionDecision::Deny => PermissionAuthorizationStatus::Denied,
         };
         service
             .set_authorization_status(&request, status)
@@ -820,17 +820,17 @@ async fn account_access_authorization(
         return Ok(cached);
     }
 
-    let confirmed = platform
-        .confirm_user_action(UserConfirmationReview::AccountAccess(AccountAccessReview {
+    let decision = platform
+        .confirm_permission(UserConfirmationReview::AccountAccess(AccountAccessReview {
             requesting_product_id: requesting_product_id.to_string(),
             target_product_id: target_product_id.to_string(),
         }))
         .await
         .map_err(AccountAccessAuthorizationError::Confirmation)?;
-    let status = if confirmed {
-        PermissionAuthorizationStatus::Authorized
-    } else {
-        PermissionAuthorizationStatus::Denied
+    let status = match decision {
+        PermissionDecision::AllowOnce => return Ok(PermissionAuthorizationStatus::Authorized),
+        PermissionDecision::AllowAlways => PermissionAuthorizationStatus::Authorized,
+        PermissionDecision::Deny => PermissionAuthorizationStatus::Denied,
     };
     service
         .set_authorization_status(&request, status)

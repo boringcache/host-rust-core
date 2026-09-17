@@ -8,8 +8,14 @@ import {
   VersionedAuthorizeNetworkAccessRequest,
   VersionedAuthorizeNetworkAccessResponse,
   VersionedAuthorizeNetworkAccessError,
+  VersionedAuthorizeWebRtcRequest,
+  VersionedAuthorizeWebRtcResponse,
+  VersionedAuthorizeWebRtcError,
 } from '@parity/truapi';
-import { PERMISSIONS_AUTHORIZE_NETWORK_ACCESS } from '@parity/truapi/wire-table';
+import {
+  PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
+  PERMISSIONS_AUTHORIZE_WEB_RTC,
+} from '@parity/truapi/wire-table';
 
 const build = await Bun.build({
   entrypoints: [new URL('./index.ts', import.meta.url).pathname],
@@ -25,6 +31,7 @@ function browser(
   pageUrl = `${origin}/index.html`,
   transport: 'port' | 'socket' = 'port',
   transformReply: (bytes: Uint8Array) => Uint8Array = (bytes) => bytes,
+  authorizeWebRtc: () => boolean | Promise<boolean> = () => false,
 ) {
   class BrowserRequest extends Request {
     constructor(input: RequestInfo | URL, init?: RequestInit) {
@@ -94,15 +101,19 @@ function browser(
     message = new Uint8Array(buffer, offset, length);
     sent.push(message);
     const decoded = decodeWireMessage(message)._unsafeUnwrap();
+    const webRtc = decoded.payload.methodId === PERMISSIONS_AUTHORIZE_WEB_RTC.method;
     expect({
       trait: decoded.payload.traitId,
       method: decoded.payload.methodId,
       kind: 'request',
-    }).toEqual(PERMISSIONS_AUTHORIZE_NETWORK_ACCESS);
-    const { url } = VersionedAuthorizeNetworkAccessRequest.dec(
+    }).toEqual(webRtc ? PERMISSIONS_AUTHORIZE_WEB_RTC : PERMISSIONS_AUTHORIZE_NETWORK_ACCESS);
+    const url = webRtc ? null : VersionedAuthorizeNetworkAccessRequest.dec(
       decoded.payload.value,
-    ).value;
-    Promise.resolve(authorize!(url)).then(
+    ).value.url;
+    if (webRtc) {
+      expect(VersionedAuthorizeWebRtcRequest.dec(decoded.payload.value)).toEqual({ tag: 'V1' });
+    }
+    Promise.resolve(url === null ? authorizeWebRtc() : authorize!(url)).then(
       (allowed) => {
         const reply = encodeWireMessage({
           requestId: decoded.requestId,
@@ -111,8 +122,8 @@ function browser(
             messageType: MESSAGE_TYPE_RESPONSE,
             value: scale
               .Result(
-                VersionedAuthorizeNetworkAccessResponse,
-                scale.CallError(VersionedAuthorizeNetworkAccessError),
+                webRtc ? VersionedAuthorizeWebRtcResponse : VersionedAuthorizeNetworkAccessResponse,
+                scale.CallError(webRtc ? VersionedAuthorizeWebRtcError : VersionedAuthorizeNetworkAccessError),
               )
               .enc({ success: true, value: { tag: 'V1', value: { allowed } } }),
           },
@@ -172,6 +183,19 @@ function browser(
         : undefined,
   });
   runInContext('window = globalThis', context);
+  runInContext(`
+    window.RTCPeerConnection = class {
+      constructor(config = {}) { this.config = { ...config, iceCandidatePoolSize: config.iceCandidatePoolSize ?? 0 }; }
+      getConfiguration() { return { ...this.config }; }
+      setConfiguration(config) { this.config = { ...config }; }
+      createOffer() { return Promise.resolve({ type: 'offer', sdp: 'native' }); }
+      createAnswer() { return Promise.resolve({ type: 'answer', sdp: 'native' }); }
+      setLocalDescription() { return Promise.resolve(); }
+      setRemoteDescription() { return Promise.resolve(); }
+      addIceCandidate() { return Promise.resolve(); }
+      close() {}
+    };
+  `, context);
   runInContext(container, context);
   return {
     context,
@@ -187,6 +211,36 @@ function browser(
 }
 
 describe('container fetch authorization', () => {
+  it('authorizes each peer connection over the private Rust channel', async () => {
+    let authorizations = 0;
+    const realm = browser(() => false, undefined, 'port', (bytes) => bytes,
+      () => ++authorizations === 1);
+    const first = runInContext('new RTCPeerConnection()', realm.context);
+    expect(await first.createOffer()).toEqual({ type: 'offer', sdp: 'native' });
+    expect(await first.createOffer()).toEqual({ type: 'offer', sdp: 'native' });
+    const second = runInContext('new RTCPeerConnection()', realm.context);
+    await expect(second.createOffer()).rejects.toThrow('WebRTC access is not allowed');
+    expect({ authorizations, fetches: realm.requests.length }).toEqual({
+      authorizations: 2,
+      fetches: 0,
+    });
+    first.close();
+    second.close();
+  });
+
+  it('does not accept a fetch approval as a peer-connection approval', async () => {
+    const realm = browser(() => true, `${origin}/index.html`, 'port', (bytes) => {
+      const decoded = decodeWireMessage(bytes)._unsafeUnwrap();
+      return encodeWireMessage({
+        ...decoded,
+        payload: { ...decoded.payload, methodId: PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method },
+      })._unsafeUnwrap();
+    }, () => true);
+    const connection = runInContext('new RTCPeerConnection()', realm.context);
+    await expect(connection.createOffer()).rejects.toThrow('WebRTC access is not allowed');
+    connection.close();
+  });
+
   it('sends authorization through a private binary port without replacing the SDK port', async () => {
     const realm = browser(() => true);
     await realm.fetch('https://api.example/data');

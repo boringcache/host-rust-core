@@ -1575,35 +1575,20 @@ pub fn normalize_remote_domain(domain: &str) -> String {
     format!("{wildcard}{normalized}")
 }
 
-/// Stored domain patterns that would authorize outbound access to `host`,
-/// ordered most specific first.
-///
-/// Implements the RFC 0002 matching rules: an exact host match, a single-level
-/// wildcard over the host's immediate parent, and the universal wildcard. Two
-/// consequences worth holding onto, because both are load-bearing:
-///
-/// - A wildcard spans exactly one label. `*.example.com` authorizes
-///   `api.example.com` but not `deep.api.example.com`, whose only wildcard
-///   candidate is `*.api.example.com`.
-/// - A bare parent domain is never a candidate. Granting `example.com` does not
-///   extend to `api.example.com`; that needs the explicit host or the wildcard.
-///
-/// Every pattern a product can be granted is consulted here, including a
-/// TLD-level one such as `*.com` or `*.dot`. Narrowing the candidate list
-/// instead would store such a grant and then never read it, so the product
-/// would keep prompting for every host under a pattern the user already
-/// approved. Breadth is the prompt's problem: RFC 0002 already puts the duty of
-/// spelling out how wide `*` is on the host UI, and a TLD wildcard belongs in
-/// the same sentence.
-///
-/// Ordering is the precedence rule for the caller: the most specific stored
-/// decision wins, so an explicit grant for one host survives a denial of its
-/// parent wildcard, and vice versa.
+/// Matching domain patterns, ordered for most-specific permission decisions.
+/// Wildcards cover descendants at every depth, excluding one-label parents
+/// such as `*.com`. Bare parents are omitted so a grant for `example.com`
+/// never grants access to its subdomains.
 pub fn remote_domain_candidates(host: &str) -> Vec<String> {
     let normalized = normalize_remote_domain(host);
     let mut candidates = vec![normalized.clone()];
-    if let Some((_label, parent)) = normalized.split_once('.') {
+    let mut descendant = normalized.as_str();
+    while let Some((_label, parent)) = descendant.split_once('.') {
+        if !parent.contains('.') {
+            break;
+        }
         candidates.push(format!("*.{parent}"));
+        descendant = parent;
     }
     candidates.push("*".to_string());
     candidates.dedup();
@@ -2529,28 +2514,25 @@ mod tests {
     }
 
     #[test]
-    fn remote_domain_candidates_follow_rfc_0002_wildcard_rules() {
+    fn remote_domain_candidates_match_legacy_wildcard_coverage() {
         assert_eq!(
             remote_domain_candidates("api.example.com"),
             ["api.example.com", "*.example.com", "*"]
         );
-        // A wildcard spans one label, so the two-level host's only wildcard is
-        // over its immediate parent. `*.example.com` must NOT appear here.
         assert_eq!(
             remote_domain_candidates("deep.api.example.com"),
-            ["deep.api.example.com", "*.api.example.com", "*"]
+            [
+                "deep.api.example.com",
+                "*.api.example.com",
+                "*.example.com",
+                "*"
+            ]
         );
-        // A TLD-level wildcard is a pattern a product can be granted, so it is
-        // consulted like any other. Leaving it out would store the grant and
-        // then keep prompting for every host under it.
         assert_eq!(
             remote_domain_candidates("example.com"),
-            ["example.com", "*.com", "*"]
+            ["example.com", "*"]
         );
-        assert_eq!(
-            remote_domain_candidates("wallet.dot"),
-            ["wallet.dot", "*.dot", "*"]
-        );
+        assert_eq!(remote_domain_candidates("wallet.dot"), ["wallet.dot", "*"]);
         // A single-label host has no parent to wildcard over.
         assert_eq!(remote_domain_candidates("localhost"), ["localhost", "*"]);
         // A stored pattern resolves to itself, not to a duplicated entry.
@@ -2559,9 +2541,28 @@ mod tests {
             ["*.example.com", "*"]
         );
         assert_eq!(remote_domain_candidates("*"), ["*"]);
+        assert_eq!(remote_domain_candidates("*.com"), ["*.com", "*"]);
         assert_eq!(
-            remote_domain_candidates("API.Example.COM"),
-            ["api.example.com", "*.example.com", "*"]
+            remote_domain_candidates("*.api.example.com"),
+            ["*.api.example.com", "*.example.com", "*"]
+        );
+        assert_eq!(
+            remote_domain_candidates("example.co.uk"),
+            ["example.co.uk", "*.co.uk", "*"]
+        );
+        assert_eq!(
+            remote_domain_candidates("127.0.0.1"),
+            ["127.0.0.1", "*.0.0.1", "*.0.1", "*"]
+        );
+        assert_eq!(remote_domain_candidates("[::1]"), ["[::1]", "*"]);
+        assert_eq!(
+            remote_domain_candidates("DEEP.API.Bücher.Example."),
+            [
+                "deep.api.xn--bcher-kva.example",
+                "*.api.xn--bcher-kva.example",
+                "*.xn--bcher-kva.example",
+                "*",
+            ]
         );
     }
 
@@ -2986,6 +2987,18 @@ pub enum UserConfirmationReview {
 /// Local user confirmation UI for sensitive core-owned operations.
 #[async_trait]
 pub trait UserConfirmation: Send + Sync {
+    /// Preserve the lifetime of consent for identity and account disclosures.
+    async fn confirm_permission(
+        &self,
+        review: UserConfirmationReview,
+    ) -> Result<PermissionDecision, GenericError> {
+        Ok(if self.confirm_user_action(review).await? {
+            PermissionDecision::AllowAlways
+        } else {
+            PermissionDecision::Deny
+        })
+    }
+
     /// Confirm a reviewed action before the core continues.
     async fn confirm_user_action(
         &self,

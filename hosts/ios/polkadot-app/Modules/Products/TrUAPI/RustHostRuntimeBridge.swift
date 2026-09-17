@@ -77,6 +77,10 @@ final class RustHostRuntimeBridge: HostBridge, @unchecked Sendable {
         await confirmationPresenter.confirm(review: review, from: "host")
     }
 
+    func confirmPermission(review: UserConfirmationReview) async throws -> TrUAPIPermissionDecision {
+        await confirmationPresenter.confirmPermission(review: review, from: "host")
+    }
+
     func featureSupported(request: HostFeatureSupportedRequest) async throws -> Bool {
         switch request {
         case let .chain(genesisHash):

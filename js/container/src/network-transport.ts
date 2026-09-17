@@ -6,12 +6,22 @@ import {
   VersionedAuthorizeNetworkAccessRequest,
   VersionedAuthorizeNetworkAccessResponse,
   VersionedAuthorizeNetworkAccessError,
+  VersionedAuthorizeWebRtcRequest,
+  VersionedAuthorizeWebRtcResponse,
+  VersionedAuthorizeWebRtcError,
 } from '@parity/truapi';
-import { PERMISSIONS_AUTHORIZE_NETWORK_ACCESS } from '@parity/truapi/wire-table';
+import {
+  PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
+  PERMISSIONS_AUTHORIZE_WEB_RTC,
+} from '@parity/truapi/wire-table';
 import { freezeAndDelete } from './freeze.js';
 
 export type NetworkAuthorization = (
   url: string,
+  decide: (allowed: boolean) => void,
+) => () => void;
+
+export type WebRtcAuthorization = (
   decide: (allowed: boolean) => void,
 ) => () => void;
 
@@ -31,9 +41,9 @@ interface PendingRequest {
   next?: PendingRequest;
 }
 
-export function createNetworkAuthorization(
+export function createPermissionAuthorization(
   win: Window & typeof globalThis,
-): NetworkAuthorization {
+): { network: NetworkAuthorization; webRtc: WebRtcAuthorization } {
   const bootstrap = win as unknown as {
     __truapi_network_port__?: NetworkPort;
     __truapi_localhost?: { url?: string };
@@ -91,7 +101,27 @@ export function createNetworkAuthorization(
         .enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
     },
   })._unsafeUnwrap();
-  const responseLength = responseTemplate.length;
+  const webRtcRequest = encodeWireMessage({
+    requestId,
+    payload: {
+      traitId: PERMISSIONS_AUTHORIZE_WEB_RTC.trait,
+      methodId: PERMISSIONS_AUTHORIZE_WEB_RTC.method,
+      messageType: MESSAGE_TYPE_REQUEST,
+      value: VersionedAuthorizeWebRtcRequest.enc({ tag: 'V1' }),
+    },
+  })._unsafeUnwrap();
+  const webRtcResponse = encodeWireMessage({
+    requestId,
+    payload: {
+      traitId: PERMISSIONS_AUTHORIZE_WEB_RTC.trait,
+      methodId: PERMISSIONS_AUTHORIZE_WEB_RTC.method,
+      messageType: MESSAGE_TYPE_RESPONSE,
+      value: scale.Result(
+        VersionedAuthorizeWebRtcResponse,
+        scale.CallError(VersionedAuthorizeWebRtcError),
+      ).enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
+    },
+  })._unsafeUnwrap();
 
   let pending: PendingRequest | undefined;
   let tail: PendingRequest | undefined;
@@ -158,8 +188,8 @@ export function createNetworkAuthorization(
           matches = bytes[index] === entry.expected[index];
         }
         if (!matches) continue;
-        let allowed = length === responseLength;
-        for (let index = idLength; allowed && index < responseLength; index++) {
+        let allowed = length === apply(bytesLength, entry.expected, []);
+        for (let index = idLength; allowed && index < length; index++) {
           allowed = bytes[index] === entry.expected[index];
         }
         remove(entry);
@@ -213,26 +243,34 @@ export function createNetworkAuthorization(
     disconnect();
   }
 
-  return (url, decide) => {
+  function authorize(url: string | null, decide: (allowed: boolean) => void): () => void {
     if (closed || !send) {
       decide(false);
       return () => {};
     }
     try {
-      const encodedUrl = apply(encode, encoder, [url]) as Uint8Array;
+      const encodedUrl = url === null
+        ? new NativeBytes(0)
+        : apply(encode, encoder, [url]) as Uint8Array;
       const length = apply(bytesLength, encodedUrl, []) as number;
       if (length >= 2 ** 30) {
         decide(false);
         return () => {};
       }
-      const width = length < 64 ? 1 : length < 16384 ? 2 : 4;
+      const width = url === null ? 0 : length < 64 ? 1 : length < 16384 ? 2 : 4;
       let compactLength = length * 4 + (width === 1 ? 0 : width === 2 ? 1 : 2);
-      const frame = new NativeBytes(requestPrefixLength + width + length);
+      const template = url === null ? webRtcRequest : requestTemplate;
+      const response = url === null ? webRtcResponse : responseTemplate;
+      const prefixLength = url === null
+        ? apply(bytesLength, webRtcRequest, [])
+        : requestPrefixLength;
+      const responseLength = apply(bytesLength, response, []);
+      const frame = new NativeBytes(prefixLength + width + length);
       const expected = new NativeBytes(responseLength);
-      for (let index = 0; index < requestPrefixLength; index++)
-        frame[index] = requestTemplate[index];
+      for (let index = 0; index < prefixLength; index++)
+        frame[index] = template[index];
       for (let index = 0; index < responseLength; index++)
-        expected[index] = responseTemplate[index];
+        expected[index] = response[index];
       let sequence = ++counter;
       for (let index = idLength - 1; index >= idOffset; index--) {
         const digit = sequence % 16;
@@ -240,11 +278,11 @@ export function createNetworkAuthorization(
         frame[index] = expected[index] = digit < 10 ? 48 + digit : 87 + digit;
       }
       for (let index = 0; index < width; index++) {
-        frame[requestPrefixLength + index] = compactLength & 255;
+        frame[prefixLength + index] = compactLength & 255;
         compactLength >>>= 8;
       }
       for (let index = 0; index < length; index++)
-        frame[requestPrefixLength + width + index] = encodedUrl[index];
+        frame[prefixLength + width + index] = encodedUrl[index];
       const entry: PendingRequest = {
         expected,
         frame,
@@ -266,5 +304,10 @@ export function createNetworkAuthorization(
       decide(false);
       return () => {};
     }
+  }
+
+  return {
+    network: authorize,
+    webRtc: (decide) => authorize(null, decide),
   };
 }

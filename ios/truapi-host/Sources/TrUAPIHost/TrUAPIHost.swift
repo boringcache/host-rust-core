@@ -110,24 +110,13 @@ public struct ProductExecutionConfig: Sendable, Equatable {
 /// execution starts when the cdylib is built with the `ws-bridge` feature.
 public enum LocalhostBridgeBootstrap {
     /// Returns a `<script>`-injectable snippet that publishes the endpoint
-    /// metadata on `window.__truapi_localhost`, the pre-resolved permission
-    /// decisions on `window.__truapi_policy__`, exposes the legacy
+    /// metadata on `window.__truapi_localhost`, exposes the legacy
     /// `window.__HOST_API_PORT__` webview transport shape, and fires a
     /// `truapi-native-ready` event.
-    ///
-    /// `webRtcAllowed` must come from `permissionAuthorizationStatus` for
-    /// `RemotePermission.remote(.webRtc)` — a peek, never a prompt. It is baked
-    /// in as a literal because the container enforces it inside the product's
-    /// own realm, where an asynchronous permission request would be forgeable:
-    /// product script can hook the primitives such a request's bookkeeping
-    /// relies on and resolve it itself. A settled value has nothing to steal.
-    /// The consequence is that a fresh grant only takes effect once the web
-    /// view reloads.
-    public static func script(port: UInt16, token: String, webRtcAllowed: Bool) -> String {
+    public static func script(port: UInt16, token: String) -> String {
         let url = "ws://127.0.0.1:\(port)/?t=\(token)"
         let safeUrl = jsStringLiteral(url)
         let safeToken = jsStringLiteral(token)
-        let safeWebRtc = webRtcAllowed ? "true" : "false"
         return """
         (function() {
           var endpoint = { url: \(safeUrl), token: \(safeToken) };
@@ -199,7 +188,6 @@ public enum LocalhostBridgeBootstrap {
           }
 
           window.__truapi_localhost = endpoint;
-          window.__truapi_policy__ = { webRtcAllowed: \(safeWebRtc) };
           window.__HOST_WEBVIEW_MARK__ = true;
           window.__HOST_API_PORT__ = createWebSocketMessagePort(endpoint.url);
           window.dispatchEvent(new Event('truapi-native-ready'));
@@ -332,6 +320,9 @@ public protocol HostBridge: AnyObject, Sendable {
     /// Confirm one user-reviewed core action before it continues.
     func confirmUserAction(review: UserConfirmationReview) async throws -> Bool
 
+    /// Preserve the selected lifetime for identity and account access consent.
+    func confirmPermission(review: UserConfirmationReview) async throws -> PermissionDecision
+
     /// Return the current preimage value for `key`, or nil for a miss.
     func lookupPreimage(key: Data) async throws -> Data?
 
@@ -446,6 +437,9 @@ public extension HostBridge {
     func chainSend(connectionId: UInt32, request: String) throws {}
     func chainClose(connectionId: UInt32) throws {}
     func confirmUserAction(review: UserConfirmationReview) async throws -> Bool { false }
+    func confirmPermission(review: UserConfirmationReview) async throws -> PermissionDecision {
+        try await confirmUserAction(review: review) ? .allowAlways : .deny
+    }
     func lookupPreimage(key: Data) async throws -> Data? { nil }
     func currentTheme() throws -> HostThemeSubscribeItem {
         HostThemeSubscribeItem(name: .default, variant: .dark)
@@ -648,6 +642,12 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
     func confirmUserAction(review: UserConfirmationReview) async throws -> Bool {
         try await withHostRejection {
             try await bridge.confirmUserAction(review: review)
+        }
+    }
+
+    func confirmPermission(review: UserConfirmationReview) async throws -> NativePermissionDecision {
+        try await withHostRejection {
+            try await bridge.confirmPermission(review: review).native
         }
     }
 

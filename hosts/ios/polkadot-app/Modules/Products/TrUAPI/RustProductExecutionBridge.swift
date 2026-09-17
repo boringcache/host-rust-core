@@ -99,6 +99,10 @@ class RustProductExecutionBridge: HostBridge, @unchecked Sendable {
         await dependencies.confirmationPresenter.confirm(review: review, from: dependencies.productId)
     }
 
+    func confirmPermission(review: UserConfirmationReview) async throws -> TrUAPIPermissionDecision {
+        await dependencies.confirmationPresenter.confirmPermission(review: review, from: dependencies.productId)
+    }
+
     func chainConnect(genesisHash: Data) throws -> UInt32? {
         dependencies.chainConnections.connect(genesisHash: genesisHash)
     }
@@ -170,7 +174,7 @@ extension RustProductExecutionBridge: TrUAPIChainEventHandling {
 
 // MARK: - Mappers
 
-private extension Products.PermissionDecision {
+extension Products.PermissionDecision {
     var hostDecision: TrUAPIPermissionDecision {
         switch self {
         case .allowOnce: .allowOnce

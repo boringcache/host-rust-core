@@ -7,17 +7,13 @@ public extension TrUAPIHost {
     @MainActor
     static func installProductScripts(
         into webView: WKWebView,
-        execution: any TrUAPIProductExecutionProtocol,
         endpoint: WsBridgeEndpoint
-    ) async throws {
+    ) throws {
         let container = try ContainerScriptBundle.load()
-        let webRtcAllowed = try await execution.permissionAuthorizationStatus(
-            request: .remote(RemotePermissionRequest(permission: .webRtc))
-        ) == .authorized
         let controller = webView.configuration.userContentController
         controller.addUserScript(WKUserScript(
             source: LocalhostBridgeBootstrap.script(
-                port: endpoint.port, token: endpoint.token, webRtcAllowed: webRtcAllowed
+                port: endpoint.port, token: endpoint.token
             ),
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
