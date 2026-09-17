@@ -250,41 +250,26 @@ public protocol HostCoreStorageBackend: AnyObject, Sendable {
 ///   * ``remotePermission(request:)`` handles per-product capability
 ///     bundles.
 ///
-/// Threading: the Rust core invokes every callback on a background thread it
-/// owns, never the main thread. These six each run on their own thread from a
-/// blocking pool, so an implementation may safely block its calling thread
-/// (e.g. with `DispatchQueue.main.sync` or a semaphore) until the user
-/// decides; other TrUAPI traffic keeps flowing: ``navigateTo(url:)``,
-/// ``pushNotification(payload:)``, ``devicePermission(request:)``,
-/// ``remotePermission(request:)``, ``featureSupported(request:)``, and
-/// ``confirmUserAction(review:)``.
-/// The remaining callbacks (auth state, storage, core storage, chain, theme,
-/// preimage lookups, and ``cancelNotification(id:)``) run inline on the
-/// dispatcher thread and must return promptly without blocking.
-/// Any UI work MUST still hop to the main thread, e.g.
-/// `await MainActor.run { ... }` or `DispatchQueue.main.async { ... }`. Calling
-/// UIKit/WebKit off the main thread is undefined behaviour.
+/// The Rust core invokes callbacks on its shared background bridge executor.
+/// Async callbacks must suspend while waiting for a decision; blocking their
+/// thread stalls other TrUAPI traffic. Synchronous callbacks must return promptly.
+/// Run UI work on the main actor, for example with `await MainActor.run { ... }`.
 public protocol HostBridge: AnyObject, Sendable {
     /// Lifecycle logger. Marker is a stable slug, detail is free-form.
     func onCoreLog(marker: String, detail: String)
 
-    /// Open a URL in the system browser. Invoked on a blocking-pool thread;
-    /// hop to the main thread to present UI. May block the calling thread if
-    /// the user has to approve the navigation.
+    /// Open a URL in the system browser, suspending for any approval on the main actor.
     func navigateTo(url: String) async throws
 
     /// Deliver a push notification (`HostPushNotificationRequest`)
-    /// and return the host-assigned notification id. Invoked on the dispatcher
-    /// thread; hop to the main thread for any UI work and return promptly.
+    /// and return the host-assigned notification id. Run any UI work on the main actor.
     func pushNotification(request: HostPushNotificationRequest) async throws -> UInt32
 
     /// Cancel a previously scheduled notification id.
     func cancelNotification(id: UInt32) throws
 
-    /// Prompt for a device-level permission. Preserve the approval lifetime. Invoked
-    /// on a blocking-pool thread; present the prompt on the main thread and
-    /// block the calling thread until the user decides. Blocking here does
-    /// not stall other TrUAPI traffic.
+    /// Prompt for a device-level permission on the main actor, suspending until
+    /// the user decides. Preserve the approval lifetime.
     func devicePermission(request: HostDevicePermissionRequest) async throws -> PermissionDecision
 
     /// Report the OS status of a device capability without prompting. Answer
@@ -300,10 +285,8 @@ public protocol HostBridge: AnyObject, Sendable {
     func devicePermissionStatus(request: HostDevicePermissionRequest) async throws
         -> NativeDevicePermissionStatus
 
-    /// Prompt for a remote (product-scoped) permission bundle. Invoked on a
-    /// blocking-pool thread; present the prompt on the main thread and block
-    /// the calling thread until the user decides. Blocking here does not
-    /// stall other TrUAPI traffic.
+    /// Prompt for a remote (product-scoped) permission bundle on the main actor,
+    /// suspending until the user decides.
     func remotePermission(request: RemotePermission) async throws -> PermissionDecision
 
     /// Observe an auth state change, in transition order: render `.pairing` as
@@ -990,8 +973,6 @@ public protocol TrUAPIProductExecutionProtocol: AnyObject, Sendable {
     func publishChatAction(_ action: HostChatActionSubscribeItem) throws
     func render(_ request: ProductRendererRenderRequest) throws -> AsyncThrowingStream<RendererNode, Error>
     func publishRendererAction(_ item: HostRendererActionSubscribeItem) throws
-    /// Checks or prompts for this product's destination permission; only `.authorized` permits the request.
-    func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus
     func permissionAuthorizationStatus(
         request: PermissionAuthorizationRequest
     ) async throws -> PermissionAuthorizationStatus
@@ -1062,11 +1043,6 @@ public final class TrUAPIProductExecution: TrUAPIProductExecutionProtocol, @unch
 
     public func notifyPocketCardsChanged(cards: [PocketCard]) {
         inner.notifyPocketCardsChanged(cards: cards)
-    }
-
-    /// Applies the shared permission policy to an outgoing URL, prompting for this execution's product if needed.
-    public func authorizeNetworkAccess(url: String) async throws -> PermissionAuthorizationStatus {
-        try await inner.authorizeNetworkAccess(url: url)
     }
 
     public func permissionAuthorizationStatus(

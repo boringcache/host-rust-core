@@ -1247,25 +1247,6 @@ impl NativeProductExecution {
 
 #[uniffi::export]
 impl NativeProductExecution {
-    /// Authorize a concrete HTTP(S)/WS(S) destination for this live execution.
-    pub async fn authorize_network_access(
-        &self,
-        url: String,
-    ) -> Result<PermissionAuthorizationStatus, HostRejection> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(HostRejection::Rejected {
-                reason: "product execution is closed".to_string(),
-            });
-        }
-        let status = self.admin().authorize_network_access(url).await?;
-        if self.closed.load(Ordering::Acquire) {
-            return Err(HostRejection::Rejected {
-                reason: "product execution is closed".to_string(),
-            });
-        }
-        Ok(status)
-    }
-
     /// Read a product-scoped permission authorization without prompting.
     ///
     /// A device capability resolves the host application's OS gate as well as
@@ -2491,8 +2472,8 @@ mod tests {
         remote_permission_result: Result<NativePermissionDecision, HostRejection>,
         /// Disclosure consent is distinct from boolean action confirmation.
         permission_confirmation_result: NativePermissionDecision,
-        /// Allows tests to close an execution before its permission prompt returns.
-        remote_permission_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+        /// Counts prompts across the execution's separate connections.
+        remote_permission_calls: std::sync::atomic::AtomicUsize,
     }
 
     impl EventCallbacks {
@@ -2532,7 +2513,7 @@ mod tests {
                 os_refused: None,
                 remote_permission_result: Ok(NativePermissionDecision::Deny),
                 permission_confirmation_result: NativePermissionDecision::Deny,
-                remote_permission_hook: Mutex::new(None),
+                remote_permission_calls: std::sync::atomic::AtomicUsize::new(0),
             }
         }
     }
@@ -2578,9 +2559,7 @@ mod tests {
             &self,
             _request: v01::RemotePermission,
         ) -> Result<NativePermissionDecision, HostRejection> {
-            if let Some(hook) = self.remote_permission_hook.lock().unwrap().as_ref() {
-                hook();
-            }
+            self.remote_permission_calls.fetch_add(1, Ordering::SeqCst);
             self.remote_permission_result.clone()
         }
         fn auth_state_changed(&self, state: AuthState) {
@@ -4480,7 +4459,10 @@ mod tests {
                 )
                 .unwrap();
             let result = futures::executor::block_on(
-                execution.authorize_network_access("https://api.example.com/data".to_string()),
+                execution
+                    .admin()
+                    .product_runtime()
+                    .authorize_network_access("https://api.example.com/data".to_string()),
             )
             .unwrap();
             assert_eq!(result, expected);
@@ -4526,11 +4508,6 @@ mod tests {
             remote_permission_result: Ok(NativePermissionDecision::AllowOnce),
             ..EventCallbacks::new()
         });
-        let prompts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let prompt_count = prompts.clone();
-        *callbacks.remote_permission_hook.lock().unwrap() = Some(Arc::new(move || {
-            prompt_count.fetch_add(1, Ordering::SeqCst);
-        }));
         let host = NativeTrUApiHostRuntime::with_runtime_config(
             callbacks.clone(),
             native_host_runtime_config(),
@@ -4568,6 +4545,8 @@ mod tests {
                 .await
                 .unwrap();
             let consumed = execution
+                .admin()
+                .product_runtime()
                 .authorize_network_access("https://api.example.com/data".to_string())
                 .await
                 .unwrap();
@@ -4575,7 +4554,7 @@ mod tests {
                 .permission_authorization_status(permission.clone())
                 .await
                 .unwrap();
-            let prompts_after_use = prompts.load(Ordering::SeqCst);
+            let prompts_after_use = callbacks.remote_permission_calls.load(Ordering::SeqCst);
             sdk_request().await.unwrap();
             execution.shutdown();
             let after_shutdown = admin
@@ -4603,50 +4582,6 @@ mod tests {
                 )
             );
         });
-    }
-
-    #[test]
-    fn a_closed_native_execution_cannot_authorize_network_access() {
-        for close_during_prompt in [false, true] {
-            let callbacks = Arc::new(EventCallbacks {
-                remote_permission_result: Ok(NativePermissionDecision::AllowAlways),
-                ..EventCallbacks::new()
-            });
-            let host = NativeTrUApiHostRuntime::with_runtime_config(
-                callbacks.clone(),
-                native_host_runtime_config(),
-            )
-            .unwrap();
-            let execution = host
-                .open_product_execution(
-                    callbacks.clone(),
-                    None,
-                    None,
-                    native_execution_config("fetch.dot", ProductExecutionKind::App),
-                )
-                .unwrap();
-            let prompts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let weak_execution = Arc::downgrade(&execution);
-            let prompt_count = prompts.clone();
-            *callbacks.remote_permission_hook.lock().unwrap() = Some(Arc::new(move || {
-                prompt_count.fetch_add(1, Ordering::SeqCst);
-                weak_execution.upgrade().unwrap().shutdown();
-            }));
-            if !close_during_prompt {
-                execution.shutdown();
-            }
-            let result = futures::executor::block_on(
-                execution.authorize_network_access("https://api.example.com/data".to_string()),
-            )
-            .map_err(|error| error.to_string());
-            assert_eq!(
-                (result, prompts.load(Ordering::SeqCst)),
-                (
-                    Err("product execution is closed".to_string()),
-                    usize::from(close_during_prompt),
-                )
-            );
-        }
     }
 
     /// Drives the whole native chain for a status read: foreign callback,
