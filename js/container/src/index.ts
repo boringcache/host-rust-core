@@ -55,7 +55,10 @@ freezeCustom(
 );
 
 installFetchGate(window, _authorize.network);
-installMediaPolicy(window, _authorize.media);
+installMediaPolicy(
+  window,
+  (window as any).__truapi_policy__?.mediaAllowed === false ? false : _authorize.media,
+);
 
 // --- Network: delete (no future permission path) ---
 freezeAndDelete(window, 'XMLHttpRequest');
