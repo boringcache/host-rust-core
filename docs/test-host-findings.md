@@ -809,8 +809,13 @@ never becomes ready.
 | product-sdk, 9 suites @ truapi 0.16.0 | 1 / 8 | **6 / 3** |
 | t3rminal, 16 tests, codec-2 stack | 1 / 15 (21m) | **9 / 7** (3.9m) |
 | t3rminal, codec-1 stack (its own) | 7 / 9 | 1 / 15 |
-| host-playground | -- | cannot run: `productAccounts`, `chain:` |
-| playground-app | -- | cannot run: `productAccounts`, `accounts: [{uri}]` |
+| host-playground * | -- | cannot run: `productAccounts`, `chain:` |
+| playground-app * | -- | cannot run: `productAccounts`, `accounts: [{uri}]` |
+
+\* Measured against the LOCAL clones, which diverge from their remotes -- this
+tree's `host-playground` carries a different manifest shape entirely, and its
+`playground-app` has twice the spec count. Treat both rows as "a fixture of
+this shape cannot run", not as a verdict on what those repos hold today.
 
 The third row is what keeps this honest: on t3rminal's own old stack the old
 package wins 7 to 1. Neither host crosses the codec boundary. But product-sdk
