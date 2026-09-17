@@ -68,15 +68,7 @@ pub trait Permissions: Send + Sync {
     /// Authorize one network operation for the current product, consuming an
     /// available one-use grant. Used by the host's fetch, XHR and WebSocket
     /// wrappers before sending a request or opening a connection.
-    ///
-    /// ```ts
-    /// const result = await truapi.permissions.authorizeNetworkAccess({
-    ///   url: "https://api.frankfurter.dev/v2/rates?base=EUR&quotes=USD",
-    /// });
-    /// assert(result.isOk(), "network authorization failed:", result);
-    /// console.log("network operation allowed:", result.value.allowed);
-    /// ```
-    #[wire(id = 2)]
+    #[wire(id = 2, internal)]
     async fn authorize_network_access(
         &self,
         cx: &CallContext,
@@ -84,13 +76,7 @@ pub trait Permissions: Send + Sync {
     ) -> Result<AuthorizeNetworkAccessResponse, CallError<AuthorizeNetworkAccessError>>;
 
     /// Authorize one peer connection, consuming an available one-use grant.
-    ///
-    /// ```ts
-    /// const result = await truapi.permissions.authorizeWebRtc();
-    /// assert(result.isOk(), "WebRTC authorization failed:", result);
-    /// console.log("peer connection allowed:", result.value.allowed);
-    /// ```
-    #[wire(id = 3)]
+    #[wire(id = 3, internal)]
     async fn authorize_web_rtc(
         &self,
         cx: &CallContext,
@@ -99,16 +85,7 @@ pub trait Permissions: Send + Sync {
 
     /// Authorize one media capture, consuming available one-use camera and
     /// microphone grants for the requested capabilities.
-    ///
-    /// ```ts
-    /// const result = await truapi.permissions.authorizeMediaCapture({
-    ///   audio: true,
-    ///   video: true,
-    /// });
-    /// assert(result.isOk(), "media capture authorization failed:", result);
-    /// console.log("media capture allowed:", result.value.allowed);
-    /// ```
-    #[wire(id = 4)]
+    #[wire(id = 4, internal)]
     async fn authorize_media_capture(
         &self,
         cx: &CallContext,
