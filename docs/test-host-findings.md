@@ -61,7 +61,14 @@ half — block production, event emission, dispatch-error semantics, finality �
 only ~6 active tests. Serving the READ bucket alone is a static metadata blob plus two
 fixed responses. The cheap win is partitioning the suite, not building a responder.
 
-## 3. Nobody is blocked by `host-api-test-sdk`
+## 3. The six skips are not caused by `host-api-test-sdk`
+
+**Superseded on the wider question — see section 19.** This section answers one
+narrow thing, asked in July: are product-sdk's skipped tests skipped because the
+package is inadequate? They are not, and that still holds. It is NOT a finding
+that consumers are unblocked. They are blocked, at the wire: the package
+reimplements codec 1 and cannot serve a product built on `@parity/truapi`
+0.16.0, which is codec 2. Section 19 has the measurements.
 
 All six skip markers were read. None is caused by the package being inadequate:
 
