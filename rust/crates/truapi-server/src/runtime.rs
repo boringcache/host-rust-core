@@ -56,29 +56,33 @@ use pairing_host::PairingHost;
 pub(crate) use pairing_host::PairingHost as PairingHostRole;
 pub(crate) use renderer::renderer_access_for;
 pub(crate) use services::RuntimeServices;
-#[cfg(not(target_arch = "wasm32"))]
-pub use signing_host::StatementRenewalTarget;
 pub(crate) use signing_host::{
     LocalActivation, SigningHost as SigningHostRole, SigningHostSsoService, disconnect_paired_host,
     establish_pairing, respond_to_pairing, resume_pairing,
 };
 pub use signing_host::{PairedSsoPeer, ResponderExit};
+#[cfg(not(target_arch = "wasm32"))]
+pub use signing_host::{StatementRenewalTarget, TrackedStatementRenewalTarget};
 use tracing::{instrument, warn};
 use truapi::api::{Chat, Pocket, Renderer};
 use truapi::latest::{GenericError, RemotePermission, RemotePermissionRequest};
 use truapi::versioned::account::{HostAccountGetError, HostAccountSignVrfError};
 use truapi::versioned::chat::{
-    HostChatActionSubscribeItem, HostChatCreateRoomError, HostChatCreateRoomRequest,
-    HostChatCreateRoomResponse, HostChatListSubscribeItem, HostChatPostMessageError,
-    HostChatPostMessageRequest, HostChatPostMessageResponse, HostChatRegisterBotError,
-    HostChatRegisterBotRequest, HostChatRegisterBotResponse,
+    HostChatActionSubscribeError, HostChatActionSubscribeItem, HostChatActionSubscribeRequest,
+    HostChatCreateRoomError, HostChatCreateRoomRequest, HostChatCreateRoomResponse,
+    HostChatListSubscribeError, HostChatListSubscribeItem, HostChatListSubscribeRequest,
+    HostChatPostMessageError, HostChatPostMessageRequest, HostChatPostMessageResponse,
+    HostChatRegisterBotError, HostChatRegisterBotRequest, HostChatRegisterBotResponse,
 };
 use truapi::versioned::pocket::{
-    HostPocketListSubscribeItem, HostPocketRemoveCardError, HostPocketRemoveCardRequest,
-    HostPocketRemoveCardResponse,
+    HostPocketListSubscribeError, HostPocketListSubscribeItem, HostPocketListSubscribeRequest,
+    HostPocketRemoveCardError, HostPocketRemoveCardRequest, HostPocketRemoveCardResponse,
 };
 use truapi::versioned::preimage::RemotePreimageSubmitError;
-use truapi::versioned::renderer::HostRendererActionSubscribeItem;
+use truapi::versioned::renderer::{
+    HostRendererActionSubscribeError, HostRendererActionSubscribeItem,
+    HostRendererActionSubscribeRequest,
+};
 use truapi::{CallContext, CallError, CancellationReason, Subscription, v01};
 use truapi_platform::{
     AccountAccessReview, ChatFieldError, IdentityDisclosureReview, PermissionAuthorizationRequest,
@@ -300,7 +304,6 @@ impl ProductRuntimeHost {
     ) -> PermissionsService<'a, dyn Platform, dyn Platform> {
         PermissionsService::new(self.platform.as_ref(), self.platform.as_ref(), product_id)
             .with_status_host(self.permission_status.as_deref())
-            .with_mutations(self.services.permission_mutations(product_id))
     }
 
     /// Trusted executable kind attached to this product connection.
@@ -1093,8 +1096,9 @@ impl Chat for ProductRuntimeHost {
     async fn list_subscribe(
         &self,
         _cx: &CallContext,
-    ) -> Subscription<HostChatListSubscribeItem, CallError<GenericError>> {
-        let platform = match self.chat_platform::<GenericError>() {
+        _request: HostChatListSubscribeRequest,
+    ) -> Subscription<HostChatListSubscribeItem, CallError<HostChatListSubscribeError>> {
+        let platform = match self.chat_platform::<HostChatListSubscribeError>() {
             Ok(platform) => platform,
             Err(error) => return Subscription::interrupted(error),
         };
@@ -1143,8 +1147,9 @@ impl Chat for ProductRuntimeHost {
     async fn action_subscribe(
         &self,
         _cx: &CallContext,
-    ) -> Subscription<HostChatActionSubscribeItem, CallError<GenericError>> {
-        if let Err(error) = self.chat_platform::<GenericError>() {
+        _request: HostChatActionSubscribeRequest,
+    ) -> Subscription<HostChatActionSubscribeItem, CallError<HostChatActionSubscribeError>> {
+        if let Err(error) = self.chat_platform::<HostChatActionSubscribeError>() {
             return Subscription::interrupted(error);
         }
         self.chat.subscribe()
@@ -1157,7 +1162,9 @@ impl Renderer for ProductRuntimeHost {
     async fn action_subscribe(
         &self,
         _cx: &CallContext,
-    ) -> Subscription<HostRendererActionSubscribeItem, CallError<GenericError>> {
+        _request: HostRendererActionSubscribeRequest,
+    ) -> Subscription<HostRendererActionSubscribeItem, CallError<HostRendererActionSubscribeError>>
+    {
         if self.renderer_access().is_err() {
             return Subscription::interrupted(CallError::Denied);
         }
@@ -1171,8 +1178,9 @@ impl Pocket for ProductRuntimeHost {
     async fn list_subscribe(
         &self,
         _cx: &CallContext,
-    ) -> Subscription<HostPocketListSubscribeItem, CallError<GenericError>> {
-        let platform = match self.pocket_platform::<GenericError>() {
+        _request: HostPocketListSubscribeRequest,
+    ) -> Subscription<HostPocketListSubscribeItem, CallError<HostPocketListSubscribeError>> {
+        let platform = match self.pocket_platform::<HostPocketListSubscribeError>() {
             Ok(platform) => platform,
             Err(error) => return Subscription::interrupted(error),
         };

@@ -851,6 +851,33 @@ impl SigningHostRuntime {
             .map_err(|reason| v01::GenericError { reason })
     }
 
+    /// Every statement account the renewal ledger currently tracks.
+    ///
+    /// Needs no active session, so a host can audit which entries are spending
+    /// its finite per-period slots before deciding to renew.
+    #[instrument(skip_all, fields(runtime.method = "signing_host_runtime.statement_renewal_targets"))]
+    pub async fn statement_renewal_targets(
+        &self,
+    ) -> Result<Vec<crate::runtime::TrackedStatementRenewalTarget>, v01::GenericError> {
+        self.signing_host
+            .statement_renewal_targets()
+            .await
+            .map_err(|reason| v01::GenericError { reason })
+    }
+
+    /// Root public key the active identity records its fixed ledger entries
+    /// under.
+    ///
+    /// Needs an active session, and fails with `Disconnected` without one.
+    /// Compare it against each entry's owner to tell what a pass will renew
+    /// from what it will prune.
+    #[instrument(skip_all, fields(runtime.method = "signing_host_runtime.statement_renewal_owner_key"))]
+    pub fn statement_renewal_owner_key(&self) -> Result<truapi::Bytes32, v01::GenericError> {
+        self.signing_host
+            .statement_renewal_owner_key()
+            .map_err(|reason| v01::GenericError { reason })
+    }
+
     /// Stop renewing one fixed statement account.
     #[instrument(skip_all, fields(runtime.method = "signing_host_runtime.untrack_statement_renewal_account"))]
     pub async fn untrack_statement_renewal_account(
@@ -1242,7 +1269,10 @@ impl ProductRuntimeControl {
                     Ok(truapi::versioned::renderer::ProductRendererRenderItem::V1(node)) => {
                         Some((Ok(node), (stream, reference)))
                     }
-                    Err(interrupt) => Some((Err(interrupt), (stream, None))),
+                    Err(interrupt) => Some((
+                        Err(crate::subscription::interrupt_into_latest(interrupt)),
+                        (stream, None),
+                    )),
                 }
             },
         );
@@ -1813,101 +1843,6 @@ mod tests {
     }
 
     #[test]
-    fn pending_network_prompt_cannot_overwrite_an_admin_update() {
-        use truapi::api::Permissions;
-
-        futures::executor::block_on(async {
-            for (mutated_product, update, granted, expected) in [
-                (
-                    "fetch.dot",
-                    PermissionAuthorizationStatus::Denied,
-                    true,
-                    PermissionAuthorizationStatus::Denied,
-                ),
-                (
-                    "fetch.dot",
-                    PermissionAuthorizationStatus::NotDetermined,
-                    true,
-                    PermissionAuthorizationStatus::NotDetermined,
-                ),
-                (
-                    "fetch.dot",
-                    PermissionAuthorizationStatus::Authorized,
-                    false,
-                    PermissionAuthorizationStatus::Authorized,
-                ),
-                (
-                    "other.dot",
-                    PermissionAuthorizationStatus::Denied,
-                    true,
-                    PermissionAuthorizationStatus::Authorized,
-                ),
-            ] {
-                for sdk_request in [false, true] {
-                    let platform = Arc::new(StubPlatform {
-                        remote_permission_denied: !granted,
-                        ..Default::default()
-                    });
-                    let (config, _) = runtime_config("fetch.dot");
-                    let runtime = PairingHostRuntime::new(platform.clone(), config, test_spawner());
-                    let admin = runtime.product_admin(product_context("fetch.dot").unwrap());
-                    let settings =
-                        Arc::new(runtime.product_admin(product_context(mutated_product).unwrap()));
-                    let weak_settings = Arc::downgrade(&settings);
-                    *platform.remote_permission_hook.lock().unwrap() = Some(Arc::new(move || {
-                        let settings = weak_settings.upgrade().unwrap();
-                        Box::pin(async move {
-                            settings
-                                .set_permission_authorization_status(
-                                    network_permission(&["api.example.com"]),
-                                    update,
-                                )
-                                .await
-                                .unwrap();
-                        })
-                    }));
-                    let allowed = if sdk_request {
-                        let response = admin
-                            .product_runtime
-                            .request_remote_permission(
-                                &truapi::CallContext::default(),
-                                truapi::versioned::permissions::RemotePermissionRequest::V1(
-                                    RemotePermissionRequest {
-                                        permission: RemotePermission::Remote {
-                                            domains: vec!["api.example.com".to_string()],
-                                        },
-                                    },
-                                ),
-                            )
-                            .await
-                            .unwrap();
-                        let truapi::versioned::permissions::RemotePermissionResponse::V1(response) =
-                            response;
-                        response.granted
-                    } else {
-                        admin
-                            .authorize_network_access("https://api.example.com/data".to_string())
-                            .await
-                            .unwrap()
-                            == PermissionAuthorizationStatus::Authorized
-                    };
-                    let stored = admin
-                        .permission_authorization_status(network_permission(&["api.example.com"]))
-                        .await
-                        .unwrap();
-                    assert_eq!(
-                        (allowed, stored),
-                        (
-                            expected == PermissionAuthorizationStatus::Authorized,
-                            expected
-                        )
-                    );
-                }
-            }
-        });
-    }
-
-    #[test]
     fn network_access_trusted_products_still_honor_explicit_denial() {
         futures::executor::block_on(async {
             let platform = Arc::new(StubPlatform::default());
@@ -2086,7 +2021,7 @@ mod tests {
                 trait_id: ids.trait_id,
                 method_id: ids.method_id,
                 message_type: crate::frame::MESSAGE_TYPE_START,
-                value: Vec::new(),
+                value: truapi::versioned::theme::HostThemeSubscribeRequest::V1.encode(),
             },
         };
         let raw = frame.encode();
@@ -2240,7 +2175,7 @@ mod tests {
                 trait_id: ids.trait_id,
                 method_id: ids.method_id,
                 message_type: crate::frame::MESSAGE_TYPE_START,
-                value: Vec::new(),
+                value: truapi::versioned::theme::HostThemeSubscribeRequest::V1.encode(),
             },
         };
         futures::executor::block_on(runtime.receive_frame(frame.encode())).unwrap();
@@ -2359,7 +2294,7 @@ mod tests {
                 trait_id: ids.trait_id,
                 method_id: ids.method_id,
                 message_type: crate::frame::MESSAGE_TYPE_START,
-                value: Vec::new(),
+                value: truapi::versioned::theme::HostThemeSubscribeRequest::V1.encode(),
             },
         };
         let encoded = frame.encode();
@@ -2416,7 +2351,7 @@ mod tests {
                 trait_id: ids.trait_id,
                 method_id: ids.method_id,
                 message_type: crate::frame::MESSAGE_TYPE_START,
-                value: Vec::new(),
+                value: truapi::versioned::theme::HostThemeSubscribeRequest::V1.encode(),
             },
         };
         futures::executor::block_on(runtime.receive_frame(frame.encode())).unwrap();
@@ -2546,6 +2481,7 @@ mod tests {
         let mut actions = futures::executor::block_on(truapi::api::Renderer::action_subscribe(
             host.as_ref(),
             &CallContext::with_request_id("renderer:1".to_string()),
+            truapi::versioned::renderer::HostRendererActionSubscribeRequest::V1,
         ));
 
         let _render = runtime
@@ -3019,8 +2955,7 @@ mod tests {
                 trait_id: ids.trait_id,
                 method_id: ids.method_id,
                 message_type: crate::frame::MESSAGE_TYPE_START,
-                // No request wrapper for this method: an empty Start payload.
-                value: Vec::new(),
+                value: truapi::versioned::chat::HostChatActionSubscribeRequest::V1.encode(),
             },
         };
 
@@ -3065,7 +3000,7 @@ mod tests {
                 trait_id: ids.trait_id,
                 method_id: ids.method_id,
                 message_type: crate::frame::MESSAGE_TYPE_START,
-                value: Vec::new(),
+                value: truapi::versioned::theme::HostThemeSubscribeRequest::V1.encode(),
             },
         };
         futures::executor::block_on(runtime.receive_frame(frame.encode())).unwrap();

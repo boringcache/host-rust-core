@@ -92,44 +92,6 @@ struct ProductNetworkAccessTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
-    func permissionCallbackCanUpdateSettingsBeforeReturning() async throws {
-        let server = try await NetworkTestServer.start()
-        defer { server.stop() }
-        let bridge = PromptUpdatingHostBridge()
-        let runtime = try TrUAPIHostRuntime(
-            bridge: bridge,
-            runtimeConfig: HostRuntimeConfig(
-                hostName: "network-tests",
-                peopleChainGenesisHash: Data(repeating: 0, count: 32),
-                bulletinChainGenesisHash: Data(repeating: 0, count: 32),
-                networkSuffix: "paseo"
-            )
-        )
-        let execution = try runtime.openProductExecution(
-            bridge: bridge,
-            configuration: ProductExecutionConfig(productId: "network.paseo", executionKind: .app)
-        )
-        defer { execution.close() }
-        let ready = ProductPageReady()
-        let configuration = networkTestConfiguration()
-        configuration.userContentController.add(ready, name: "testReady")
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        let window = try NetworkTestWindow(webView)
-        defer { window.close() }
-        let productURL = server.url(host: "localhost", path: "/product")
-        let installation = try await TrUAPIHost.installProductScripts(
-            into: webView, execution: execution,
-            endpoint: execution.startWsBridge(bindPort: 0), productURL: productURL
-        )
-        bridge.installation = installation
-        defer { installation.dispose() }
-        try await ready.load(webView, url: productURL)
-
-        #expect(try await fetch(webView, server.url(host: "127.0.0.1", path: "/allowed")) == "allowed")
-        #expect(server.requests(path: "/allowed") == 1)
-    }
-
-    @Test(.timeLimit(.minutes(1)))
     func grantedFetchUsesTheRustDecisionAndRevocationBlocksRedirects() async throws {
         let server = try await NetworkTestServer.start()
         defer { server.stop() }
@@ -522,25 +484,6 @@ private final class PausedPermissionExecution: TrUAPIProductExecutionProtocol, @
     func notifyChatRoomsChanged(rooms: [ChatRoom]) { inner.notifyChatRoomsChanged(rooms: rooms) }
     func sessionChatIdentityKey() throws -> Data? { try inner.sessionChatIdentityKey() }
     func notifyPocketCardsChanged(cards: [PocketCard]) { inner.notifyPocketCardsChanged(cards: cards) }
-}
-
-private final class PromptUpdatingHostBridge: HostBridge, @unchecked Sendable {
-    let storage: HostStorageBackend = StubStorage()
-    let coreStorage: HostCoreStorageBackend = StubCoreStorage()
-    @MainActor weak var installation: ProductScriptInstallation?
-
-    func navigateTo(url _: String) async throws {}
-    func devicePermission(request _: HostDevicePermissionRequest) async throws -> Bool { false }
-    func featureSupported(request _: HostFeatureSupportedRequest) async throws -> Bool { true }
-
-    @MainActor
-    func remotePermission(request: RemotePermission) async throws -> Bool {
-        guard let installation else { return false }
-        try await installation.setPermissionAuthorizationStatus(
-            request: .remote(RemotePermissionRequest(permission: request)), status: .authorized
-        )
-        return true
-    }
 }
 
 @MainActor
