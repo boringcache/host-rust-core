@@ -13,21 +13,61 @@ The method names on the fixture deliberately match `TestHostAPI`, so most specs
 are untouched. Three assertion patterns do change, and one of them is a real
 behavioural difference rather than churn. Work through the steps in order.
 
-## 0. Prerequisite: wire codec
+## 0. Preconditions — check all five before changing anything
 
-The host runs `@parity/truapi` 0.16.0, which is **wire codec 2**. A product
-resolving `@parity/truapi` 0.13.1 or earlier is codec 1 and the handshake will
-refuse: every host call goes unanswered and the product's own timeouts fire,
-which looks like the app hanging at its connecting state.
+A migration that starts before these hold produces failures that look like
+fixture bugs and are not. Check them in order and stop at the first that fails.
 
-Check before anything else:
+**1. The product resolves `@parity/truapi` 0.16.0 or later.**
 
 ```bash
 node -e "console.log(require('@parity/truapi/package.json').version)"
 ```
 
-If that is below 0.16.0, the migration cannot work yet. The product needs a
-`product-sdk` release built against 0.16.0 first. Stop here and say so.
+Below 0.16.0 the product speaks wire codec 1 and the handshake refuses: every
+host call goes unanswered, the app parks at its connecting state, and every
+locator times out. `@parity/product-sdk-host` pins `^0.16.0` only from 0.20.0
+(shipped in `@parity/product-sdk` 0.28.0); 0.19.1 still pins `^0.13.1`. If the
+version is below that, the work is a product-sdk bump and this migration cannot
+be started yet.
+
+**2. The product uses `@parity/product-sdk`, not `@novasamatech/host-api`.**
+
+```bash
+node -e "try{console.log(require('@novasamatech/host-api/package.json').version)}catch{console.log('absent — good')}"
+```
+
+A repo still on the `@novasamatech` line is a client-SDK generation behind.
+Adopting `@parity/product-sdk` comes first; swapping the test host means
+nothing until then.
+
+**3. The suite passes today.** Record the numbers before touching anything:
+
+```bash
+npx playwright test --reporter=line   # or the repo's own e2e command
+```
+
+Migrating a red suite makes it impossible to tell your changes from its
+existing failures, and a suite that cannot even load (a stale import, a deleted
+export) will look like the new fixture rejecting it.
+
+**4. Write tests have a funded account.** TrUAPI derives a product account from
+(session root, product id) — it cannot be assigned. A suite that submits
+transactions signs with the DERIVED address, so that address needs funding.
+Read it back from the host and fund it; do not assume a funder seed signs.
+Until this is settled a write test HANGS at `signSubmitAndWatch` rather than
+failing, which is the single most expensive failure mode in this migration.
+
+**5. No spec depends on a refused capability.** Grep first:
+
+```bash
+grep -rEn "getPaymentLog|clearPaymentLog|setPaymentBalance|setPaymentTopUpBehavior|simulatePaymentStatus|injectChatAction|setLoginBehavior|getSubmittedStatements|injectStatement|clearStatements" e2e/
+```
+
+Any hit is a spec that needs rewriting or skipping, not porting — see section 4.
+`setLoginBehavior` is the sharpest: suites pass `"success"`/`"reject"` to drive
+an RFC-0009 login flow, and the fixture option only takes `"auto" | "manual"`,
+because this is a signing host and that flow belongs to a pairing host.
 
 ## 1. Swap the import
 

@@ -167,10 +167,25 @@ repo's convention that is a `release: @parity/truapi-host 0.18.0` PR title.
 
 **Then product-sdk adopts**, using the patch and cover note in
 `docs/migration/`. It applies cleanly to product-sdk `main` as it stands; its
-catalog is already on `@parity/truapi` 0.16.0, so the only line the release
-changes is the `@parity/truapi-host` version. Verified by installing pristine
-main with `@parity/truapi` resolved from npm and the host linked locally: the
-suites behave exactly as recorded above.
+catalog already carries `@parity/truapi ^0.17.0`, so the only line the release
+adds is the `@parity/truapi-host` one. Verified by installing pristine main
+with `@parity/truapi` resolved from npm and the host linked locally: the suites
+behave exactly as recorded above. That patch is regenerated against `main` each
+time it moves -- it has needed rebasing twice in a day -- so regenerate it at
+adoption time rather than trusting a week-old copy.
+
+**Still open on this side, none of it blocking the release:**
+
+- Four `Account/*` methods diverge from the real signing host in
+  `explorer/diagnosis-reports/spa/mock-host.md` -- `get_account_alias`,
+  `get_user_id`, `register_ring_vrf_key`, `ring_vrf_sign`. The rest of the
+  divergence is explained by the generator closing the chain, or by the
+  documented allowance boundaries. These four are not.
+- A statement-store allowance for an onboarded identity would let
+  `statement-store-demo` run, and would close three of the divergences above.
+- Funding the derived product accounts closes the write-test story for
+  `tx-demo`, `contracts-demo`, and every consumer whose fixture currently pins
+  a funded account through `productAccounts`.
 
 **What this unblocks immediately.** host-playground#89 ("bump product-sdk to
 0.28") is green on every check except E2E, which fails 53 times with
@@ -180,6 +195,19 @@ codec 2 by three days, so no dependency bump fixes it -- there is no codec-2
 version of that package to bump to. The hermetic host is the route to a green
 E2E there, which is the concrete reason the release matters rather than a
 preference between two test SDKs.
+
+**What has to be true before a consumer can start.** Five preconditions, in
+`.claude/skills/migrate-to-truapi-test-host/SKILL.md`: the product resolves
+`@parity/truapi` 0.16.0+, it is on `@parity/product-sdk` rather than
+`@novasamatech/host-api`, its suite passes today, its write tests have a funded
+derived account, and no spec depends on a refused capability. A migration
+started before those hold produces failures that read as fixture bugs and are
+not.
+
+A survey of the 34 repos depending on `@parity/host-api-test-sdk` puts exactly
+one of them past the first precondition today -- `browse`, which is on
+`@parity/product-sdk` 0.28.0. The rest resolve `@parity/truapi` 0.13.1 or
+lower, or carry no truapi at all. Findings doc section 20 has the breakdown.
 
 **Three things that are decisions, not work:**
 
