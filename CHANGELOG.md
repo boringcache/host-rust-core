@@ -22,6 +22,8 @@ generated from [Conventional Commits](https://www.conventionalcommits.org/).
 - Add `account.productDeviceChat` for host-private Chat v2 identity binding and
   identity-route sealing/opening through local or paired account authorities,
   guarded by a dedicated, product-scoped Chat-authority permission.
+- report local-wallet registration stages and retryable chain-read errors through
+  a request-scoped browser callback without resubmitting accepted claims
 - expose local signing-wallet username registration and chain-verified identity
   refresh through the browser worker, with native UID proofs and RFC-0004
   X25519 identifier keys
