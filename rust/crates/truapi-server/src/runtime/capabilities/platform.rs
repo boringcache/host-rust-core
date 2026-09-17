@@ -35,7 +35,7 @@ use truapi::versioned::theme::{
 use truapi::{CallContext, CallError, Subscription, v01, v02};
 use truapi_platform::PermissionAuthorizationStatus;
 
-use crate::host_logic::dotns::{NavigateDecision, external_host, parse_navigate};
+use crate::host_logic::dotns::{NavigateDecision, parse_navigate};
 use crate::host_logic::features::feature_supported;
 use crate::host_logic::product_manifest::Granted;
 use crate::runtime::ProductRuntimeHost;
@@ -90,20 +90,19 @@ impl System for ProductRuntimeHost {
             NavigateDecision::DotName { canonical_url, .. }
             | NavigateDecision::Localhost { canonical_url, .. }
             | NavigateDecision::Pocket { canonical_url, .. } => canonical_url,
-            // An `http(s)` URL hands an arbitrary host the referrer, the shape
-            // of the URL, and whatever the product put in it, so it needs the
-            // same per-domain grant that gates outbound access to that host.
-            // The other allowed schemes are app handoffs with no authorizable
-            // domain (`external_host` returns `None`) and pass straight through.
             NavigateDecision::External { url } => {
-                if let Some(host) = external_host(&url) {
-                    self.require_remote_permission(
-                        v01::RemotePermission::Remote {
-                            domains: vec![host],
-                        },
-                        HostNavigateToError::V1(v01::HostNavigateToError::PermissionDenied),
-                    )
-                    .await?;
+                let product_id = self.product_id();
+                let status = self
+                    .permissions_service(&product_id)
+                    .authorize_device(v01::HostDevicePermissionRequest::OpenUrl)
+                    .await
+                    .map_err(|error| CallError::HostFailure {
+                        reason: format!("permission storage failed: {error:?}"),
+                    })?;
+                if status != PermissionAuthorizationStatus::Authorized {
+                    return Err(CallError::Domain(HostNavigateToError::V1(
+                        v01::HostNavigateToError::PermissionDenied,
+                    )));
                 }
                 url
             }

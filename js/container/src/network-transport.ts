@@ -43,7 +43,7 @@ interface PendingRequest {
 
 export function createPermissionAuthorization(
   win: Window & typeof globalThis,
-): { network: NetworkAuthorization; webRtc: WebRtcAuthorization } {
+): { network: NetworkAuthorization; webRtc: WebRtcAuthorization | false } {
   const bootstrap = win as unknown as {
     __truapi_network_port__?: NetworkPort;
     __truapi_localhost?: { url?: string };
@@ -308,6 +308,6 @@ export function createPermissionAuthorization(
 
   return {
     network: authorize,
-    webRtc: (decide) => authorize(null, decide),
+    webRtc: closed ? false : (decide) => authorize(null, decide),
   };
 }
