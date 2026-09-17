@@ -19,7 +19,6 @@ use futures::{FutureExt, StreamExt, pin_mut};
 use parity_scale_codec::{Decode, Encode};
 use thiserror::Error;
 use tracing::{instrument, warn};
-use truapi::latest::GenericError;
 use truapi::v01;
 use truapi::{CallContext, CancellationReason};
 use truapi_platform::{ChatPlatform, PermissionStatusHost, PocketPlatform};
@@ -1036,15 +1035,6 @@ impl HostAdmin {
         self.authority.disconnect().await;
     }
 
-    /// Authorize a concrete HTTP(S)/WS(S) destination, prompting when undecided.
-    #[instrument(skip_all, fields(runtime.method = "host_admin.authorize_network_access"))]
-    pub async fn authorize_network_access(
-        &self,
-        url: String,
-    ) -> Result<PermissionAuthorizationStatus, GenericError> {
-        self.product_runtime.authorize_network_access(url).await
-    }
-
     /// Read a stored permission authorization status without prompting.
     ///
     /// A device capability also resolves the host application's OS gate, so an
@@ -1758,6 +1748,7 @@ mod tests {
             ] {
                 decisions.push(
                     admin
+                        .product_runtime
                         .authorize_network_access(url.to_string())
                         .await
                         .unwrap(),
@@ -1909,14 +1900,17 @@ mod tests {
                 .await
                 .unwrap();
             let allowed = admin
+                .product_runtime
                 .authorize_network_access("https://api.example.com/data".to_string())
                 .await
                 .unwrap();
             let descendant = admin
+                .product_runtime
                 .authorize_network_access("https://deep.api.example.com/data".to_string())
                 .await
                 .unwrap();
             let root = admin
+                .product_runtime
                 .authorize_network_access("https://example.com/data".to_string())
                 .await
                 .unwrap();
@@ -1928,10 +1922,12 @@ mod tests {
                 .await
                 .unwrap();
             let revoked = admin
+                .product_runtime
                 .authorize_network_access("https://api.example.com/data".to_string())
                 .await
                 .unwrap();
             let sibling = admin
+                .product_runtime
                 .authorize_network_access("https://other.example.com/data".to_string())
                 .await
                 .unwrap();
@@ -1940,6 +1936,7 @@ mod tests {
             for _ in 0..2 {
                 isolated.push(
                     other
+                        .product_runtime
                         .authorize_network_access("https://other.example.com/data".to_string())
                         .await
                         .unwrap(),
@@ -1987,6 +1984,7 @@ mod tests {
             let runtime = PairingHostRuntime::new(platform.clone(), config, test_spawner());
             let admin = runtime.product_admin(product_context("peopl.dot").unwrap());
             let allowed = admin
+                .product_runtime
                 .authorize_network_access("https://api.example.com".to_string())
                 .await
                 .unwrap();
@@ -1998,6 +1996,7 @@ mod tests {
                 .await
                 .unwrap();
             let denied = admin
+                .product_runtime
                 .authorize_network_access("https://api.example.com".to_string())
                 .await
                 .unwrap();
@@ -2041,6 +2040,7 @@ mod tests {
             ] {
                 assert!(
                     admin
+                        .product_runtime
                         .authorize_network_access(url.to_string())
                         .await
                         .is_err(),
