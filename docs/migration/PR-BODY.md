@@ -160,10 +160,10 @@ substitutes for.
 its own guards, and the Rust and TypeScript halves are checked against each
 other.
 
-**To make it usable, one release:** `@parity/truapi-host` 0.17.0, carrying the
+**To make it usable, one release:** `@parity/truapi-host` 0.18.0, carrying the
 `./testing` subpath. Additive only — the four published subpaths are untouched
 and six are added, so nothing already installed changes behaviour. Per this
-repo's convention that is a `release: @parity/truapi-host 0.17.0` PR title.
+repo's convention that is a `release: @parity/truapi-host 0.18.0` PR title.
 
 **Then product-sdk adopts**, using the patch and cover note in
 `docs/migration/`. It applies cleanly to product-sdk `main` as it stands; its
