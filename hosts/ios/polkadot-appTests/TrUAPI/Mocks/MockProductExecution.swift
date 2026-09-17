@@ -36,10 +36,6 @@ final class MockProductExecution: TrUAPIProductExecutionProtocol, @unchecked Sen
 
     func publishRendererAction(_: HostRendererActionSubscribeItem) throws {}
 
-    func authorizeNetworkAccess(url _: String) async throws -> PermissionAuthorizationStatus {
-        permissionStatus
-    }
-
     func permissionAuthorizationStatus(
         request: PermissionAuthorizationRequest
     ) async throws -> PermissionAuthorizationStatus {
