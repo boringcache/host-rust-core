@@ -422,6 +422,7 @@ pub fn parse_navigate(input: String) -> NavigateDecision {
 /// directly: an async callback method returning a type from another UniFFI
 /// namespace lowers into that namespace's `RustBuffer`, and the generated
 /// Kotlin then fails to compile. The conversion is total.
+/// See [UniFFI #2675](https://github.com/mozilla/uniffi-rs/issues/2675).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum NativeDevicePermissionStatus {
     /// The OS grants this capability to the host application.
@@ -447,6 +448,7 @@ impl From<NativeDevicePermissionStatus> for truapi_platform::DevicePermissionSta
 
 /// Keeps async permission callbacks in this UniFFI namespace for the same
 /// Kotlin `RustBuffer` constraint as [`NativeDevicePermissionStatus`].
+/// See [UniFFI #2675](https://github.com/mozilla/uniffi-rs/issues/2675).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum NativePermissionDecision {
     /// Approves one operation in this execution.
