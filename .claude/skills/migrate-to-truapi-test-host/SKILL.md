@@ -102,8 +102,14 @@ The fixture starts and shares its own host server when none is given, so
  );
 ```
 
-`networks: [PASEO_ASSET_HUB]` keeps working: it expands into the chain proxy,
-the reported chain set and the runtime genesis, which have to agree.
+Chain options need no edit. Both spellings are accepted -- `networks: [X]` and
+the older `chain: X`, which is exactly `networks: [X]` -- and either expands
+into the chain proxy, the reported chain set and the runtime genesis, which
+have to agree. Passing both is refused rather than merged.
+
+A suite that starts the server itself also needs no restructuring:
+`createTestHostServer` takes the same host configuration it always did
+(`productUrl`, `accounts`, `networks`) and returns a URL ready to open.
 
 Set `productId` to the dotNS identifier the product signs with. A product that
 derives its own identifier from `window.location.host` wants that value here.
