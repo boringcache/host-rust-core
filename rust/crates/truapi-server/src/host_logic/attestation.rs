@@ -22,7 +22,7 @@ use crate::host_logic::product_account::{
     ProductAccountError, SR25519_SIGNING_CONTEXT, derive_identity_keypair,
     derive_lite_person_ring_vrf_entropy, product_public_key_to_address,
 };
-use crate::host_logic::sso::pairing::{CHAT_ENCRYPTION_DOMAIN, derive_x25519_keypair_from_entropy};
+use crate::host_logic::sso::pairing::{derive_identity_chat_private_key, x25519_public_key};
 
 /// sr25519 proof-of-ownership message prefix (exact bytes; one space).
 ///
@@ -31,8 +31,8 @@ use crate::host_logic::sso::pairing::{CHAT_ENCRYPTION_DOMAIN, derive_x25519_keyp
 ///
 /// The pallet verifies `MSG_PREFIX || candidate || ring_vrf_key`.
 const REGISTER_PREFIX: &[u8] = b"pop:people-lite:register using";
-/// RFC-0004 type byte for an X25519 account ECDH key.
-const X25519_IDENTIFIER_KEY_TYPE: u8 = 0;
+/// CHAT-RFC-0004 keypair type byte for an X25519 identifier key.
+const IDENTIFIER_KEY_TAG_X25519: u8 = 0x00;
 
 /// SCALE payload signed for a lite consumer registration.
 ///
@@ -59,8 +59,8 @@ pub struct LiteRegistration {
     pub ring_vrf_key: [u8; 32],
     /// Plain bandersnatch VRF proof over the same proof message.
     pub proof_of_ownership: [u8; 64],
-    /// RFC-0004 X25519 account ECDH key container: type byte, 32-byte public
-    /// key, then 32 bytes of zero padding.
+    /// 65-byte CHAT-RFC-0004 identifier key: the `0x00` X25519 type byte, the
+    /// 32-byte public key, then 32 zero bytes. It doubles as the dotNS chat key.
     pub identifier_key: [u8; 65],
     /// sr25519 signature over the SCALE consumer-registration tuple.
     pub consumer_registration_signature: [u8; 64],
@@ -218,10 +218,16 @@ pub fn build_lite_registration(
     })
 }
 
+/// The identity's chat public key in its CHAT-RFC-0004 envelope.
+///
+/// The key is the public half of the X25519 identity chat key, so what is
+/// advertised on chain is the counterpart of the private key this host serves
+/// to a paired chat client. The 65-byte width predates X25519 and stayed when
+/// the curve changed; readers ignore the padding rather than validate it.
 fn derive_identifier_key(entropy: &[u8]) -> [u8; 65] {
-    let (_, public_key) = derive_x25519_keypair_from_entropy(entropy, CHAT_ENCRYPTION_DOMAIN);
+    let public_key = x25519_public_key(derive_identity_chat_private_key(entropy));
     let mut identifier_key = [0u8; 65];
-    identifier_key[0] = X25519_IDENTIFIER_KEY_TYPE;
+    identifier_key[0] = IDENTIFIER_KEY_TAG_X25519;
     identifier_key[1..33].copy_from_slice(&public_key);
     identifier_key
 }
@@ -270,15 +276,18 @@ mod tests {
             "a person registered on paseo-next-v2 is not the seed's .dot person"
         );
 
-        assert_eq!(
-            reg.identifier_key[0], X25519_IDENTIFIER_KEY_TYPE,
-            "RFC-0004 X25519 type"
-        );
+        // CHAT-RFC-0004: `0x00` tag, 32-byte X25519 key, 32 zero bytes.
+        assert_eq!(reg.identifier_key[0], 0x00, "X25519 keypair type byte");
         assert_eq!(
             &reg.identifier_key[1..33],
-            &derive_x25519_keypair_from_entropy(&ENTROPY, CHAT_ENCRYPTION_DOMAIN).1
+            &x25519_public_key(derive_identity_chat_private_key(&ENTROPY)),
+            "the advertised key must match the chat identity private key this host serves"
         );
-        assert_eq!(&reg.identifier_key[33..], &[0u8; 32]);
+        assert_eq!(
+            &reg.identifier_key[33..],
+            &[0u8; 32],
+            "the trailing 32 bytes must be zero-filled"
+        );
         assert!(
             reg.candidate_account_id
                 .chars()
