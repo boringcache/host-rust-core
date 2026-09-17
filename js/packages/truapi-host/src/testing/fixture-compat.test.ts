@@ -76,6 +76,28 @@ describe("host-api-test-sdk option compatibility", () => {
     });
   });
 
+  it("accepts `chain` as the older spelling of `networks`", () => {
+    // Roughly half the consumer fleet was written against the vintage that
+    // spells this `chain`. Accepting it removes an edit from every one of
+    // them, and it is exactly `networks: [chain]`.
+    expect(() =>
+      createTestHostFixture({
+        productUrl: "http://localhost:5200",
+        chain: SAMPLE_CHAIN,
+      }),
+    ).not.toThrow();
+  });
+
+  it("refuses both `chain` and `networks` rather than guessing", () => {
+    expect(() =>
+      createTestHostFixture({
+        productUrl: "http://localhost:5200",
+        chain: SAMPLE_CHAIN,
+        networks: [SAMPLE_CHAIN],
+      }),
+    ).toThrow(/either `chain`.*or `networks`/s);
+  });
+
   it("needs no hostUrl", () => {
     // The server is started lazily by the first test, so construction alone
     // must not require one -- that is the line every consumer gets to delete.

@@ -75,6 +75,14 @@ export interface TestHostFixtureOptions {
    */
   networks?: NetworkConfig[];
   /**
+   * A single chain, as older `@parity/host-api-test-sdk` versions spell it.
+   *
+   * Accepted so a suite written against that vintage needs no edit here; it is
+   * exactly `networks: [chain]`. Passing both is refused rather than merged,
+   * because guessing which one the author meant is worse than saying so.
+   */
+  chain?: NetworkConfig;
+  /**
    * Accepted only to fail with an explanation. See the error text: TrUAPI
    * derives a product account from the session root, so it cannot be pinned.
    */
@@ -413,7 +421,15 @@ export function createTestHostFixture(defaults: TestHostFixtureOptions) {
     return (await ownServer).url;
   };
 
-  const expanded = defaults.networks ? fromNetworks(defaults.networks) : undefined;
+  if (defaults.chain && defaults.networks) {
+    throw new Error(
+      "testHost fixture: pass either `chain` (one chain, the older " +
+        "`@parity/host-api-test-sdk` spelling) or `networks` (several), not " +
+        "both -- `chain: x` is exactly `networks: [x]`.",
+    );
+  }
+  const chains = defaults.networks ?? (defaults.chain ? [defaults.chain] : undefined);
+  const expanded = chains ? fromNetworks(chains) : undefined;
   // Explicit settings win over anything derived from `networks`.
   const mock = expanded ? { ...expanded.mock, ...defaults.mock } : defaults.mock;
   const runtimeConfig = expanded

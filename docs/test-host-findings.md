@@ -908,6 +908,72 @@ handshake.
 0.28.0 or later, then the seam swap -- which is genuinely small for most of
 them. Nothing in that sequence is blocked on this branch.
 
+## 21. Two realms, and which one this serves
+
+`@parity/host-api-test-sdk` is often described as "already on truapi". Reading
+its source, that is true of its transport and false of its protocol, and the
+distinction decides what compatibility with it can mean.
+
+Its `src/browser/truapi-port-handoff.ts` says so directly: it serves two
+channel generations -- `@novasamatech/host-api-wrapper` (truapi 0.3, raw
+`Uint8Array` frames on window postMessage) and `@parity/truapi/sandbox`
+(truapi 0.4, a transferred `MessagePort` after a `truapi-ready` ping) -- and
+notes that "wire frames are identical on both channels". It wraps
+`createIframeProvider` from `@novasamatech/host-container` and types its
+provider as `@novasamatech/host-api`'s.
+
+So the package adopted truapi's **channel handshake** so that
+truapi-bootstrapped products could reach a host whose **protocol** is Nova's.
+Its only `@parity/truapi` dependency is a devDependency at `^0.6.0`, used in
+that one file. That is why its `SCALE_CODEC_PROTOCOL_ID` is 1 in every
+published version, and why no dependency bump can make it serve codec 2: the
+protocol changed underneath it, not the transport.
+
+### What that means for compatibility
+
+Adhering to `host-api-test-sdk` therefore means adhering to its **control
+surface** -- `TestHostAPI`, the fixture options, the server options, the
+exported constants and log-entry types. It does not mean adhering to its
+protocol, which is the realm being left.
+
+| | old realm | this test host |
+| --- | --- | --- |
+| protocol | `@novasamatech/host-api`, codec 1 | truapi, codec 2 |
+| product channel | window frames **and** MessagePort | MessagePort only |
+| host behaviour | reimplemented in TypeScript | the shipping Rust core |
+
+The MessagePort path is the one current products take:
+`@parity/truapi/sandbox` posts `truapi-ready` and waits for `truapi-init`
+carrying a port, and `create-iframe-host.ts` answers exactly that. The legacy
+window-frame channel is deliberately not served, and does not need to be --
+a product old enough to use it is codec 1 and could not complete a handshake
+anyway.
+
+### What the new realm needed, and now has
+
+- the full `TestHostAPI` control surface, guarded against regression
+- the fixture options consumers actually pass, including `chain` as the older
+  spelling of `networks`, so a suite of that vintage needs no edit
+- `createTestHostServer` accepting host configuration, not just a port --
+  the entry point four consumers use instead of the fixture
+- both entry points sharing one URL builder, so an option cannot be added to
+  one and forgotten by the other
+- ESM and CommonJS, since a consumer without `"type": "module"` resolves the
+  `require` condition
+
+### What it deliberately does not carry over
+
+`productAccounts` cannot be honoured: `product_keypair_with_owner`
+(`runtime/signing_host.rs:323`) derives from the session root entropy, the
+product id and the derivation index, entirely inside the core. A host cannot
+supply that account, so the option is refused with the reason rather than
+accepted and ignored.
+
+`setLoginBehavior` belongs to a pairing host's login flow; this is a signing
+host, which answers `request_login` with `AlreadyConnected`.
+
+Neither is a gap to close. Both are the old realm's shape showing through.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is
