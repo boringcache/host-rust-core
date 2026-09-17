@@ -64,6 +64,7 @@ import uniffi.truapi_server.NativePocketCallbacks
 import uniffi.truapi_server.NativePocketRemoval
 import uniffi.truapi_server.NativeRendererObserver
 import uniffi.truapi_server.NativeDevicePermissionStatus
+import uniffi.truapi_server.NativePermissionDecision
 import uniffi.truapi_server.NativeProductExecution
 import uniffi.truapi_server.NativeTrUApiHostRuntime
 import uniffi.truapi_server.ProductRuntimeException
@@ -475,6 +476,12 @@ interface PocketHostBridge {
     fun removeCard(cardId: String): NativePocketRemoval
 }
 
+private fun PermissionDecision.toNative(): NativePermissionDecision = when (this) {
+    PermissionDecision.ALLOW_ONCE -> NativePermissionDecision.ALLOW_ONCE
+    PermissionDecision.ALLOW_ALWAYS -> NativePermissionDecision.ALLOW_ALWAYS
+    PermissionDecision.DENY -> NativePermissionDecision.DENY
+}
+
 /**
  * Adapter from the public [HostBridge] surface to the generated UniFFI
  * [HostCallbacks] interface. Keeps the public API stable even if uniffi-bindgen
@@ -502,15 +509,15 @@ private class HostCallbackAdapter(private val bridge: HostBridge) : HostCallback
     override fun cancelNotification(id: UInt) =
         withHostRejection { bridge.cancelNotification(id) }
 
-    override suspend fun devicePermission(request: HostDevicePermissionRequest): PermissionDecision =
-        withHostRejection { bridge.devicePermission(request) }
+    override suspend fun devicePermission(request: HostDevicePermissionRequest): NativePermissionDecision =
+        withHostRejection { bridge.devicePermission(request).toNative() }
 
     override suspend fun devicePermissionStatus(
         request: HostDevicePermissionRequest,
     ): NativeDevicePermissionStatus = withHostRejection { bridge.devicePermissionStatus(request) }
 
-    override suspend fun remotePermission(request: RemotePermission): PermissionDecision =
-        withHostRejection { bridge.remotePermission(request) }
+    override suspend fun remotePermission(request: RemotePermission): NativePermissionDecision =
+        withHostRejection { bridge.remotePermission(request).toNative() }
 
     override fun authStateChanged(state: AuthState) {
         try {
