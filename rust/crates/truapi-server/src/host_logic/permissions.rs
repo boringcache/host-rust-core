@@ -36,7 +36,6 @@
 //! identity disclosure and account access are never covered.
 
 use parity_scale_codec::{Decode, Encode};
-use std::sync::Arc;
 
 use truapi::latest::{
     GenericError, HostDevicePermissionRequest, HostDevicePermissionResponse, RemotePermission,
@@ -108,9 +107,6 @@ enum BundleResolution {
     Undecided(Vec<String>),
 }
 
-/// Prevents older prompts from overwriting newer host permission changes.
-pub(crate) type PermissionMutations = Arc<futures::lock::Mutex<u64>>;
-
 /// Coordinator that inspects persisted state first, falls back to the
 /// platform's prompt callback, and writes the authorization back so future
 /// calls short-circuit.
@@ -123,7 +119,6 @@ pub struct PermissionsService<'a, S: CoreStorage + ?Sized, P: Permissions + ?Siz
     status: Option<&'a dyn PermissionStatusHost>,
     /// Whether `product_id` holds every remote permission without prompting.
     remote_auto_granted: bool,
-    mutations: PermissionMutations,
 }
 
 impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a, S, P> {
@@ -139,14 +134,7 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
             product_id,
             status: None,
             remote_auto_granted: has_trusted_remote_permissions(product_id),
-            mutations: Arc::default(),
         }
-    }
-
-    /// Share permission-write ordering across executions of the same product.
-    pub(crate) fn with_mutations(mut self, mutations: PermissionMutations) -> Self {
-        self.mutations = mutations;
-        self
     }
 
     /// Revalidate device capabilities against the OS state `status` reports.
@@ -334,10 +322,6 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
         request: &PermissionAuthorizationRequest,
         status: PermissionAuthorizationStatus,
     ) -> Result<(), GenericError> {
-        let mut mutation = self.mutations.lock().await;
-        if matches!(request, PermissionAuthorizationRequest::Remote(_)) {
-            *mutation = mutation.wrapping_add(1);
-        }
         let key = match request {
             PermissionAuthorizationRequest::Device(permission) => {
                 CoreStorageKey::device_permission_authorization(self.product_id, permission)
@@ -421,25 +405,18 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
         &self,
         request: RemotePermissionRequest,
     ) -> Result<PermissionAuthorizationStatus, GenericError> {
-        let mutation = self.mutations.lock().await;
-        let epoch = *mutation;
         let Some(domains) = requested_domains(&request).map(<[String]>::to_vec) else {
             let key = CoreStorageKey::remote_permission_authorization(self.product_id, &request);
             match self.effective_remote_status(peek_stored(self.storage, key.clone()).await?) {
                 PermissionAuthorizationStatus::NotDetermined => {}
                 decided => return Ok(decided),
             }
-            drop(mutation);
             // See `check_or_prompt_device`: persist only a genuine user decision;
             // transient callback errors leave the authorization ask/default.
-            let authorization = match self.prompt.remote_permission(request.clone()).await {
+            let authorization = match self.prompt.remote_permission(request).await {
                 Ok(RemotePermissionResponse { granted }) => granted.into(),
                 Err(_) => return Ok(PermissionAuthorizationStatus::NotDetermined),
             };
-            let mutation = self.mutations.lock().await;
-            if *mutation != epoch {
-                return self.peek_remote(&request).await;
-            }
             return self.persist_decision(key, authorization).await;
         };
 
@@ -457,7 +434,6 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
         if let Some(cached) = peek_stored(self.storage, bundle_key.clone()).await? {
             return Ok(cached.into());
         }
-        drop(mutation);
 
         let authorization = match self
             .prompt
@@ -467,10 +443,6 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
             Ok(RemotePermissionResponse { granted }) => StoredAuthorizationStatus::from(granted),
             Err(_) => return Ok(PermissionAuthorizationStatus::NotDetermined),
         };
-        let mutation = self.mutations.lock().await;
-        if *mutation != epoch {
-            return self.peek_remote(&request).await;
-        }
         match authorization {
             // Each granted domain is independently reachable afterwards, and
             // enforcement only ever looks one host up, so a grant fans out.
@@ -582,73 +554,6 @@ mod tests {
 
     fn test_key(key: CoreStorageKey) -> String {
         hex::encode(key.encode())
-    }
-
-    #[test]
-    fn admin_revocation_cannot_be_overtaken_by_a_pending_permission_write() {
-        struct PausedWriteStorage {
-            inner: MemStorage,
-            pause: Mutex<Option<futures::channel::oneshot::Receiver<()>>>,
-        }
-
-        #[truapi_platform::async_trait]
-        impl CoreStorage for PausedWriteStorage {
-            async fn read_core_storage(
-                &self,
-                key: CoreStorageKey,
-            ) -> Result<Option<Vec<u8>>, GenericError> {
-                self.inner.read_core_storage(key).await
-            }
-
-            async fn write_core_storage(
-                &self,
-                key: CoreStorageKey,
-                value: Vec<u8>,
-            ) -> Result<(), GenericError> {
-                let pause = self.pause.lock().await.take();
-                if let Some(pause) = pause {
-                    pause.await.unwrap();
-                }
-                self.inner.write_core_storage(key, value).await
-            }
-
-            async fn clear_core_storage(&self, key: CoreStorageKey) -> Result<(), GenericError> {
-                self.inner.clear_core_storage(key).await
-            }
-        }
-
-        futures::executor::block_on(async {
-            let (release, pause) = futures::channel::oneshot::channel();
-            let storage = PausedWriteStorage {
-                inner: MemStorage::default(),
-                pause: Mutex::new(Some(pause)),
-            };
-            let prompt = ScriptedPrompt::new(vec![], vec![true]);
-            let service = PermissionsService::new(&storage, &prompt, "product.dot");
-            let request = remote_domains(&["api.example.com"]);
-            let decision = service.check_or_prompt_remote(request.clone());
-            futures::pin_mut!(decision);
-            assert!(futures::poll!(decision.as_mut()).is_pending());
-            let admin_request = PermissionAuthorizationRequest::Remote(request.clone());
-            let update = service
-                .set_authorization_status(&admin_request, PermissionAuthorizationStatus::Denied);
-            futures::pin_mut!(update);
-            assert!(futures::poll!(update.as_mut()).is_pending());
-            release.send(()).unwrap();
-            let (decision, update) = futures::join!(decision, update);
-            assert_eq!(
-                (
-                    decision.unwrap(),
-                    update.unwrap(),
-                    service.peek_remote(&request).await.unwrap()
-                ),
-                (
-                    PermissionAuthorizationStatus::Authorized,
-                    (),
-                    PermissionAuthorizationStatus::Denied
-                ),
-            );
-        });
     }
 
     struct ScriptedPrompt {

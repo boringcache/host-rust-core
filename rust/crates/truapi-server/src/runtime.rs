@@ -300,7 +300,6 @@ impl ProductRuntimeHost {
     ) -> PermissionsService<'a, dyn Platform, dyn Platform> {
         PermissionsService::new(self.platform.as_ref(), self.platform.as_ref(), product_id)
             .with_status_host(self.permission_status.as_deref())
-            .with_mutations(self.services.permission_mutations(product_id))
     }
 
     /// Trusted executable kind attached to this product connection.

@@ -2275,7 +2275,9 @@ mod tests {
         worker_demand: Mutex<Vec<(String, WorkerTransition)>>,
         /// Capability this host reports as refused by the OS, if any.
         os_refused: Option<v01::HostDevicePermissionRequest>,
+        /// Configurable prompt outcome for grant, denial, and callback failure tests.
         remote_permission_result: Result<bool, HostRejection>,
+        /// Allows tests to close an execution before its permission prompt returns.
         remote_permission_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     }
 
