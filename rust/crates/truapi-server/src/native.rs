@@ -200,6 +200,18 @@ pub struct NativeHostRuntimeConfig {
     pub local_session_secret: Option<Vec<u8>>,
     /// Optional lite username attached to the local signing-host session.
     pub local_session_lite_username: Option<String>,
+    /// Asset Hub genesis hash, where the dotNS contracts are deployed. Must be
+    /// exactly 32 bytes.
+    ///
+    /// Product manifests are read from dotNS, so this is what makes a
+    /// `trustedProducts` grant resolvable. 32 zero bytes says this host has no
+    /// Asset Hub; grants already in the manifest cache stay honoured until they
+    /// expire.
+    ///
+    /// Appended rather than placed with its sibling hashes: record fields are
+    /// positional over the FFI and the checksum does not cover their order, so
+    /// an insert shifts every field below it.
+    pub asset_hub_chain_genesis_hash: Vec<u8>,
 }
 
 /// Trusted identity attached by a native host to one executable connection.
@@ -275,6 +287,28 @@ pub enum NativeRuntimeConfigError {
         /// Activation failure reason.
         reason: String,
     },
+    /// Asset Hub genesis hash was not exactly 32 bytes.
+    ///
+    /// Appended, not grouped with the sibling genesis-hash variants: declaration
+    /// order is the FFI discriminant and the checksum does not cover it, so an
+    /// insert renumbers every variant below it.
+    #[error("asset_hub_chain_genesis_hash must be exactly 32 bytes, got {actual}")]
+    InvalidAssetHubChainGenesisHash {
+        /// Supplied byte length.
+        actual: u64,
+    },
+    /// Product id was longer than `PRODUCT_ID_MAX_BYTES` after normalization.
+    ///
+    /// Appended for the same reason as the variant above. Carries lengths and
+    /// not the id: an id that trips this is unbounded in size, and this error
+    /// reaches the wire and the logs.
+    #[error("product_id must be at most {limit} bytes, got {actual}")]
+    ProductIdTooLong {
+        /// Accepted maximum, in bytes.
+        limit: u64,
+        /// Normalized length, in bytes.
+        actual: u64,
+    },
 }
 
 impl TryFrom<NativeHostRuntimeConfig> for NativeResolvedHostRuntimeConfig {
@@ -293,6 +327,12 @@ impl TryFrom<NativeHostRuntimeConfig> for NativeResolvedHostRuntimeConfig {
                     actual: config.bulletin_chain_genesis_hash.len() as u64,
                 }
             })?;
+        let asset_hub_chain_genesis_hash =
+            <[u8; 32]>::try_from(config.asset_hub_chain_genesis_hash.as_slice()).map_err(|_| {
+                NativeRuntimeConfigError::InvalidAssetHubChainGenesisHash {
+                    actual: config.asset_hub_chain_genesis_hash.len() as u64,
+                }
+            })?;
         let signing = SigningHostConfig::new(
             HostInfo {
                 name: config.host_name,
@@ -306,6 +346,7 @@ impl TryFrom<NativeHostRuntimeConfig> for NativeResolvedHostRuntimeConfig {
             },
             people_chain_genesis_hash,
             bulletin_chain_genesis_hash,
+            asset_hub_chain_genesis_hash,
             config.network_suffix,
         )?;
         Ok(Self {
@@ -345,6 +386,12 @@ impl From<RuntimeConfigValidationError> for NativeRuntimeConfigError {
             RuntimeConfigValidationError::InvalidProductId { product_id } => {
                 Self::InvalidProductId { product_id }
             }
+            RuntimeConfigValidationError::ProductIdTooLong { limit, actual } => {
+                Self::ProductIdTooLong {
+                    limit: limit as u64,
+                    actual: actual as u64,
+                }
+            }
             RuntimeConfigValidationError::InvalidNetworkSuffix { network_suffix } => {
                 Self::InvalidNetworkSuffix { network_suffix }
             }
@@ -366,6 +413,33 @@ impl From<HostNavigateRejection> for v01::HostNavigateToError {
 #[uniffi::export]
 pub fn parse_navigate(input: String) -> NavigateDecision {
     dotns::parse_navigate(&input)
+}
+
+/// Whether `product_id` is a first-party product the host grants every
+/// [`truapi::latest::RemotePermission`] without prompting.
+///
+/// Pure and stateless: it reads the compiled-in list and nothing else. **A
+/// stored user decision wins over the list**, so this is only the answer for
+/// the branch where the host's own store reads undetermined. Consulting it
+/// first would let a revoked grant keep working.
+///
+/// [`NativeProductExecution::permission_authorization_status`] is the stateful
+/// answer — it folds the list and the stored decision together — and a host
+/// holding an execution should ask that instead.
+///
+/// This exists for the path where a host mediates product network access in its
+/// own code — a webview interceptor, a `fetch` shim — and has already found
+/// nothing stored. Without it a first-party product is prompted by the host for
+/// access the core would have granted.
+///
+/// Covers remote permissions only. Device capabilities, identity disclosure and
+/// cross-product account access always prompt, whoever asks.
+///
+/// Normalizes before matching, and answers `false` for an id that does not
+/// normalize, so an unknown spelling is never read as trusted.
+#[uniffi::export]
+pub fn has_trusted_remote_permissions(product_id: String) -> bool {
+    truapi_platform::normalizes_to_trusted_remote_permissions(&product_id)
 }
 
 /// OS status of a device capability, as a native host reports it.
@@ -2677,6 +2751,7 @@ mod tests {
             platform_version: None,
             people_chain_genesis_hash: vec![0xa2; 32],
             bulletin_chain_genesis_hash: vec![0xbb; 32],
+            asset_hub_chain_genesis_hash: vec![0xcc; 32],
             network_suffix: "paseo".to_string(),
             local_session_secret: Some(vec![7; 32]),
             local_session_lite_username: Some("alice".to_string()),
@@ -2874,6 +2949,38 @@ mod tests {
             result,
             Err(crate::ProductRuntimeError::Unsupported)
         ));
+    }
+
+    /// Hosts mediate product network access in their own code and ask this to
+    /// decide whether to prompt, so it has to answer for the spellings a host
+    /// actually holds, not only the normalized one the core passes internally.
+    #[test]
+    fn the_trusted_export_normalizes_before_matching() {
+        for trusted in [
+            "peopl.dot",
+            "PEOPL.DOT",
+            "  peopl.dot  ",
+            "dim2.paseo",
+            "stash.dot",
+        ] {
+            assert!(
+                super::has_trusted_remote_permissions(trusted.to_string()),
+                "{trusted} is a first-party product",
+            );
+        }
+        for untrusted in [
+            "app.peopl.dot",
+            "peopl",
+            "notpeopl.dot",
+            "localhost:3000",
+            "",
+            "   ",
+        ] {
+            assert!(
+                !super::has_trusted_remote_permissions(untrusted.to_string()),
+                "{untrusted} is not",
+            );
+        }
     }
 
     #[test]
@@ -3603,6 +3710,50 @@ mod tests {
             err,
             NativeRuntimeConfigError::InvalidPeopleChainGenesisHash { actual: 31 }
         ));
+    }
+
+    #[test]
+    fn each_configured_genesis_hash_reaches_its_own_field() {
+        // Three adjacent `Vec<u8>` feeding a positional constructor:
+        // transposing any two compiles and, without this, passes.
+        let resolved = NativeResolvedHostRuntimeConfig::try_from(NativeHostRuntimeConfig {
+            people_chain_genesis_hash: vec![0xa1; 32],
+            bulletin_chain_genesis_hash: vec![0xb2; 32],
+            asset_hub_chain_genesis_hash: vec![0xc3; 32],
+            ..native_host_runtime_config()
+        })
+        .expect("config is valid");
+
+        assert_eq!(
+            (
+                resolved.signing.people_chain_genesis_hash,
+                resolved.signing.bulletin_chain_genesis_hash,
+                resolved.signing.asset_hub_chain_genesis_hash,
+            ),
+            ([0xa1; 32], [0xb2; 32], [0xc3; 32]),
+        );
+    }
+
+    #[test]
+    fn a_wrong_size_asset_hub_genesis_hash_is_rejected_as_its_own_field() {
+        // An empty vec must be an error, never a silent all-zero "no Asset
+        // Hub".
+        for len in [0usize, 31, 33] {
+            let err = NativeResolvedHostRuntimeConfig::try_from(NativeHostRuntimeConfig {
+                asset_hub_chain_genesis_hash: vec![0; len],
+                ..native_host_runtime_config()
+            })
+            .unwrap_err();
+
+            assert!(
+                matches!(
+                    err,
+                    NativeRuntimeConfigError::InvalidAssetHubChainGenesisHash { actual }
+                        if actual == len as u64
+                ),
+                "{len}-byte Asset Hub hash reported as {err:?}"
+            );
+        }
     }
 
     #[test]

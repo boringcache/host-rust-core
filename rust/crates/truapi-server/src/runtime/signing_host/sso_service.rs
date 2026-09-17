@@ -83,6 +83,9 @@ impl SigningHostSsoService {
                     .sign_payload(
                         &cx.call,
                         &cx.session,
+                        // A relayed request carries no caller identity, and
+                        // this role confirms every one of them anyway.
+                        None,
                         SignPayloadAuthorityRequest::Product(request),
                     )
                     .await
@@ -114,6 +117,7 @@ impl SigningHostSsoService {
             .sign_raw(
                 &cx.call,
                 &cx.session,
+                None,
                 SignRawAuthorityRequest::Product(request),
                 watermarked,
             )
@@ -142,6 +146,7 @@ impl SigningHostSsoService {
             .sign_raw(
                 &cx.call,
                 &cx.session,
+                None,
                 SignRawAuthorityRequest::LegacyAccount {
                     account: request.account,
                     request: public_request,
@@ -161,7 +166,7 @@ impl SigningHostSsoService {
         self.confirm(UserConfirmationReview::CreateTransaction(review))
             .await?;
         self.signing_host
-            .create_transaction(&cx.call, &cx.session, request)
+            .create_transaction(&cx.call, &cx.session, None, request)
             .await
             .map(|response| response.transaction)
             .map_err(|err| err.to_string())
@@ -543,7 +548,7 @@ impl SigningHostSsoService {
         if account_product_id != calling_product_id {
             return Err("product account does not belong to the calling product".to_string());
         }
-        account.dot_ns_identifier = calling_product_id;
+        account.dot_ns_identifier = calling_product_id.clone();
         validate_unsigned_statement_signing_payload(&request.payload)
             .map_err(|error| error.to_string())?;
         self.confirm(UserConfirmationReview::StatementStoreProductSign(
@@ -554,7 +559,13 @@ impl SigningHostSsoService {
         ))
         .await?;
         self.signing_host
-            .sign_statement_store_product_payload(&cx.call, &cx.session, account, request.payload)
+            .sign_statement_store_product_payload(
+                &cx.call,
+                &cx.session,
+                Some(calling_product_id.as_str()),
+                account,
+                request.payload,
+            )
             .await
             .map_err(|error| error.to_string())
     }
