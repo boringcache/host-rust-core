@@ -954,7 +954,6 @@ The top-level `--script` option does not update remembered `/script` state.
 | `ring-vrf-smoke.ts` | Verify RFC-0024 registration, listing, alias, non-membership proof, and direct signing behavior. |
 | `preimage-smoke.ts` | Exercise Bulletin preimage submission and lookup. |
 | `smart-contract-allowance-smoke.ts` | Requests a PGAS allowance for product account index 0 and reports the outcome. |
-| `remote-fetch.ts` | Fetch before and after a Remote grant; the initial fetch can itself prompt. |
 | `chat-battery.ts` | Run host-backed Chat screening diagnostics and write a report. |
 
 `battery.ts` writes to `explorer/diagnosis-reports/spa/<role>-cli.md` unless

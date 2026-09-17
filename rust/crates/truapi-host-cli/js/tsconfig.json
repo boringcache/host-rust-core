@@ -19,9 +19,7 @@
     "browser-bootstrap.ts",
     "browser-assets.ts",
     "sandbox-*.ts",
-    "scripts/remote-fetch.ts",
     "../../../../scripts/build-cli-runner.ts",
-    "../../../../scripts/cli-runner-package.test.ts",
-    "../../../../scripts/cli-sandbox.e2e.ts"
+    "../../../../scripts/cli-runner-package.test.ts"
   ]
 }

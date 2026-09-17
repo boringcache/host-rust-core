@@ -671,12 +671,6 @@ Scripts under `js/scripts/` include:
   its alias, verifies a fresh non-member key returns `NotMember` for a proof,
   and exercises direct ring-VRF signing.
 - `preimage-smoke.ts` — a focused Bulletin preimage flow check.
-- `remote-fetch.ts`: fetch before and after a Remote permission request. It
-  runs in the browser by default; use `runRemoteFetch(url)` or change its default
-  endpoint for a different target. `REMOTE_FETCH_URL` is read only in trusted
-  mode, since browser products do not receive the host environment. The first
-  fetch may itself prompt for permission, so a successful first attempt does
-  not indicate a sandbox bypass.
 
 The generated examples are baked to the `truapi-playground.dot` product. With
 live routing enabled, `Chain/stop_transaction` uses host-owned operation ids and
