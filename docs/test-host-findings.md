@@ -822,6 +822,82 @@ package that is plainly present. The umbrella `@parity/product-sdk` also ships
 no `dist` in the monorepo and has to be built first; `tsup`'s declaration step
 fails, but the JavaScript emits and that is enough to run.
 
+## 20. The consumer fleet: 34 repos, one of them adoptable today
+
+A sweep of every repo depending on `@parity/host-api-test-sdk` -- found by
+searching the org for the package in `package.json`, not only for its import,
+which is what surfaces the private ones. 34 consumers. The four sitting on this
+laptop are not a representative sample of them.
+
+**One repo can connect today.** `browse` resolves `@parity/product-sdk` 0.28.0
+-> `product-sdk-host` 0.20.0 -> `@parity/truapi` 0.16.0, so it is codec 2. Its
+host setup is `createTestHostServer` in `app/tests/utils.ts`, it calls no
+control method beyond `close()`, and its only rejected option is
+`productAccounts`. It is the reference port.
+
+**The other 33 are codec 1 and cannot connect at all.** They resolve
+`@parity/truapi` 0.13.1 or lower, or carry no truapi dependency whatsoever.
+`@parity/product-sdk-host` pins `@parity/truapi ^0.16.0` only from 0.20.0; at
+0.19.1 it pins `^0.13.1`, and 0.3.0 / 0.6.1 declare no truapi at all. For those
+repos a fixture edit changes nothing: every host call goes unanswered and the
+suite fails on connection timeouts, which is the same signature as
+host-playground#89.
+
+### Blockers by reach
+
+| blocker | repos |
+| --- | --- |
+| codec 1 -- resolves truapi <= 0.13.1, or none | **33 of 34** |
+| `productAccounts` -- rejected by design | every repo with a fixture bar two |
+| `chain:` -> `networks: [...]` | the older vintage only |
+| a throwing control method | statements, payments, `setLoginBehavior` |
+| `accounts: [{name, uri}]` | three repos |
+
+`chain:` versus `networks:` is a vintage marker rather than a preference: the
+option was renamed in `host-api-test-sdk`, so a consumer's spelling dates it.
+Tooling has to accept both.
+
+### `productAccounts` needs one answer, not thirty
+
+Four independent sweeps found the same thing: every `productAccounts` site
+carries a comment saying it exists to stop the host deriving
+`//Alice//<dotns>/<n>`, and that the mapped account is FUNDED. It is not a
+rename. TrUAPI derives a product account from (session root, product id), so a
+migrated suite signs with an address nobody funded, and a write test hangs
+rather than fails -- the failure mode playground-app's own guard was written to
+prevent after a day lost to it.
+
+This is the same wall `tx-demo`, `contracts-demo` and `playground-app` hit
+independently. Solve it once, centrally, before any repo is touched.
+
+### Several of these are not migrations
+
+`localdot-community`, `master-of-coin`, `browse-legacy`, `mercado-community`,
+`spotlight`, `polkadot-apps`, `host-api-example`, `trax-id` and
+`polkadot-testnet-faucet` sit on `@novasamatech/host-api` 0.8.x-0.10.x with no
+truapi anywhere. They need a client-SDK generation bump before the seam swap
+means anything. `browse-legacy` never adopted `createTestHostFixture` at all.
+
+### What is cheap
+
+`w3s-apps`/`t3rminal-internal` and `festival`/`w3s-conference-app` are
+near-identical forks -- one patch covers two repos each. `mercado-community`,
+`terminal-community` and `productivity` pass only accepted options and call no
+throwing method: pure SDK bumps.
+
+### Two traps for whoever writes the migration tooling
+
+`polkadot-testnet-faucet` has zero `*.spec.ts` -- its host tests are
+`*.test.ts` with an inline fixture, so a script keyed on `*.spec.ts` skips it
+silently. And `majority` carries a hand-rolled init-script shim that drops
+legacy `Uint8Array` window frames to force the MessagePort transport; it must
+be deleted on migration, not ported, or it will interfere with the codec-2
+handshake.
+
+**So the order is:** ship the release, consumers bump `@parity/product-sdk` to
+0.28.0 or later, then the seam swap -- which is genuinely small for most of
+them. Nothing in that sequence is blocked on this branch.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is
