@@ -9,12 +9,6 @@
             "state": "translated",
             "value": "%1$(productId)@ Requests Resource Allocation"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$(productId)@ solicita asignación de recursos"
-          }
         }
       }
     },
@@ -26,12 +20,6 @@
             "state": "translated",
             "value": "Auto-signing"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Firma automática"
-          }
         }
       }
     },
@@ -39,12 +27,6 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bulletin"
-          }
-        },
-        "es-ES": {
           "stringUnit": {
             "state": "translated",
             "value": "Bulletin"
@@ -60,12 +42,6 @@
             "state": "translated",
             "value": "Smart Contract"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contrato inteligente"
-          }
         }
       }
     },
@@ -73,12 +49,6 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Statement Store"
-          }
-        },
-        "es-ES": {
           "stringUnit": {
             "state": "translated",
             "value": "Statement Store"
@@ -94,12 +64,6 @@
             "state": "translated",
             "value": "Account access"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Acceso a la cuenta"
-          }
         }
       }
     },
@@ -110,12 +74,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Balance"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saldo"
           }
         }
       }
@@ -128,12 +86,6 @@
             "state": "translated",
             "value": "Biometrics"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Datos biométricos"
-          }
         }
       }
     },
@@ -141,12 +93,6 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bluetooth"
-          }
-        },
-        "es-ES": {
           "stringUnit": {
             "state": "translated",
             "value": "Bluetooth"
@@ -162,12 +108,6 @@
             "state": "translated",
             "value": "Camera"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cámara"
-          }
         }
       }
     },
@@ -178,12 +118,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Clipboard"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Portapapeles"
           }
         }
       }
@@ -196,12 +130,6 @@
             "state": "translated",
             "value": "Location"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ubicación"
-          }
         }
       }
     },
@@ -213,12 +141,6 @@
             "state": "translated",
             "value": "Microphone"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Micrófono"
-          }
         }
       }
     },
@@ -226,12 +148,6 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "NFC"
-          }
-        },
-        "es-ES": {
           "stringUnit": {
             "state": "translated",
             "value": "NFC"
@@ -247,12 +163,6 @@
             "state": "translated",
             "value": "Notifications"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Notificaciones"
-          }
         }
       }
     },
@@ -263,12 +173,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "External links"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enlaces externos"
           }
         }
       }
@@ -281,12 +185,6 @@
             "state": "translated",
             "value": "Chain transactions"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transacciones en la cadena"
-          }
         }
       }
     },
@@ -297,12 +195,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Network access"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Acceso a la red"
           }
         }
       }
@@ -315,12 +207,6 @@
             "state": "translated",
             "value": "Preimage submission"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Envío de preimagen"
-          }
         }
       }
     },
@@ -331,12 +217,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Statement submission"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Envío de statements"
           }
         }
       }
@@ -366,12 +246,6 @@
             "state": "translated",
             "value": "User identity"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identidad del usuario"
-          }
         }
       }
     },
@@ -379,12 +253,6 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "WebRTC"
-          }
-        },
-        "es-ES": {
           "stringUnit": {
             "state": "translated",
             "value": "WebRTC"
@@ -400,12 +268,6 @@
             "state": "translated",
             "value": "Context: %1$(context)@"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contexto: %1$(context)@"
-          }
         }
       }
     },
@@ -416,12 +278,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Message: %1$(message)@"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mensaje: %1$(message)@"
           }
         }
       }
@@ -434,12 +290,6 @@
             "state": "translated",
             "value": "On behalf of: %1$(targetProductId)@"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "En nombre de: %1$(targetProductId)@"
-          }
         }
       }
     },
@@ -450,12 +300,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$(productId)@ wants to execute anonymous action on behalf of %2$(targetProductId)@"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$(productId)@ quiere ejecutar una acción anónima en nombre de %2$(targetProductId)@"
           }
         }
       }
@@ -468,12 +312,6 @@
             "state": "translated",
             "value": "A connected app requests a personhood proof"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Una app conectada solicita una prueba de persona real"
-          }
         }
       }
     },
@@ -484,12 +322,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Product %1$(productId)@ requests payment"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El producto %1$(productId)@ solicita un pago"
           }
         }
       }
@@ -502,12 +334,6 @@
             "state": "translated",
             "value": "Allow Always"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permitir siempre"
-          }
         }
       }
     },
@@ -518,12 +344,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Allow Once"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permitir una vez"
           }
         }
       }
@@ -536,12 +356,6 @@
             "state": "translated",
             "value": "Don't Allow"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No permitir"
-          }
         }
       }
     },
@@ -552,12 +366,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Account access is required to interact with %1$(targetProductId)@."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso a la cuenta para interactuar con %1$(targetProductId)@."
           }
         }
       }
@@ -570,12 +378,6 @@
             "state": "translated",
             "value": "Access to your balance information."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Acceso a la información de tu saldo."
-          }
         }
       }
     },
@@ -586,12 +388,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Chain submission access is required to broadcast transactions."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso de envío a la cadena para transmitir transacciones."
           }
         }
       }
@@ -604,12 +400,6 @@
             "state": "translated",
             "value": "You can manage this later in Settings."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes administrar esto más tarde en Configuración."
-          }
         }
       }
     },
@@ -620,12 +410,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Network access is required to connect to %1$(domain)@."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso a la red para conectarse a %1$(domain)@."
           }
         }
       }
@@ -638,12 +422,6 @@
             "state": "translated",
             "value": "Preimage submission access is required to submit preimage data."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso de envío de preimagen para enviar datos de preimagen."
-          }
         }
       }
     },
@@ -654,12 +432,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Statement submission access is required to publish statements."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso de envío de statements para publicarlos."
           }
         }
       }
@@ -689,12 +461,6 @@
             "state": "translated",
             "value": "Access to your primary username is required for identification."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso a tu nombre de usuario principal para identificarte."
-          }
         }
       }
     },
@@ -705,12 +471,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "WebRTC access is required for peer-to-peer communication."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso a WebRTC para la comunicación entre pares."
           }
         }
       }
@@ -723,12 +483,6 @@
             "state": "translated",
             "value": "Biometrics"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "los datos biométricos"
-          }
         }
       }
     },
@@ -736,12 +490,6 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bluetooth"
-          }
-        },
-        "es-ES": {
           "stringUnit": {
             "state": "translated",
             "value": "Bluetooth"
@@ -757,12 +505,6 @@
             "state": "translated",
             "value": "the camera"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "la cámara"
-          }
         }
       }
     },
@@ -773,12 +515,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "the clipboard"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "el portapapeles"
           }
         }
       }
@@ -791,12 +527,6 @@
             "state": "translated",
             "value": "Biometric access is required for authentication."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso biométrico para la autenticación."
-          }
         }
       }
     },
@@ -807,12 +537,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bluetooth access is required to connect to nearby devices."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso a Bluetooth para conectarse a dispositivos cercanos."
           }
         }
       }
@@ -825,12 +549,6 @@
             "state": "translated",
             "value": "Camera access is required to take photos."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso a la cámara para tomar fotos."
-          }
         }
       }
     },
@@ -841,12 +559,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Clipboard access is required to read copied content."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso al portapapeles para leer el contenido copiado."
           }
         }
       }
@@ -859,12 +571,6 @@
             "state": "translated",
             "value": "Location access is required to determine your position."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso a la ubicación para determinar tu posición."
-          }
         }
       }
     },
@@ -875,12 +581,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Microphone access is required to record audio."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso al micrófono para grabar audio."
           }
         }
       }
@@ -893,12 +593,6 @@
             "state": "translated",
             "value": "NFC access is required to read tags."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso a NFC para leer etiquetas."
-          }
         }
       }
     },
@@ -909,12 +603,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Notification access is required to send alerts."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso a las notificaciones para enviar alertas."
           }
         }
       }
@@ -927,12 +615,6 @@
             "state": "translated",
             "value": "URL opening access is required to open links in the system browser."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se requiere acceso para abrir enlaces en el navegador del sistema."
-          }
         }
       }
     },
@@ -943,12 +625,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Location"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "tu ubicación"
           }
         }
       }
@@ -961,12 +637,6 @@
             "state": "translated",
             "value": "the microphone"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "el micrófono"
-          }
         }
       }
     },
@@ -974,12 +644,6 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "NFC"
-          }
-        },
-        "es-ES": {
           "stringUnit": {
             "state": "translated",
             "value": "NFC"
@@ -995,12 +659,6 @@
             "state": "translated",
             "value": "Notifications"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "las notificaciones"
-          }
         }
       }
     },
@@ -1012,12 +670,6 @@
             "state": "translated",
             "value": "Open URLs"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "los enlaces externos"
-          }
         }
       }
     },
@@ -1028,12 +680,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$(productId)@ would like to access account data"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$(productId)@ quiere acceder a los datos de tu cuenta"
           }
         }
       }
@@ -1063,12 +709,6 @@
             "state": "translated",
             "value": "%1$(productId)@ would like to access %2$(capability)@"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$(productId)@ quiere acceder a %2$(capability)@"
-          }
         }
       }
     },
@@ -1079,12 +719,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$(productId)@ would like to access the network"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$(productId)@ quiere acceder a la red"
           }
         }
       }
@@ -1097,12 +731,6 @@
             "state": "translated",
             "value": "%1$(productId)@ requests permission"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$(productId)@ solicita permiso"
-          }
         }
       }
     },
@@ -1114,12 +742,6 @@
             "state": "translated",
             "value": "Minimize"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Minimizar"
-          }
         }
       }
     },
@@ -1130,12 +752,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "More"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Más"
           }
         }
       }
@@ -1214,12 +830,6 @@
             "state": "translated",
             "value": "Open apps, %lld"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apps abiertas, %lld"
-          }
         }
       }
     },
@@ -1230,12 +840,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "QR scanner"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escáner de QR"
           }
         }
       }
@@ -1248,12 +852,6 @@
             "state": "translated",
             "value": "Not available"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No disponible"
-          }
         }
       }
     },
@@ -1264,12 +862,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "This will generate cryptographic randomness for %1$(transcriptLabel)@ purpose that %2$(productId)@ can verify. It cannot move your assets or grant spending permission."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Esto generará aleatoriedad criptográfica con el propósito de %1$(transcriptLabel)@ que %2$(productId)@ puede verificar. No puede mover tus activos ni otorgar permiso de gasto."
           }
         }
       }
@@ -1282,12 +874,6 @@
             "state": "translated",
             "value": "This will generate cryptographic randomness for %1$(transcriptLabel)@ purpose that the requesting app can verify. It cannot move your assets or grant spending permission."
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Esto generará aleatoriedad criptográfica con el propósito de %1$(transcriptLabel)@ que la app solicitante puede verificar. No puede mover tus activos ni otorgar permiso de gasto."
-          }
         }
       }
     },
@@ -1298,12 +884,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$(productId)@ is requesting verifiable randomness"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$(productId)@ solicita aleatoriedad verificable"
           }
         }
       }
@@ -1316,12 +896,6 @@
             "state": "translated",
             "value": "A connected app is requesting verifiable randomness"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Una app conectada solicita aleatoriedad verificable"
-          }
         }
       }
     },
@@ -1332,12 +906,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$(productId)@ wants to sign statement for later submission."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$(productId)@ quiere firmar un statement para enviarlo después."
           }
         }
       }
@@ -1350,12 +918,6 @@
             "state": "translated",
             "value": "Statement Signature"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Firma de statement"
-          }
         }
       }
     },
@@ -1366,12 +928,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "The detected amount differs from the amount stated by the product."
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El monto detectado difiere del monto indicado por el producto."
           }
         }
       }
@@ -1384,12 +940,6 @@
             "state": "translated",
             "value": "Failed to move coins into the user's coin set"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No se pudieron mover las monedas al conjunto de monedas del usuario"
-          }
         }
       }
     },
@@ -1401,12 +951,6 @@
             "state": "translated",
             "value": "Failed to Accept Funds from %1$(product)@"
           }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No se pudieron aceptar los fondos de %1$(product)@"
-          }
         }
       }
     },
@@ -1417,12 +961,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Accepted funds from %1$(product)@"
-          }
-        },
-        "es-ES": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fondos aceptados de %1$(product)@"
           }
         }
       }
