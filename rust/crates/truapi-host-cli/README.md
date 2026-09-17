@@ -495,9 +495,11 @@ so its pairing runs only for the current process and `/devices` is unavailable.
 
 A product script is top-level JavaScript or TypeScript run as a browser ES
 module. The CLI uses the same `js/container` code as the native iOS host and
-the shared Rust Remote permission policy. The trusted launcher checks outbound
-HTTP(S) requests, including each redirected destination, outside the product's
-JavaScript realm. Browser CORS rules still apply. WebSockets, WebRTC,
+the shared Rust Remote permission policy. In the CLI, the trusted launcher asks
+Rust to authorize the initial URL when Chromium intercepts the outgoing fetch.
+It uses the product's existing connection and consumes a one-use grant only
+once, including requests with CORS preflights. Native fetch follows redirects
+without asking about each destination. Browser CORS rules still apply. WebSockets, WebRTC,
 WebTransport, workers, and subframes are unavailable in this runner.
 
 Imports must resolve inside the script's directory or a `node_modules` tree in

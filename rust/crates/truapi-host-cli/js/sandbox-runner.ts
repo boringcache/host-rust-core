@@ -1,10 +1,17 @@
 import { chromium, type CDPSession, type Page } from "playwright-core";
 import { fileURLToPath } from "node:url";
 import {
-  createClient,
-  createTransport,
+  decodeWireMessage,
+  encodeWireMessage,
+  MESSAGE_TYPE_REQUEST,
+  MESSAGE_TYPE_RESPONSE,
+  VersionedAuthorizeNetworkAccessRequest,
+  VersionedAuthorizeNetworkAccessResponse,
+  VersionedAuthorizeNetworkAccessError,
+  scale,
   type WireProvider,
 } from "../../../../js/packages/truapi/src/index.ts";
+import { PERMISSIONS_AUTHORIZE_NETWORK_ACCESS } from "../../../../js/packages/truapi/src/generated/wire-table.ts";
 import { buildProductScript } from "./sandbox-build.ts";
 import { buildBrowserAssets, type BrowserAssets } from "./browser-assets.ts";
 import { wsProvider } from "./ws-provider.ts";
@@ -12,13 +19,27 @@ import { wsProvider } from "./ws-provider.ts";
 export interface BrowserScriptOptions {
   source: string;
   productId: string;
-  authorize: (url: string) => Promise<boolean>;
+  authorize?: (url: string) => Promise<boolean>;
   provider: WireProvider;
   onConsole?: (level: string, message: string) => void;
   timeoutMs?: number;
 }
 
 let assetPromise: Promise<BrowserAssets> | undefined;
+const authorizationPrefix = "__truapi_cli_network__:";
+const authorizationResponse = scale.Result(
+  VersionedAuthorizeNetworkAccessResponse,
+  scale.CallError(VersionedAuthorizeNetworkAccessError),
+);
+
+interface NetworkOperation {
+  url: string;
+  active: boolean;
+  authorization?: {
+    result: Promise<boolean>;
+    cancel: () => void;
+  };
+}
 export function browserAssets(): Promise<BrowserAssets> {
   return (assetPromise ??= (async () => {
     const directory = new URL("./sandbox-assets/", import.meta.url);
@@ -106,6 +127,17 @@ export async function runBrowserScript(
     resolveDone = resolve;
     rejectDone = reject;
   });
+  const privateRequests = new Map<string, (allowed: boolean) => void>();
+  const authorizationSession = crypto.randomUUID();
+  let authorizationSequence = 0;
+  const operations = new Map<string, NetworkOperation>();
+  const networkRequests = new Map<
+    string,
+    {
+      ready: Promise<NetworkOperation | undefined>;
+      resolve: (operation?: NetworkOperation) => void;
+    }
+  >();
   // Startup can fail before the caller begins awaiting script completion.
   void completion.catch(() => {});
   const fail = (error: unknown) => {
@@ -133,8 +165,38 @@ export async function runBrowserScript(
       options.onConsole?.(message.type(), message.text()),
     );
     const session = await context.newCDPSession(page);
+    session.on("Network.requestWillBeSent", (event) => {
+      const request = networkRequest(event.requestId);
+      if (event.type === "Fetch" && !operations.has(event.requestId)) {
+        const operation = { url: event.request.url, active: true };
+        operations.set(event.requestId, operation);
+        request.resolve(operation);
+      } else if (
+        event.initiator.type === "preflight" &&
+        event.initiator.requestId
+      ) {
+        void networkRequest(event.initiator.requestId).ready.then(
+          request.resolve,
+        );
+      } else if (event.type !== "Fetch") {
+        request.resolve();
+      }
+    });
+    const finishNetworkRequest = ({ requestId }: { requestId: string }) => {
+      const operation = operations.get(requestId);
+      if (operation) {
+        operation.active = false;
+        operation.authorization?.cancel();
+        operations.delete(requestId);
+      }
+      networkRequests.get(requestId)?.resolve();
+      networkRequests.delete(requestId);
+    };
+    session.on("Network.loadingFinished", finishNetworkRequest);
+    session.on("Network.loadingFailed", finishNetworkRequest);
     let firstDocument = true;
     session.on("Fetch.requestPaused", (event) => {
+      let operation: NetworkOperation | undefined;
       void (async () => {
         const url = new URL(event.request.url);
         if (event.resourceType === "Document") {
@@ -156,52 +218,87 @@ export async function runBrowserScript(
             ],
             body: Buffer.from(resource.body).toString("base64"),
           });
-        } else if (
-          ["http:", "https:"].includes(url.protocol) &&
-          (await options.authorize(url.href))
-        ) {
-          await session.send("Fetch.continueRequest", {
-            requestId: event.requestId,
-          });
         } else {
+          if (["http:", "https:"].includes(url.protocol) && event.networkId) {
+            operation = await networkRequest(event.networkId).ready;
+            if (operation?.active) {
+              operation.authorization ??= authorizeNetworkRequest(
+                operation.url,
+              );
+              const allowed = await operation.authorization.result;
+              if (!operation.active) return;
+              if (allowed) {
+                await session.send("Fetch.continueRequest", {
+                  requestId: event.requestId,
+                });
+                return;
+              }
+            }
+          }
           await denyRequest(session, event.requestId);
         }
       })().catch((error) => {
+        if (done || operation?.active === false) return;
         void denyRequest(session, event.requestId).catch(() => {});
         fail(error);
       });
     });
+    await session.send("Network.enable");
     await session.send("Fetch.enable", {
       patterns: [{ urlPattern: "*", requestStage: "Request" }],
     });
 
     await page.exposeBinding(
-      "__truapi_authorize__",
-      async ({ frame }, input: unknown) => {
-        if (frame !== page.mainFrame() || typeof input !== "string")
-          return false;
-        const url = new URL(input);
-        return (
-          url.origin === origin ||
-          (["http:", "https:"].includes(url.protocol) &&
-            (await options.authorize(url.href)))
-        );
+      "__truapi_network_intent__",
+      ({ frame }, input: unknown) => {
+        if (frame !== page.mainFrame() || !isFrame(input))
+          throw new Error("Invalid authorization frame");
+        const decoded = decodeWireMessage(Uint8Array.from(input));
+        if (decoded.isErr()) throw decoded.error;
+        const request = decoded.value;
+        if (
+          request.payload.traitId !==
+            PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.trait ||
+          request.payload.methodId !==
+            PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method ||
+          request.payload.messageType !== MESSAGE_TYPE_REQUEST
+        )
+          throw new Error("Invalid authorization method");
+        const { url } = VersionedAuthorizeNetworkAccessRequest.dec(
+          request.payload.value,
+        ).value;
+        // CLI authorization belongs to the intercepted request, so cancellation cannot leave a reusable grant.
+        const allowed = ["http:", "https:"].includes(new URL(url).protocol);
+        const response = encodeWireMessage({
+          requestId: request.requestId,
+          payload: {
+            ...request.payload,
+            messageType: MESSAGE_TYPE_RESPONSE,
+            value: authorizationResponse.enc({
+              success: true,
+              value: { tag: "V1", value: { allowed } },
+            }),
+          },
+        });
+        if (response.isErr()) throw response.error;
+        return Array.from(response.value);
       },
     );
     await page.exposeBinding(
       "__truapi_send__",
       ({ frame }, message: unknown) => {
-        if (
-          frame !== page.mainFrame() ||
-          !Array.isArray(message) ||
-          message.length > 64 * 1024 * 1024 ||
-          !message.every(
-            (value) => Number.isInteger(value) && value >= 0 && value <= 255,
-          )
-        ) {
+        if (frame !== page.mainFrame() || !isFrame(message)) {
           throw new Error("Invalid product frame");
         }
-        options.provider.postMessage(Uint8Array.from(message));
+        const bytes = Uint8Array.from(message);
+        const decoded = decodeWireMessage(bytes);
+        if (
+          decoded.isErr() ||
+          decoded.value.requestId.startsWith(authorizationPrefix)
+        ) {
+          throw new Error("Invalid product request ID");
+        }
+        options.provider.postMessage(bytes);
       },
     );
     await page.exposeBinding(
@@ -216,6 +313,21 @@ export async function runBrowserScript(
     const bootstrap = `(() => {
       if (window !== window.top) return;
       const send = window.__truapi_send__;
+      const sendNetwork = window.__truapi_network_intent__;
+      const apply = Reflect.apply;
+      const then = Promise.prototype.then;
+      const from = Array.from;
+      const Bytes = Uint8Array;
+      const networkPort = {
+        onmessage: null,
+        onmessageerror: null,
+        postMessage(message) {
+          apply(then, sendNetwork(from(message)), [
+            bytes => networkPort.onmessage?.({ data: new Bytes(bytes) }),
+            () => networkPort.onmessageerror?.(),
+          ]);
+        },
+      };
       const channel = new MessageChannel();
       channel.port2.onmessage = event => send(Array.from(new Uint8Array(event.data)));
       channel.port2.start();
@@ -223,15 +335,37 @@ export async function runBrowserScript(
       window.__HOST_API_PORT__ = channel.port1;
       window.__HOST_WEBVIEW_MARK__ = true;
       window.__truapi_product_id__ = ${JSON.stringify(options.productId)};
-      window.__truapi_network__ = window.__truapi_authorize__;
+      window.__truapi_network_port__ = networkPort;
       window.__truapi_policy__ = { webRtcAllowed: false };
-      delete window.__truapi_authorize__;
+      delete window.__truapi_network_intent__;
       delete window.__truapi_send__;
     })();`;
     await page.addInitScript({ content: `${bootstrap}\n${assets.container}` });
     let ready = false;
     const pending: Uint8Array[] = [];
     unsubscribe = options.provider.subscribe((message) => {
+      const decoded = decodeWireMessage(message);
+      if (
+        decoded.isOk() &&
+        decoded.value.requestId.startsWith(authorizationPrefix)
+      ) {
+        const { requestId, payload } = decoded.value;
+        if (
+          payload.traitId !== PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.trait ||
+          payload.methodId !== PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method ||
+          payload.messageType !== MESSAGE_TYPE_RESPONSE
+        )
+          return;
+        const finish = privateRequests.get(requestId);
+        if (!finish) return;
+        try {
+          const response = authorizationResponse.dec(payload.value);
+          finish(response.success && response.value.value.allowed);
+        } catch {
+          finish(false);
+        }
+        return;
+      }
       if (ready) void deliverFrame(page, message).catch(fail);
       else pending.push(message.slice());
     });
@@ -254,8 +388,77 @@ export async function runBrowserScript(
     if (timer) clearTimeout(timer);
     unsubscribe?.();
     unsubscribeClose?.();
+    for (const finish of privateRequests.values()) finish(false);
+    for (const operation of operations.values()) operation.active = false;
+    for (const request of networkRequests.values()) request.resolve();
+    operations.clear();
+    networkRequests.clear();
     await browser.close();
   }
+
+  function networkRequest(requestId: string) {
+    // Chromium can pause a request before its Network metadata arrives.
+    let request = networkRequests.get(requestId);
+    if (!request) {
+      let resolve!: (operation?: NetworkOperation) => void;
+      const ready = new Promise<NetworkOperation | undefined>((done) => {
+        resolve = done;
+      });
+      request = { ready, resolve };
+      networkRequests.set(requestId, request);
+    }
+    return request;
+  }
+
+  function authorizeNetworkRequest(
+    url: string,
+  ): NonNullable<NetworkOperation["authorization"]> {
+    if (options.authorize) {
+      return {
+        result: Promise.resolve()
+          .then(() => options.authorize!(url))
+          .catch(() => false),
+        cancel() {},
+      };
+    }
+    const requestId = `${authorizationPrefix}${authorizationSession}:${++authorizationSequence}`;
+    let finish!: (allowed: boolean) => void;
+    const result = new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => finish(false), 120_000);
+      finish = (allowed) => {
+        clearTimeout(timeout);
+        privateRequests.delete(requestId);
+        resolve(allowed);
+      };
+      privateRequests.set(requestId, finish);
+      try {
+        const request = encodeWireMessage({
+          requestId,
+          payload: {
+            traitId: PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.trait,
+            methodId: PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method,
+            messageType: MESSAGE_TYPE_REQUEST,
+            value: VersionedAuthorizeNetworkAccessRequest.enc({
+              tag: "V1",
+              value: { url },
+            }),
+          },
+        })._unsafeUnwrap();
+        options.provider.postMessage(request);
+      } catch {
+        finish(false);
+      }
+    });
+    return { result, cancel: () => finish(false) };
+  }
+}
+
+function isFrame(value: unknown): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 64 * 1024 * 1024 &&
+    value.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
+  );
 }
 
 async function denyRequest(
@@ -285,26 +488,17 @@ export async function runSandboxScript(
 ): Promise<void> {
   const source = await buildProductScript(scriptPath);
   const provider = wsProvider(frameUrl);
-  const authorizationProvider = wsProvider(frameUrl);
-  const client = createClient(createTransport(authorizationProvider));
   const timer = setTimeout(() => {
     console.error(`[runner] timed out connecting to ${frameUrl}`);
     process.exit(2);
   }, 15_000);
   try {
-    await Promise.all([provider.opened, authorizationProvider.opened]);
+    await provider.opened;
     clearTimeout(timer);
     await runBrowserScript({
       source,
       productId,
       provider,
-      authorize: async (url) => {
-        const domain = new URL(url).hostname;
-        const result = await client.permissions.requestRemotePermission({
-          permission: { tag: "Remote", value: { domains: [domain] } },
-        });
-        return result.isOk() && result.value.granted;
-      },
       onConsole: (level, message) =>
         (level === "error" || level === "warning"
           ? console.error
@@ -313,6 +507,5 @@ export async function runSandboxScript(
   } finally {
     clearTimeout(timer);
     provider.dispose();
-    authorizationProvider.dispose();
   }
 }
