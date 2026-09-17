@@ -29,6 +29,12 @@ public struct HostRuntimeConfig: Sendable, Equatable {
     public let platformVersion: String?
     public let peopleChainGenesisHash: Data
     public let bulletinChainGenesisHash: Data
+    /// Asset Hub genesis hash, where the dotNS contracts are deployed. Product
+    /// manifests are read from there, so this is what makes a `trustedProducts`
+    /// grant resolvable. 32 zero bytes says this host has no Asset Hub, and no
+    /// manifest then resolves, so every cross-product grant is refused except
+    /// one already cached, which is served without consulting this.
+    public let assetHubChainGenesisHash: Data
     /// The network's dotNS TLD without the leading dot (`dot`, `paseo`,
     /// `testnet`). The core derives the wallet's reserved identities under it:
     /// `uid.<suffix>` for the identity account and `peopl.<suffix>` for the
@@ -46,6 +52,7 @@ public struct HostRuntimeConfig: Sendable, Equatable {
         platformVersion: String? = nil,
         peopleChainGenesisHash: Data,
         bulletinChainGenesisHash: Data,
+        assetHubChainGenesisHash: Data,
         networkSuffix: String,
         localSessionSecret: Data? = nil,
         localSessionLiteUsername: String? = nil
@@ -57,6 +64,7 @@ public struct HostRuntimeConfig: Sendable, Equatable {
         self.platformVersion = platformVersion
         self.peopleChainGenesisHash = peopleChainGenesisHash
         self.bulletinChainGenesisHash = bulletinChainGenesisHash
+        self.assetHubChainGenesisHash = assetHubChainGenesisHash
         self.networkSuffix = networkSuffix
         self.localSessionSecret = localSessionSecret
         self.localSessionLiteUsername = localSessionLiteUsername
@@ -74,7 +82,8 @@ public struct HostRuntimeConfig: Sendable, Equatable {
             bulletinChainGenesisHash: bulletinChainGenesisHash,
             networkSuffix: networkSuffix,
             localSessionSecret: localSessionSecret,
-            localSessionLiteUsername: localSessionLiteUsername
+            localSessionLiteUsername: localSessionLiteUsername,
+            assetHubChainGenesisHash: assetHubChainGenesisHash
         )
     }
 }
@@ -272,11 +281,11 @@ public protocol HostBridge: AnyObject, Sendable {
     /// Cancel a previously scheduled notification id.
     func cancelNotification(id: UInt32) throws
 
-    /// Prompt for a device-level permission. Returns the granted flag. Invoked
+    /// Prompt for a device-level permission. Preserve the approval lifetime. Invoked
     /// on a blocking-pool thread; present the prompt on the main thread and
     /// block the calling thread until the user decides. Blocking here does
     /// not stall other TrUAPI traffic.
-    func devicePermission(request: HostDevicePermissionRequest) async throws -> Bool
+    func devicePermission(request: HostDevicePermissionRequest) async throws -> PermissionDecision
 
     /// Report the OS status of a device capability without prompting. Answer
     /// from the platform's authorization APIs, for example
@@ -295,7 +304,7 @@ public protocol HostBridge: AnyObject, Sendable {
     /// blocking-pool thread; present the prompt on the main thread and block
     /// the calling thread until the user decides. Blocking here does not
     /// stall other TrUAPI traffic.
-    func remotePermission(request: RemotePermission) async throws -> Bool
+    func remotePermission(request: RemotePermission) async throws -> PermissionDecision
 
     /// Observe an auth state change, in transition order: render `.pairing` as
     /// the pairing QR UI, `.connected`/`.disconnected` as the account badge,
@@ -566,7 +575,7 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
         }
     }
 
-    func devicePermission(request: HostDevicePermissionRequest) async throws -> Bool {
+    func devicePermission(request: HostDevicePermissionRequest) async throws -> PermissionDecision {
         try await withHostRejection {
             try await bridge.devicePermission(request: request)
         }
@@ -580,7 +589,7 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
         }
     }
 
-    func remotePermission(request: RemotePermission) async throws -> Bool {
+    func remotePermission(request: RemotePermission) async throws -> PermissionDecision {
         try await withHostRejection {
             try await bridge.remotePermission(request: request)
         }
@@ -1044,8 +1053,7 @@ public final class TrUAPIProductExecution: TrUAPIProductExecutionProtocol, @unch
         try await inner.permissionAuthorizationStatus(request: request)
     }
 
-    /// Live WKWebViews must use ProductScriptInstallation.setPermissionAuthorizationStatus
-    /// so engine rules are invalidated before the permission changes.
+    /// Updates the product decision used by subsequent permission checks.
     public func setPermissionAuthorizationStatus(
         request: PermissionAuthorizationRequest,
         status: PermissionAuthorizationStatus

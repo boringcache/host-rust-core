@@ -27,6 +27,9 @@ import {
 } from './freeze.js';
 import { consumeWebRtcPolicy, installWebRtcPolicy } from './webrtc.js';
 import { installFetchGate } from './network.js';
+import { createNetworkAuthorization } from './network-transport.js';
+
+const _authorizeNetwork = createNetworkAuthorization(window);
 
 const _NativeWebSocket = window.WebSocket;
 const _bridgeUrl: string | undefined = (window as any).__truapi_localhost?.url;
@@ -51,7 +54,7 @@ freezeCustom(
   (current) => current === _GatedWebSocket,
 );
 
-installFetchGate(window);
+installFetchGate(window, _authorizeNetwork);
 
 // --- Network: delete (no future permission path) ---
 freezeAndDelete(window, 'XMLHttpRequest');

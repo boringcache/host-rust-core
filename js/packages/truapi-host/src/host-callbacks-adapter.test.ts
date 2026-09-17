@@ -5,14 +5,12 @@ import {
   HostChatCreateRoomRequest,
   HostChatCreateRoomResponse,
   HostDevicePermissionRequest,
-  HostDevicePermissionResponse,
   HostFeatureSupportedRequest,
   HostFeatureSupportedResponse,
   HostPushNotificationRequest,
   HostPushNotificationResponse,
   HostThemeSubscribeItem,
   RemotePermissionRequest,
-  RemotePermissionResponse,
 } from "@parity/truapi";
 import type {
   GenericError,
@@ -25,6 +23,7 @@ import { createWasmRawCallbacks } from "./generated/host-callbacks-adapter.js";
 import {
   AuthState,
   CoreStorageKey,
+  PermissionDecision,
   ProductContext,
   ProductExecutionKind,
   UserConfirmationReview,
@@ -95,12 +94,10 @@ describe("createWasmRawCallbacks", () => {
           },
         },
         permissions: {
-          devicePermission: async (request) => ({
-            granted: request === "Camera",
-          }),
-          remotePermission: async (request) => ({
-            granted: request.permission.tag === "ChainSubmit",
-          }),
+          devicePermission: async (request) =>
+            request === "Camera" ? "AllowAlways" : "Deny",
+          remotePermission: async (request) =>
+            request.permission.tag === "ChainSubmit" ? "AllowOnce" : "Deny",
         },
         features: {
           featureSupported: async (request) => ({
@@ -132,19 +129,19 @@ describe("createWasmRawCallbacks", () => {
       ).id,
     ).toBe(5);
     expect(
-      HostDevicePermissionResponse.dec(
+      PermissionDecision.dec(
         await raw.devicePermission!(HostDevicePermissionRequest.enc("Camera")),
-      ).granted,
-    ).toBe(true);
+      ),
+    ).toBe("AllowAlways");
     expect(
-      RemotePermissionResponse.dec(
+      PermissionDecision.dec(
         await raw.remotePermission!(
           RemotePermissionRequest.enc({
             permission: { tag: "ChainSubmit" },
           }),
         ),
-      ).granted,
-    ).toBe(true);
+      ),
+    ).toBe("AllowOnce");
     expect(
       HostFeatureSupportedResponse.dec(
         await raw.featureSupported!(

@@ -24,9 +24,9 @@ use truapi::latest as api;
 use truapi::v01;
 use truapi_platform::{
     AuthState, ChainProvider, CoreStorage, CoreStorageKey, DevicePermissionStatus, Features,
-    JsonRpcConnection, LocaleHost, Navigation, Notifications, PermissionStatusHost, Permissions,
-    PreimageHost, ProductStorage, ProductStorageKey, SessionUiInfo, SignRawReview, ThemeHost,
-    UserConfirmation, UserConfirmationReview,
+    JsonRpcConnection, LocaleHost, Navigation, Notifications, PermissionDecision,
+    PermissionStatusHost, Permissions, PreimageHost, ProductStorage, ProductStorageKey,
+    SessionUiInfo, SignRawReview, ThemeHost, UserConfirmation, UserConfirmationReview,
 };
 
 use crate::chain::WsChainProvider;
@@ -116,6 +116,13 @@ pub struct CliPlatform {
 }
 
 impl CliPlatform {
+    /// The URL a genesis routes to, so a test can assert a routing override
+    /// rather than assume it.
+    #[cfg(test)]
+    pub(crate) fn routed_url(&self, genesis_hash: &[u8; 32]) -> &str {
+        self.chain.routed_url(genesis_hash)
+    }
+
     /// Build a platform whose chain provider connects to the network's People
     /// chain and whose optional state directory backs product/core storage.
     pub fn new(
@@ -669,27 +676,35 @@ impl Permissions for CliPlatform {
     async fn device_permission(
         &self,
         _request: api::HostDevicePermissionRequest,
-    ) -> Result<api::HostDevicePermissionResponse, api::GenericError> {
+    ) -> Result<PermissionDecision, api::GenericError> {
         let granted = self
             .decide(
                 "device permission",
                 "A product requested access to a device capability.".to_string(),
             )
             .await;
-        Ok(api::HostDevicePermissionResponse { granted })
+        Ok(if granted {
+            PermissionDecision::AllowAlways
+        } else {
+            PermissionDecision::Deny
+        })
     }
 
     async fn remote_permission(
         &self,
         _request: api::RemotePermissionRequest,
-    ) -> Result<api::RemotePermissionResponse, api::GenericError> {
+    ) -> Result<PermissionDecision, api::GenericError> {
         let granted = self
             .decide(
                 "remote permission",
                 "A paired product requested a remote capability.".to_string(),
             )
             .await;
-        Ok(api::RemotePermissionResponse { granted })
+        Ok(if granted {
+            PermissionDecision::AllowAlways
+        } else {
+            PermissionDecision::Deny
+        })
     }
 }
 

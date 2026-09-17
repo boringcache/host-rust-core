@@ -80,6 +80,9 @@ private extension TrUAPIWsBridgeTests {
             hostName: "truapi-host-tests",
             peopleChainGenesisHash: Data(repeating: 0, count: 32),
             bulletinChainGenesisHash: Data(repeating: 0, count: 32),
+            // Non-zero: all-zero is the "no Asset Hub" sentinel, and this
+            // fixture is not exercising that case.
+            assetHubChainGenesisHash: Data(repeating: 1, count: 32),
             networkSuffix: "paseo"
         )
     }
@@ -160,13 +163,25 @@ final class StubCoreStorage: HostCoreStorageBackend, @unchecked Sendable {
 // protocol extension supplies every optional callback and a new one cannot
 // leave this file behind. Only the six requirements without a default are
 // written out.
-final class StubHostBridge: HostBridge {
+final class StubHostBridge: HostBridge, @unchecked Sendable {
     let storage: HostStorageBackend = StubStorage()
     let coreStorage: HostCoreStorageBackend = StubCoreStorage()
+    private let permissionLock = NSLock()
+    private var remoteDecisions: [PermissionDecision]
+
+    init(remoteDecisions: [PermissionDecision] = []) {
+        self.remoteDecisions = remoteDecisions
+    }
+
+    private func nextRemoteDecision() -> PermissionDecision {
+        permissionLock.lock()
+        defer { permissionLock.unlock() }
+        return remoteDecisions.isEmpty ? .deny : remoteDecisions.removeFirst()
+    }
 
     func navigateTo(url _: String) async throws {}
-    func devicePermission(request _: HostDevicePermissionRequest) async throws -> Bool { false }
-    func remotePermission(request _: RemotePermission) async throws -> Bool { false }
+    func devicePermission(request _: HostDevicePermissionRequest) async throws -> PermissionDecision { .deny }
+    func remotePermission(request _: RemotePermission) async throws -> PermissionDecision { nextRemoteDecision() }
     func featureSupported(request _: HostFeatureSupportedRequest) async throws -> Bool { true }
     func supportedChains() throws -> HostChainSet { HostChainSet(network: "", chains: []) }
     func localStorageRead(key: String) throws -> Data? { try storage.read(key: key) }

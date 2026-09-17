@@ -111,7 +111,7 @@ struct RustRuntimeBridgeTests {
     // MARK: devicePermission
 
     /// `devicePermission(.camera)` routes to
-    /// `permissionGuard.requestPermission(productId:permission:.deviceCapability(.camera))`
+    /// `permissionGuard.requestDevicePermissionDecision(productId:capability:.camera)`
     /// and returns its verdict (async callback — awaited directly).
     @Test func devicePermissionRoutesToGuard() async throws {
         let guard_ = MockPermissionGuard()
@@ -120,7 +120,7 @@ struct RustRuntimeBridgeTests {
 
         let result = try await bridge.devicePermission(request: .camera)
 
-        #expect(result)
+        #expect(result == .allowAlways)
         #expect(guard_.requestedProductId == "cam.product")
         #expect(guard_.requestedPermission == .deviceCapability(.camera))
     }
@@ -132,7 +132,7 @@ struct RustRuntimeBridgeTests {
 
         let result = try await bridge.devicePermission(request: .notifications)
 
-        #expect(!result)
+        #expect(result == .deny)
         #expect(guard_.requestedPermission == .deviceCapability(.notifications))
     }
 
@@ -140,14 +140,20 @@ struct RustRuntimeBridgeTests {
 
     /// `remotePermission`: Remote{domains:["a.io"]} maps to
     /// `ProductPermission.networkAccess(domain: "a.io")` batched request.
-    @Test func remotePermissionDomains() async throws {
+    @Test(arguments: [Products.PermissionDecision.allowOnce, .allowAlways, .deny])
+    func remotePermissionDomains(decision: Products.PermissionDecision) async throws {
         let guard_ = MockPermissionGuard()
-        guard_.verdictToReturn = true
+        guard_.decisionToReturn = decision
         let bridge = makeBridge(permissionGuard: guard_)
 
         let result = try await bridge.remotePermission(request: .remote(domains: ["a.io"]))
 
-        #expect(result)
+        let expected: TrUAPIPermissionDecision = switch decision {
+        case .allowOnce: .allowOnce
+        case .allowAlways: .allowAlways
+        case .deny: .deny
+        }
+        #expect(result == expected)
         #expect(guard_.requestedBatchedPermissions == [.networkAccess(domain: "a.io")])
     }
 
@@ -157,7 +163,7 @@ struct RustRuntimeBridgeTests {
 
         let result = try await bridge.remotePermission(request: .webRtc)
 
-        #expect(result)
+        #expect(result == .allowAlways)
         #expect(guard_.requestedBatchedPermissions == [.webRtcAccess])
     }
 

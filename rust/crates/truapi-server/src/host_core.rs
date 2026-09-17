@@ -18,7 +18,7 @@ use futures::future::{AbortHandle, Abortable};
 use futures::{FutureExt, StreamExt, pin_mut};
 use parity_scale_codec::{Decode, Encode};
 use thiserror::Error;
-use tracing::instrument;
+use tracing::{instrument, warn};
 use truapi::latest::GenericError;
 use truapi::v01;
 use truapi::{CallContext, CancellationReason};
@@ -256,6 +256,7 @@ impl PairingHostRuntime {
             config.host.host_info.clone(),
             config.people_chain_genesis_hash,
             config.bulletin_chain_genesis_hash,
+            config.asset_hub_chain_genesis_hash,
             spawner.clone(),
             chat_platform,
         );
@@ -591,9 +592,19 @@ impl SigningHostRuntime {
             config.host.host_info.clone(),
             config.people_chain_genesis_hash,
             config.bulletin_chain_genesis_hash,
+            config.asset_hub_chain_genesis_hash,
             spawner,
             chat_platform,
         );
+        if services.asset_hub_chain_genesis_hash().is_none() {
+            // Said once at startup because the refusals themselves are
+            // indistinguishable from an ungranted read. Only as visible as the
+            // host's log level, which defaults to `ERROR`.
+            warn!(
+                "no Asset Hub configured: no product manifest will resolve, so \
+                 every cross-product grant not already cached is refused"
+            );
+        }
         let signing_host = SigningHostRole::new(services.clone(), config.network_suffix);
         Self {
             services,
@@ -948,6 +959,8 @@ pub(crate) struct ConnectionAdapters {
     /// product execution, so the object that reports OS state has to be the
     /// same one that presents the prompt.
     pub(crate) permission_status: Option<Arc<dyn PermissionStatusHost>>,
+    /// SDK and internal network connections must share an execution's one-use grants.
+    pub(crate) permission_grants: Arc<crate::host_logic::permissions::TemporaryPermissions>,
     pub(crate) chat: Arc<ActionChannel<truapi::versioned::chat::HostChatActionSubscribeItem>>,
     pub(crate) renderer:
         Arc<ActionChannel<truapi::versioned::renderer::HostRendererActionSubscribeItem>>,
@@ -961,6 +974,7 @@ impl ConnectionAdapters {
             platform: services.platform.clone(),
             chat_platform: services.chat_platform.clone(),
             permission_status: services.permission_status_host(),
+            permission_grants: Arc::default(),
             chat: Arc::new(ActionChannel::chat()),
             renderer: Arc::new(ActionChannel::renderer()),
             pocket_platform: services.pocket_platform(),
@@ -1669,6 +1683,8 @@ mod tests {
             PlatformInfo::default(),
             [0; 32],
             [0xbb; 32],
+            // Distinct from its siblings so a transposition stays visible.
+            [0xcc; 32],
             "testnet".to_string(),
         )
         .expect("signing host config is valid");
@@ -1769,6 +1785,108 @@ mod tests {
                         },
                     ],
                 )
+            );
+        });
+    }
+
+    #[test]
+    fn network_authorization_frames_consume_an_upfront_one_use_grant() {
+        use truapi::CallError;
+        use truapi::versioned::permissions::{
+            AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest,
+            AuthorizeNetworkAccessResponse, RemotePermissionError,
+        };
+        use truapi_platform::PermissionDecision;
+
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform {
+                remote_permission_denied: true,
+                remote_permission_decisions: Mutex::new([PermissionDecision::AllowOnce].into()),
+                ..Default::default()
+            });
+            let sink = Arc::new(RecordingSink::default());
+            let (config, product) = runtime_config("fetch.dot");
+            let runtime = ProductRuntime::from_platform_with_config(
+                platform.clone(),
+                config,
+                product,
+                test_spawner(),
+                sink.clone(),
+            );
+            let permission = RemotePermissionRequest {
+                permission: RemotePermission::Remote {
+                    domains: vec!["api.example.com".to_string()],
+                },
+            };
+            let authorize = |url: &str| {
+                AuthorizeNetworkAccessRequest::V1(v01::AuthorizeNetworkAccessRequest {
+                    url: url.to_string(),
+                })
+                .encode()
+            };
+            let allowed = |allowed| {
+                Ok::<_, CallError<AuthorizeNetworkAccessError>>(AuthorizeNetworkAccessResponse::V1(
+                    v01::AuthorizeNetworkAccessResponse { allowed },
+                ))
+                .encode()
+            };
+            let requests = [
+                (
+                    "permissions_request_remote_permission",
+                    truapi::versioned::permissions::RemotePermissionRequest::V1(permission.clone())
+                        .encode(),
+                    Ok::<_, CallError<RemotePermissionError>>(
+                        truapi::versioned::permissions::RemotePermissionResponse::V1(
+                            RemotePermissionResponse { granted: true },
+                        ),
+                    )
+                    .encode(),
+                ),
+                (
+                    "permissions_authorize_network_access",
+                    authorize("file:///etc/passwd"),
+                    Err::<AuthorizeNetworkAccessResponse, _>(CallError::Domain(
+                        AuthorizeNetworkAccessError::V1(v01::GenericError {
+                            reason: "network access requires a concrete HTTP(S) or WS(S) URL"
+                                .to_string(),
+                        }),
+                    ))
+                    .encode(),
+                ),
+                (
+                    "permissions_authorize_network_access",
+                    authorize("https://api.example.com/first"),
+                    allowed(true),
+                ),
+                (
+                    "permissions_authorize_network_access",
+                    authorize("https://api.example.com/second"),
+                    allowed(false),
+                ),
+            ];
+            let mut expected = Vec::new();
+            for (index, (method, value, response)) in requests.into_iter().enumerate() {
+                let ids = crate::frame::request_ids(method).expect("known permission request");
+                let mut frame = ProtocolMessage {
+                    request_id: format!("permission:{index}"),
+                    payload: Payload {
+                        trait_id: ids.trait_id,
+                        method_id: ids.method_id,
+                        message_type: crate::frame::MESSAGE_TYPE_REQUEST,
+                        value,
+                    },
+                };
+                runtime.receive_frame(frame.encode()).await.unwrap();
+                frame.payload.message_type = crate::frame::MESSAGE_TYPE_RESPONSE;
+                frame.payload.value = response;
+                expected.push(frame.encode());
+            }
+            assert_eq!(
+                (
+                    sink.frames.lock().unwrap().clone(),
+                    platform.remote_permission_requests.lock().unwrap().clone(),
+                ),
+                (expected, vec![permission.clone(), permission]),
             );
         });
     }
@@ -3034,6 +3152,7 @@ mod tests {
             PlatformInfo::default(),
             [0; 32],
             [0xbb; 32],
+            [0xcc; 32],
             "paseo".to_string(),
         )
         .expect("signing host config is valid");
@@ -3081,6 +3200,7 @@ mod tests {
             PlatformInfo::default(),
             [0; 32],
             [0xbb; 32],
+            [0xcc; 32],
             "paseo".to_string(),
         )
         .expect("signing host config is valid");
@@ -3196,6 +3316,203 @@ mod tests {
         assert_eq!(
             error.reason,
             r#"statement_submit not accepted: {"reason":"badProof","status":"rejected"}"#
+        );
+    }
+
+    /// Signing-host config carrying `asset_hub`, otherwise the shape every
+    /// other signing test here uses.
+    fn signing_config_with_asset_hub(asset_hub: [u8; 32]) -> truapi_platform::SigningHostConfig {
+        use truapi_platform::{HostInfo, PlatformInfo, SigningHostConfig};
+
+        SigningHostConfig::new(
+            HostInfo {
+                name: "Polkadot Mobile".to_string(),
+                icon: None,
+                version: None,
+                platform: truapi::latest::HostPlatform::Unknown,
+            },
+            PlatformInfo::default(),
+            // Same-typed and positional, so a transposition only shows up if
+            // no two are equal.
+            [0xaa; 32],
+            [0xbb; 32],
+            asset_hub,
+            "paseo".to_string(),
+        )
+        .expect("signing host config is valid")
+    }
+
+    #[test]
+    fn a_signing_host_runtime_carries_its_asset_hub_for_manifest_resolution() {
+        // Without this the signing role resolves no manifest and refuses every
+        // uncached grant. A seeded cache entry is served before the hash is
+        // consulted, which is why a seeded CLI looked healthy.
+        let runtime = SigningHostRuntime::new(
+            Arc::new(StubPlatform::default()),
+            signing_config_with_asset_hub([0xcc; 32]),
+            test_spawner(),
+        );
+        assert_eq!(
+            runtime.services.asset_hub_chain_genesis_hash(),
+            Some([0xcc; 32]),
+            "the signing role resolves manifests against the Asset Hub it was configured with"
+        );
+    }
+
+    #[test]
+    fn a_pairing_host_runtime_carries_its_asset_hub_too() {
+        // The sibling half of the same invariant, so #660 cannot recur one role
+        // over.
+        use truapi_platform::{HostInfo, PairingHostConfig, PlatformInfo};
+
+        let config = PairingHostConfig::new(
+            HostInfo {
+                name: "Polkadot Web".to_string(),
+                icon: None,
+                version: None,
+                platform: truapi::latest::HostPlatform::Web,
+            },
+            PlatformInfo::default(),
+            [0; 32],
+            [0xbb; 32],
+            [0xdd; 32],
+            "polkadotapp".to_string(),
+        )
+        .expect("pairing host config is valid");
+        let runtime =
+            PairingHostRuntime::new(Arc::new(StubPlatform::default()), config, test_spawner());
+        assert_eq!(
+            runtime.services.asset_hub_chain_genesis_hash(),
+            Some([0xdd; 32]),
+            "the pairing role resolves manifests against its configured Asset Hub"
+        );
+    }
+
+    #[test]
+    fn an_all_zero_asset_hub_is_how_a_signing_host_says_it_has_none() {
+        // One spelling of "no Asset Hub", so grants fail closed without a
+        // second sentinel crossing the boundary.
+        let runtime = SigningHostRuntime::new(
+            Arc::new(StubPlatform::default()),
+            signing_config_with_asset_hub([0; 32]),
+            test_spawner(),
+        );
+        // The hash is a constructor argument, so `None` here can only mean the
+        // configured zeros.
+        assert_eq!(runtime.services.asset_hub_chain_genesis_hash(), None);
+    }
+
+    #[test]
+    fn the_asset_hub_argument_reaches_the_asset_hub_slot() {
+        // Three adjacent `[u8; 32]` by position: a transposition compiles.
+        // People and Bulletin are not readable back, so pin the one slot that
+        // is.
+        let services = crate::runtime::services::RuntimeServices::new(
+            Arc::new(StubPlatform::default()),
+            truapi_platform::HostInfo {
+                name: "Polkadot Mobile".to_string(),
+                icon: None,
+                version: None,
+                platform: truapi::latest::HostPlatform::Unknown,
+            },
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xcc; 32],
+            test_spawner(),
+        );
+        assert_eq!(
+            services.asset_hub_chain_genesis_hash(),
+            Some([0xcc; 32]),
+            "the third hash is Asset Hub, not People ([0xaa; 32]) or Bulletin ([0xbb; 32])"
+        );
+    }
+
+    /// What a manifest lookup did: the RPC the core sent, and the genesis
+    /// hashes it dialled. The second is what distinguishes "asked the chain"
+    /// from "asked the *right* chain".
+    struct ManifestLookup {
+        rpc: Vec<String>,
+        connects: Vec<[u8; 32]>,
+    }
+
+    /// A cross-product storage read for `owner`, uncached, on a signing-role
+    /// product runtime configured with `asset_hub`.
+    fn signing_manifest_lookup_rpc(asset_hub: [u8; 32]) -> ManifestLookup {
+        use truapi::api::LocalStorage;
+        use truapi::versioned::local_storage::HostLocalStorageReadRequest;
+
+        // The stub serves no dotNS either way, so end the follow rather than
+        // wait out `dotns_lookup::OPERATION_TIMEOUT` for the same refusal.
+        let platform = Arc::new(StubPlatform {
+            chain_responses_end: true,
+            ..StubPlatform::default()
+        });
+        let runtime = SigningHostRuntime::new(
+            platform.clone(),
+            signing_config_with_asset_hub(asset_hub),
+            test_spawner(),
+        );
+        let host = ProductRuntimeHost::from_services(
+            runtime.services.clone(),
+            ConnectionAdapters::from_services(&runtime.services),
+            runtime.signing_host.clone(),
+            ProductContext::new("unknown.dot".to_string()).expect("valid product id"),
+        );
+        // Nothing is cached for `wallet.dot`, so resolution reaches dotNS,
+        // the path the missing hash short-circuited.
+        let read = futures::executor::block_on(LocalStorage::read(
+            &host,
+            &truapi::CallContext::default(),
+            HostLocalStorageReadRequest::V2(truapi::v02::HostLocalStorageReadRequest {
+                product: Some("wallet.dot".to_string()),
+                key: "k".to_string(),
+            }),
+        ));
+        assert!(
+            read.is_err(),
+            "the stub serves no dotNS registry, so the read is refused either way"
+        );
+        ManifestLookup {
+            rpc: platform
+                .sent_rpc
+                .lock()
+                .expect("sent rpc mutex poisoned")
+                .clone(),
+            connects: platform
+                .chain_connects
+                .lock()
+                .expect("chain connect mutex poisoned")
+                .clone(),
+        }
+    }
+
+    #[test]
+    fn a_signing_host_takes_a_manifest_miss_to_the_chain() {
+        // The refusal is identical either way, so whether the core asked the
+        // chain is the only observable difference.
+        let configured = signing_manifest_lookup_rpc([0xcc; 32]);
+        assert!(
+            !configured.rpc.is_empty(),
+            "a configured signing role resolves an uncached manifest over dotNS"
+        );
+
+        // A lookup wired to People or Bulletin also produces RPC and also
+        // refuses, so pin the chain actually dialled.
+        assert_eq!(
+            configured.connects,
+            vec![[0xcc; 32]],
+            "the manifest lookup dials Asset Hub, not People ([0xaa; 32]) or \
+             Bulletin ([0xbb; 32])"
+        );
+
+        let unconfigured = signing_manifest_lookup_rpc([0; 32]);
+        assert!(
+            unconfigured.rpc.is_empty(),
+            "a signing role with no Asset Hub refuses without touching the chain"
+        );
+        assert!(
+            unconfigured.connects.is_empty(),
+            "and does not dial any chain at all"
         );
     }
 }

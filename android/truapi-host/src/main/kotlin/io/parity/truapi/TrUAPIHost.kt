@@ -56,6 +56,7 @@ import uniffi.truapi_platform.AuthState
 import uniffi.truapi_platform.HostChainSet
 import uniffi.truapi_platform.PermissionAuthorizationRequest
 import uniffi.truapi_platform.PermissionAuthorizationStatus
+import uniffi.truapi_platform.PermissionDecision
 import uniffi.truapi_platform.UserConfirmationReview
 import uniffi.truapi_server.HostCallbacks
 import uniffi.truapi_server.NativeChatCallbacks
@@ -103,7 +104,12 @@ enum class ProductExecutionKind {
 /**
  * Immutable process-wide configuration shared by every product execution
  * opened from one [TrUAPIHostRuntime]. [peopleChainGenesisHash] and
- * [bulletinChainGenesisHash] must each be exactly 32 bytes. [networkSuffix] is
+ * [bulletinChainGenesisHash] must each be exactly 32 bytes, and so must
+ * [assetHubChainGenesisHash], where the dotNS contracts are deployed: product
+ * manifests are read from there, so it is what makes a `trustedProducts` grant
+ * resolvable. 32 zero bytes says this host has no Asset Hub, and no manifest
+ * then resolves, so every cross-product grant is refused except one already
+ * cached, which is served without consulting it. [networkSuffix] is
  * the network's dotNS TLD without the leading dot (`dot`, `paseo`, `testnet`);
  * the core derives the wallet's reserved identities under it (`uid.<suffix>`,
  * `peopl.<suffix>`), the same person the app's own onboarding derives there.
@@ -116,6 +122,7 @@ data class HostRuntimeConfig(
     val platformVersion: String? = null,
     val peopleChainGenesisHash: ByteArray,
     val bulletinChainGenesisHash: ByteArray,
+    val assetHubChainGenesisHash: ByteArray,
     val networkSuffix: String,
     val localSessionSecret: ByteArray? = null,
     val localSessionLiteUsername: String? = null,
@@ -130,6 +137,7 @@ data class HostRuntimeConfig(
             platformVersion = platformVersion,
             peopleChainGenesisHash = peopleChainGenesisHash,
             bulletinChainGenesisHash = bulletinChainGenesisHash,
+            assetHubChainGenesisHash = assetHubChainGenesisHash,
             networkSuffix = networkSuffix,
             localSessionSecret = localSessionSecret,
             localSessionLiteUsername = localSessionLiteUsername,
@@ -145,6 +153,7 @@ data class HostRuntimeConfig(
             platformVersion == other.platformVersion &&
             peopleChainGenesisHash.contentEquals(other.peopleChainGenesisHash) &&
             bulletinChainGenesisHash.contentEquals(other.bulletinChainGenesisHash) &&
+            assetHubChainGenesisHash.contentEquals(other.assetHubChainGenesisHash) &&
             networkSuffix == other.networkSuffix &&
             localSessionSecret.contentEquals(other.localSessionSecret) &&
             localSessionLiteUsername == other.localSessionLiteUsername
@@ -158,6 +167,7 @@ data class HostRuntimeConfig(
         result = 31 * result + (platformVersion?.hashCode() ?: 0)
         result = 31 * result + peopleChainGenesisHash.contentHashCode()
         result = 31 * result + bulletinChainGenesisHash.contentHashCode()
+        result = 31 * result + assetHubChainGenesisHash.contentHashCode()
         result = 31 * result + networkSuffix.hashCode()
         result = 31 * result + (localSessionSecret?.contentHashCode() ?: 0)
         result = 31 * result + (localSessionLiteUsername?.hashCode() ?: 0)
@@ -221,7 +231,7 @@ interface HostCoreStorage {
  *     application running inside the WebView.
  *
  * Embedders render the typed request values in their own UI, then report the
- * user's decision as a `Boolean`.
+ * user's decision as a `PermissionDecision`.
  *
  * Threading: the Rust core invokes every callback on a background thread it
  * owns, never the UI (main) thread. These six each run on their own thread from
@@ -262,13 +272,13 @@ interface HostBridge {
     fun cancelNotification(id: UInt) {}
 
     /**
-     * Prompt for a device-level permission. Returns whether it was granted.
+     * Prompt for a device-level permission, preserving whether approval applies once or always.
      * Invoked on a blocking-pool thread; present the prompt on the main thread
      * and block the calling thread until the user decides. Blocking here does
      * not stall other TrUAPI traffic.
      */
     @Throws(HostRejection::class)
-    suspend fun devicePermission(request: HostDevicePermissionRequest): Boolean
+    suspend fun devicePermission(request: HostDevicePermissionRequest): PermissionDecision
 
     /**
      * Report the OS status of a device capability without prompting. Answer from
@@ -297,7 +307,7 @@ interface HostBridge {
      * TrUAPI traffic.
      */
     @Throws(HostRejection::class)
-    suspend fun remotePermission(request: RemotePermission): Boolean
+    suspend fun remotePermission(request: RemotePermission): PermissionDecision
 
     /**
      * Observe an auth state change, in transition order: render
@@ -492,14 +502,14 @@ private class HostCallbackAdapter(private val bridge: HostBridge) : HostCallback
     override fun cancelNotification(id: UInt) =
         withHostRejection { bridge.cancelNotification(id) }
 
-    override suspend fun devicePermission(request: HostDevicePermissionRequest): Boolean =
+    override suspend fun devicePermission(request: HostDevicePermissionRequest): PermissionDecision =
         withHostRejection { bridge.devicePermission(request) }
 
     override suspend fun devicePermissionStatus(
         request: HostDevicePermissionRequest,
     ): NativeDevicePermissionStatus = withHostRejection { bridge.devicePermissionStatus(request) }
 
-    override suspend fun remotePermission(request: RemotePermission): Boolean =
+    override suspend fun remotePermission(request: RemotePermission): PermissionDecision =
         withHostRejection { bridge.remotePermission(request) }
 
     override fun authStateChanged(state: AuthState) {

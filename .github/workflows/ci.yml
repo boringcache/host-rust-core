@@ -364,6 +364,8 @@ jobs:
       # so SwiftPM refuses to resolve the package until this exists.
       - name: Build the lockdown container bundle
         run: |
+          npm ci --ignore-scripts
+          npm run build --prefix js/packages/truapi
           npm --prefix js/container install --no-fund --no-audit
           npm --prefix js/container run typecheck
           npm --prefix js/container run build

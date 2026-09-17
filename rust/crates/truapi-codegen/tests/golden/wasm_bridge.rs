@@ -358,14 +358,14 @@ impl truapi_platform::Permissions for WasmPlatform {
     async fn device_permission(
         &self,
         request: v01::HostDevicePermissionRequest,
-    ) -> Result<v01::HostDevicePermissionResponse, v01::GenericError> {
+    ) -> Result<truapi_platform::PermissionDecision, v01::GenericError> {
         let bytes = invoke_bytes_return(
             &self.bridge.device_permission,
             vec![Uint8Array::from(request.encode().as_slice()).into()],
         )
         .await
         .map_err(generic)?;
-        decode_bytes::<v01::HostDevicePermissionResponse>(
+        decode_bytes::<truapi_platform::PermissionDecision>(
             bytes,
             "devicePermission response did not decode",
         )
@@ -375,14 +375,14 @@ impl truapi_platform::Permissions for WasmPlatform {
     async fn remote_permission(
         &self,
         request: v01::RemotePermissionRequest,
-    ) -> Result<v01::RemotePermissionResponse, v01::GenericError> {
+    ) -> Result<truapi_platform::PermissionDecision, v01::GenericError> {
         let bytes = invoke_bytes_return(
             &self.bridge.remote_permission,
             vec![Uint8Array::from(request.encode().as_slice()).into()],
         )
         .await
         .map_err(generic)?;
-        decode_bytes::<v01::RemotePermissionResponse>(
+        decode_bytes::<truapi_platform::PermissionDecision>(
             bytes,
             "remotePermission response did not decode",
         )

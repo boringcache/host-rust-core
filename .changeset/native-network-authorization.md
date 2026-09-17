@@ -1,5 +1,6 @@
 ---
-"@parity/truapi-host": patch
+"@parity/truapi": minor
+"@parity/truapi-host": minor
 ---
 
-Connect native product fetch authorization to shared Remote permissions and prevent pending prompts from overwriting newer permission decisions.
+Authorize product fetches directly through the Rust protocol. Preserve one-use grants with explicit host permission decisions and a shared blessed-domain list. Simplify iOS integration by removing the separate WebKit content-rule and authorization relay layer.

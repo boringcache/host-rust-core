@@ -23,8 +23,8 @@ use truapi::{Bytes32, latest::HostPlatform, v01};
 use truapi_platform::{
     AuthPresenter, AuthState, ChainProvider, CoreAdmin, CoreStorage, CoreStorageKey, Features,
     HostInfo, JsonRpcConnection, LocaleHost, Navigation, Notifications,
-    PermissionAuthorizationRequest, PermissionAuthorizationStatus, Permissions, PlatformInfo,
-    PreimageHost, ProductContext, ProductExecutionKind, ProductStorage,
+    PermissionAuthorizationRequest, PermissionAuthorizationStatus, PermissionDecision, Permissions,
+    PlatformInfo, PreimageHost, ProductContext, ProductExecutionKind, ProductStorage,
     RuntimeConfigValidationError, SigningHostConfig, ThemeHost, UserConfirmation,
     UserConfirmationReview, async_trait, normalize_product_identifier,
 };
@@ -32,6 +32,7 @@ use truapi_platform::{
 use crate::SigningHostRuntime;
 use crate::host_logic::dotns;
 pub use crate::host_logic::dotns::{NavigateDecision, PocketDeeplinkAction};
+use crate::host_logic::permissions::TemporaryPermissions;
 use crate::host_logic::sso::messages::{
     RemoteMessage, RemoteMessageData, SsoRequestOutcome as CoreSsoRequestOutcome,
     decode_remote_message, v1,
@@ -200,6 +201,18 @@ pub struct NativeHostRuntimeConfig {
     pub local_session_secret: Option<Vec<u8>>,
     /// Optional lite username attached to the local signing-host session.
     pub local_session_lite_username: Option<String>,
+    /// Asset Hub genesis hash, where the dotNS contracts are deployed. Must be
+    /// exactly 32 bytes.
+    ///
+    /// Product manifests are read from dotNS, so this is what makes a
+    /// `trustedProducts` grant resolvable. 32 zero bytes says this host has no
+    /// Asset Hub; grants already in the manifest cache stay honoured until they
+    /// expire.
+    ///
+    /// Appended rather than placed with its sibling hashes: record fields are
+    /// positional over the FFI and the checksum does not cover their order, so
+    /// an insert shifts every field below it.
+    pub asset_hub_chain_genesis_hash: Vec<u8>,
 }
 
 /// Trusted identity attached by a native host to one executable connection.
@@ -275,6 +288,28 @@ pub enum NativeRuntimeConfigError {
         /// Activation failure reason.
         reason: String,
     },
+    /// Asset Hub genesis hash was not exactly 32 bytes.
+    ///
+    /// Appended, not grouped with the sibling genesis-hash variants: declaration
+    /// order is the FFI discriminant and the checksum does not cover it, so an
+    /// insert renumbers every variant below it.
+    #[error("asset_hub_chain_genesis_hash must be exactly 32 bytes, got {actual}")]
+    InvalidAssetHubChainGenesisHash {
+        /// Supplied byte length.
+        actual: u64,
+    },
+    /// Product id was longer than `PRODUCT_ID_MAX_BYTES` after normalization.
+    ///
+    /// Appended for the same reason as the variant above. Carries lengths and
+    /// not the id: an id that trips this is unbounded in size, and this error
+    /// reaches the wire and the logs.
+    #[error("product_id must be at most {limit} bytes, got {actual}")]
+    ProductIdTooLong {
+        /// Accepted maximum, in bytes.
+        limit: u64,
+        /// Normalized length, in bytes.
+        actual: u64,
+    },
 }
 
 impl TryFrom<NativeHostRuntimeConfig> for NativeResolvedHostRuntimeConfig {
@@ -293,6 +328,12 @@ impl TryFrom<NativeHostRuntimeConfig> for NativeResolvedHostRuntimeConfig {
                     actual: config.bulletin_chain_genesis_hash.len() as u64,
                 }
             })?;
+        let asset_hub_chain_genesis_hash =
+            <[u8; 32]>::try_from(config.asset_hub_chain_genesis_hash.as_slice()).map_err(|_| {
+                NativeRuntimeConfigError::InvalidAssetHubChainGenesisHash {
+                    actual: config.asset_hub_chain_genesis_hash.len() as u64,
+                }
+            })?;
         let signing = SigningHostConfig::new(
             HostInfo {
                 name: config.host_name,
@@ -306,6 +347,7 @@ impl TryFrom<NativeHostRuntimeConfig> for NativeResolvedHostRuntimeConfig {
             },
             people_chain_genesis_hash,
             bulletin_chain_genesis_hash,
+            asset_hub_chain_genesis_hash,
             config.network_suffix,
         )?;
         Ok(Self {
@@ -344,6 +386,12 @@ impl From<RuntimeConfigValidationError> for NativeRuntimeConfigError {
             }
             RuntimeConfigValidationError::InvalidProductId { product_id } => {
                 Self::InvalidProductId { product_id }
+            }
+            RuntimeConfigValidationError::ProductIdTooLong { limit, actual } => {
+                Self::ProductIdTooLong {
+                    limit: limit as u64,
+                    actual: actual as u64,
+                }
             }
             RuntimeConfigValidationError::InvalidNetworkSuffix { network_suffix } => {
                 Self::InvalidNetworkSuffix { network_suffix }
@@ -432,11 +480,11 @@ pub trait HostCallbacks: Send + Sync {
     fn cancel_notification(&self, id: u32) -> Result<(), HostRejection>;
 
     /// Prompt the user for a device-level permission (camera, mic, ...);
-    /// the host returns whether the permission was granted.
+    /// the host preserves whether approval applies once or always.
     async fn device_permission(
         &self,
         request: v01::HostDevicePermissionRequest,
-    ) -> Result<bool, HostRejection>;
+    ) -> Result<PermissionDecision, HostRejection>;
 
     /// Report the OS status of a device capability without prompting.
     ///
@@ -457,7 +505,7 @@ pub trait HostCallbacks: Send + Sync {
     async fn remote_permission(
         &self,
         request: v01::RemotePermission,
-    ) -> Result<bool, HostRejection>;
+    ) -> Result<PermissionDecision, HostRejection>;
 
     /// Observe an auth state change, in transition order: render `Pairing` as
     /// the pairing QR UI, `Connected`/`Disconnected` as the account badge,
@@ -705,6 +753,7 @@ impl NativeTrUApiHostRuntime {
             chat,
             pocket,
             permission_status,
+            permission_grants: Arc::new(TemporaryPermissions::default()),
             events,
             shared_events: self.events.clone(),
             #[cfg(feature = "ws-bridge")]
@@ -1087,6 +1136,8 @@ pub struct NativeProductExecution {
     /// The same `CallbackPlatform` as `platform`, kept separately because
     /// `Arc<dyn Platform>` cannot be downcast to the optional capability.
     permission_status: Arc<dyn truapi_platform::PermissionStatusHost>,
+    /// One-use grants follow this execution across its product and admin connections.
+    permission_grants: Arc<TemporaryPermissions>,
     events: Arc<NativeEventBus>,
     /// Host-runtime events back the process-wide services shared by every
     /// product execution (chain, Statement Store, and Bulletin). Native
@@ -1118,6 +1169,7 @@ impl NativeProductExecution {
             platform: self.platform.clone(),
             chat_platform: self.chat.clone(),
             permission_status: Some(self.permission_status.clone()),
+            permission_grants: self.permission_grants.clone(),
             chat: self.chat_connection.clone(),
             renderer: self.renderer_connection.clone(),
             pocket_platform: self.pocket.clone(),
@@ -1346,6 +1398,7 @@ impl NativeProductExecution {
         }
         #[cfg(feature = "ws-bridge")]
         self.stop_bridge();
+        self.permission_grants.clear();
         self.chat_connection.close();
         self.renderer_connection.close();
     }
@@ -1689,35 +1742,31 @@ impl Permissions for CallbackPlatform {
     async fn device_permission(
         &self,
         request: v01::HostDevicePermissionRequest,
-    ) -> Result<v01::HostDevicePermissionResponse, v01::GenericError> {
+    ) -> Result<PermissionDecision, v01::GenericError> {
         self.callbacks.on_core_log(
             "truapi.native.callback.device_permission".to_string(),
             format!("{request}"),
         );
 
-        let granted = self
-            .callbacks
+        self.callbacks
             .device_permission(request)
             .await
-            .map_err(v01::GenericError::from)?;
-        Ok(v01::HostDevicePermissionResponse { granted })
+            .map_err(v01::GenericError::from)
     }
 
     async fn remote_permission(
         &self,
         request: v01::RemotePermissionRequest,
-    ) -> Result<v01::RemotePermissionResponse, v01::GenericError> {
+    ) -> Result<PermissionDecision, v01::GenericError> {
         self.callbacks.on_core_log(
             "truapi.native.callback.remote_permission".to_string(),
             format!("{request}"),
         );
 
-        let granted = self
-            .callbacks
+        self.callbacks
             .remote_permission(request.permission)
             .await
-            .map_err(v01::GenericError::from)?;
-        Ok(v01::RemotePermissionResponse { granted })
+            .map_err(v01::GenericError::from)
     }
 }
 
@@ -2394,7 +2443,7 @@ mod tests {
         /// Capability this host reports as refused by the OS, if any.
         os_refused: Option<v01::HostDevicePermissionRequest>,
         /// Configurable prompt outcome for grant, denial, and callback failure tests.
-        remote_permission_result: Result<bool, HostRejection>,
+        remote_permission_result: Result<PermissionDecision, HostRejection>,
         /// Allows tests to close an execution before its permission prompt returns.
         remote_permission_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     }
@@ -2434,7 +2483,7 @@ mod tests {
                 chain_closes: Mutex::new(Vec::new()),
                 worker_demand: Mutex::new(Vec::new()),
                 os_refused: None,
-                remote_permission_result: Ok(false),
+                remote_permission_result: Ok(PermissionDecision::Deny),
                 remote_permission_hook: Mutex::new(None),
             }
         }
@@ -2464,8 +2513,8 @@ mod tests {
         async fn device_permission(
             &self,
             _request: v01::HostDevicePermissionRequest,
-        ) -> Result<bool, HostRejection> {
-            Ok(false)
+        ) -> Result<PermissionDecision, HostRejection> {
+            Ok(PermissionDecision::Deny)
         }
         async fn device_permission_status(
             &self,
@@ -2480,7 +2529,7 @@ mod tests {
         async fn remote_permission(
             &self,
             _request: v01::RemotePermission,
-        ) -> Result<bool, HostRejection> {
+        ) -> Result<PermissionDecision, HostRejection> {
             if let Some(hook) = self.remote_permission_hook.lock().unwrap().as_ref() {
                 hook();
             }
@@ -2705,6 +2754,7 @@ mod tests {
             platform_version: None,
             people_chain_genesis_hash: vec![0xa2; 32],
             bulletin_chain_genesis_hash: vec![0xbb; 32],
+            asset_hub_chain_genesis_hash: vec![0xcc; 32],
             network_suffix: "paseo".to_string(),
             local_session_secret: Some(vec![7; 32]),
             local_session_lite_username: Some("alice".to_string()),
@@ -3677,6 +3727,50 @@ mod tests {
     }
 
     #[test]
+    fn each_configured_genesis_hash_reaches_its_own_field() {
+        // Three adjacent `Vec<u8>` feeding a positional constructor:
+        // transposing any two compiles and, without this, passes.
+        let resolved = NativeResolvedHostRuntimeConfig::try_from(NativeHostRuntimeConfig {
+            people_chain_genesis_hash: vec![0xa1; 32],
+            bulletin_chain_genesis_hash: vec![0xb2; 32],
+            asset_hub_chain_genesis_hash: vec![0xc3; 32],
+            ..native_host_runtime_config()
+        })
+        .expect("config is valid");
+
+        assert_eq!(
+            (
+                resolved.signing.people_chain_genesis_hash,
+                resolved.signing.bulletin_chain_genesis_hash,
+                resolved.signing.asset_hub_chain_genesis_hash,
+            ),
+            ([0xa1; 32], [0xb2; 32], [0xc3; 32]),
+        );
+    }
+
+    #[test]
+    fn a_wrong_size_asset_hub_genesis_hash_is_rejected_as_its_own_field() {
+        // An empty vec must be an error, never a silent all-zero "no Asset
+        // Hub".
+        for len in [0usize, 31, 33] {
+            let err = NativeResolvedHostRuntimeConfig::try_from(NativeHostRuntimeConfig {
+                asset_hub_chain_genesis_hash: vec![0; len],
+                ..native_host_runtime_config()
+            })
+            .unwrap_err();
+
+            assert!(
+                matches!(
+                    err,
+                    NativeRuntimeConfigError::InvalidAssetHubChainGenesisHash { actual }
+                        if actual == len as u64
+                ),
+                "{len}-byte Asset Hub hash reported as {err:?}"
+            );
+        }
+    }
+
+    #[test]
     fn runtime_config_rejects_a_network_suffix_that_is_not_a_bare_tld() {
         // The suffix ends every reserved derivation (`peopl.<suffix>`), so a
         // shell passing the dotted form would silently derive a stranger.
@@ -3760,8 +3854,8 @@ mod tests {
             async fn device_permission(
                 &self,
                 _request: v01::HostDevicePermissionRequest,
-            ) -> Result<bool, HostRejection> {
-                Ok(false)
+            ) -> Result<PermissionDecision, HostRejection> {
+                Ok(PermissionDecision::Deny)
             }
             async fn device_permission_status(
                 &self,
@@ -3772,8 +3866,8 @@ mod tests {
             async fn remote_permission(
                 &self,
                 _request: v01::RemotePermission,
-            ) -> Result<bool, HostRejection> {
-                Ok(false)
+            ) -> Result<PermissionDecision, HostRejection> {
+                Ok(PermissionDecision::Deny)
             }
             fn auth_state_changed(&self, _state: AuthState) {}
             fn core_storage_read(&self, _key: Vec<u8>) -> Result<Option<Vec<u8>>, HostRejection> {
@@ -3906,7 +4000,7 @@ mod tests {
             async fn device_permission(
                 &self,
                 _request: v01::HostDevicePermissionRequest,
-            ) -> Result<bool, HostRejection> {
+            ) -> Result<PermissionDecision, HostRejection> {
                 self.permission_entered.store(true, Ordering::SeqCst);
                 self.release
                     .lock()
@@ -3914,7 +4008,7 @@ mod tests {
                     .recv()
                     .await
                     .expect("release signal");
-                Ok(true)
+                Ok(PermissionDecision::AllowAlways)
             }
             async fn device_permission_status(
                 &self,
@@ -3925,8 +4019,8 @@ mod tests {
             async fn remote_permission(
                 &self,
                 _request: v01::RemotePermission,
-            ) -> Result<bool, HostRejection> {
-                Ok(false)
+            ) -> Result<PermissionDecision, HostRejection> {
+                Ok(PermissionDecision::Deny)
             }
             fn auth_state_changed(&self, _state: AuthState) {}
             fn core_storage_read(&self, _key: Vec<u8>) -> Result<Option<Vec<u8>>, HostRejection> {
@@ -4286,8 +4380,14 @@ mod tests {
     #[test]
     fn native_network_access_uses_the_execution_permission_callback() {
         for (answer, expected) in [
-            (Ok(true), PermissionAuthorizationStatus::Authorized),
-            (Ok(false), PermissionAuthorizationStatus::Denied),
+            (
+                Ok(PermissionDecision::AllowAlways),
+                PermissionAuthorizationStatus::Authorized,
+            ),
+            (
+                Ok(PermissionDecision::Deny),
+                PermissionAuthorizationStatus::Denied,
+            ),
             (
                 Err(HostRejection::Rejected {
                     reason: "permission UI unavailable".to_string(),
@@ -4320,10 +4420,97 @@ mod tests {
     }
 
     #[test]
+    fn native_execution_shares_one_use_permissions_across_connections_only() {
+        use truapi::api::Permissions;
+
+        let callbacks = Arc::new(EventCallbacks {
+            remote_permission_result: Ok(PermissionDecision::AllowOnce),
+            ..EventCallbacks::new()
+        });
+        let prompts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let prompt_count = prompts.clone();
+        *callbacks.remote_permission_hook.lock().unwrap() = Some(Arc::new(move || {
+            prompt_count.fetch_add(1, Ordering::SeqCst);
+        }));
+        let host = NativeTrUApiHostRuntime::with_runtime_config(
+            callbacks.clone(),
+            native_host_runtime_config(),
+        )
+        .unwrap();
+        let open = || {
+            host.open_product_execution(
+                callbacks.clone(),
+                None,
+                None,
+                native_execution_config("fetch.dot", ProductExecutionKind::App),
+            )
+            .unwrap()
+        };
+        let execution = open();
+        let other = open();
+        futures::executor::block_on(async {
+            let admin = execution.admin();
+            let request = v01::RemotePermissionRequest {
+                permission: v01::RemotePermission::Remote {
+                    domains: vec!["api.example.com".to_string()],
+                },
+            };
+            let context = truapi::CallContext::default();
+            let sdk_request = || {
+                admin.product_runtime().request_remote_permission(
+                    &context,
+                    truapi::versioned::permissions::RemotePermissionRequest::V1(request.clone()),
+                )
+            };
+            let granted = sdk_request().await.unwrap();
+            let permission = PermissionAuthorizationRequest::Remote(request.clone());
+            let other_status = other
+                .permission_authorization_status(permission.clone())
+                .await
+                .unwrap();
+            let consumed = execution
+                .authorize_network_access("https://api.example.com/data".to_string())
+                .await
+                .unwrap();
+            let after_use = execution
+                .permission_authorization_status(permission.clone())
+                .await
+                .unwrap();
+            let prompts_after_use = prompts.load(Ordering::SeqCst);
+            sdk_request().await.unwrap();
+            execution.shutdown();
+            let after_shutdown = admin
+                .permission_authorization_status(permission)
+                .await
+                .unwrap();
+            assert_eq!(
+                (
+                    granted,
+                    other_status,
+                    consumed,
+                    after_use,
+                    prompts_after_use,
+                    after_shutdown
+                ),
+                (
+                    truapi::versioned::permissions::RemotePermissionResponse::V1(
+                        v01::RemotePermissionResponse { granted: true },
+                    ),
+                    PermissionAuthorizationStatus::NotDetermined,
+                    PermissionAuthorizationStatus::Authorized,
+                    PermissionAuthorizationStatus::NotDetermined,
+                    1,
+                    PermissionAuthorizationStatus::NotDetermined,
+                )
+            );
+        });
+    }
+
+    #[test]
     fn a_closed_native_execution_cannot_authorize_network_access() {
         for close_during_prompt in [false, true] {
             let callbacks = Arc::new(EventCallbacks {
-                remote_permission_result: Ok(true),
+                remote_permission_result: Ok(PermissionDecision::AllowAlways),
                 ..EventCallbacks::new()
             });
             let host = NativeTrUApiHostRuntime::with_runtime_config(

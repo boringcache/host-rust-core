@@ -18,6 +18,7 @@ use truapi::versioned::notifications::{
     HostPushNotificationResponse,
 };
 use truapi::versioned::permissions::{
+    AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest, AuthorizeNetworkAccessResponse,
     HostDevicePermissionError, HostDevicePermissionRequest, HostDevicePermissionResponse,
     RemotePermissionError, RemotePermissionRequest, RemotePermissionResponse,
 };
@@ -129,6 +130,23 @@ impl System for ProductRuntimeHost {
 
 #[truapi::async_trait]
 impl Permissions for ProductRuntimeHost {
+    #[instrument(skip_all, fields(runtime.method = "permissions.authorize_network_access"))]
+    async fn authorize_network_access(
+        &self,
+        _cx: &CallContext,
+        request: AuthorizeNetworkAccessRequest,
+    ) -> Result<AuthorizeNetworkAccessResponse, CallError<AuthorizeNetworkAccessError>> {
+        let AuthorizeNetworkAccessRequest::V1(request) = request;
+        ProductRuntimeHost::authorize_network_access(self, request.url)
+            .await
+            .map(|status| {
+                AuthorizeNetworkAccessResponse::V1(v01::AuthorizeNetworkAccessResponse {
+                    allowed: status == PermissionAuthorizationStatus::Authorized,
+                })
+            })
+            .map_err(|error| CallError::Domain(AuthorizeNetworkAccessError::V1(error)))
+    }
+
     #[instrument(skip_all, fields(runtime.method = "permissions.request_device_permission"))]
     async fn request_device_permission(
         &self,
