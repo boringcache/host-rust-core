@@ -9,7 +9,7 @@ The package lives in the truapi repo next to the Rust core it wraps. `Package.sw
 The `TrUAPIHost` SPM package an iOS host app imports directly. It carries:
 
 - [`Sources/TrUAPIHost/TrUAPIHost.swift`](Sources/TrUAPIHost/TrUAPIHost.swift) — the hand-written shell: `TrUAPIHostRuntime`, `TrUAPIProductExecution`, their configuration and bridge protocols, and `LocalhostBridgeBootstrap`.
-- [`Sources/TrUAPIHost/ProductScripts.swift`](Sources/TrUAPIHost/ProductScripts.swift) registers the shared container in every frame. Fetch and XHR ask Rust directly through the existing WebSocket bridge.
+- [`Sources/TrUAPIHost/ProductScripts.swift`](Sources/TrUAPIHost/ProductScripts.swift) registers the shared container in every frame. Fetch, XHR and remote WebSockets ask Rust directly through the existing private bridge.
 - the Rust core as a binary target — a GitHub release asset by default (`publishedBinaryURL` in the root `Package.swift`), or the locally built `Binaries/truapi_server.xcframework` when `useLocalBinary` is flipped to true.
 - `Sources/TrUAPIHost/truapi_server.swift` and `Sources/truapi_serverFFI/include/` — the generated UniFFI bindings.
 - [`js/container/`](../../js/container) — the TS lockdown container; built into `Sources/TrUAPIHost/Resources/truapi-container.js` and exposed via `ContainerScriptBundle.load()`.
@@ -263,7 +263,7 @@ Both return `PermissionDecision`: `.allowOnce`, `.allowAlways`, or `.deny`. Pres
 
 Identity and account access reviews use `confirmPermission(review:)`, which also returns `PermissionDecision`. Override it to preserve Allow once. Its compatibility default maps `confirmUserAction`'s Boolean approval to `.allowAlways`; signing and other single-action reviews continue to use that Boolean callback.
 
-Fetch, notification scheduling, external navigation and existing remote-operation gates consume temporary grants. The shared container authorizes each `getUserMedia` call through Rust, consuming camera/microphone consent for that capture. The returned stream remains usable until it is stopped; another capture requires a new authorization. Native media delegates resolve OS permission without consuming product consent again, even when WebKit caches its approval. SPA and Chat install the container at document start in every frame.
+Fetch, XHR, WebSocket connections, notification scheduling, external navigation and existing remote-operation gates consume temporary grants. The shared container authorizes each `getUserMedia` call through Rust, consuming camera/microphone consent for that capture. The returned stream remains usable until it is stopped; another capture requires a new authorization. Native media delegates resolve OS permission without consuming product consent again, even when WebKit caches its approval. SPA and Chat install the container at document start in every frame.
 
 ## SSO session handling
 
@@ -512,9 +512,13 @@ runtime.disconnect()
 
 The product page reads `window.__truapi_localhost.url` (set by the bootstrap script) and passes it to `@parity/truapi`'s `createWebSocketProvider(url)`.
 
-The shared container captures a private WebSocket connection to the product execution and asks Rust to authorize each fetch or XHR before sending it. Swift supplies the endpoint and handles native permission prompts; it does not relay individual network permission messages. An upfront permission request and a network operation are separate, so an Allow once decision is consumed by the next permitted operation rather than persisted.
+The shared container captures a private WebSocket connection to the product execution and asks Rust to authorize each fetch or XHR before sending it, and each remote WebSocket before connecting. Swift supplies the endpoint and handles native permission prompts; it does not relay individual network permission messages. An upfront permission request and a network operation are separate, so an Allow once decision is consumed by the next permitted operation rather than persisted.
 
 XHR keeps native request headers, response types and browser CORS behavior. `open()` configures the request synchronously; `send()` waits for permission before sending. Aborting or reopening during that wait cancels the pending send. Synchronous XHR is unsupported because it cannot wait for an asynchronous permission decision.
+
+A remote `WebSocket` starts in `CONNECTING` while Rust checks the same domain permission. Allow once permits that connection and all its messages; a new connection checks again. Closing while permission is pending prevents the connection from opening. Text, binary messages and subprotocols use the native socket after approval. The exact private host bridge endpoint remains available without a Remote permission.
+
+Forwarded WebSocket events and XHR failures before sending are synthetic, with `isTrusted` set to `false`.
 
 WebRTC uses the same private transport. Each peer connection asks Rust for permission at its first network method, such as `createOffer`, and shares that decision across later methods on the connection. Allow once permits one connection. New connections check the current permission without requiring a page reload.
 

@@ -66,8 +66,8 @@ pub trait Permissions: Send + Sync {
     ) -> Result<RemotePermissionResponse, CallError<RemotePermissionError>>;
 
     /// Authorize one network operation for the current product, consuming an
-    /// available one-use grant. Used by the host's fetch and XHR wrappers
-    /// immediately before sending the request.
+    /// available one-use grant. Used by the host's fetch, XHR and WebSocket
+    /// wrappers before sending a request or opening a connection.
     ///
     /// ```ts
     /// const result = await truapi.permissions.authorizeNetworkAccess({

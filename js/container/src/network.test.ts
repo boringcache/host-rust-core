@@ -143,20 +143,40 @@ function browser(
     );
   }
   class BrowserSocket extends BrowserEvents {
-    binaryType = '';
-    constructor(readonly url: string) {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    private state = 0;
+    private binary = 'blob';
+    get url() { return this.destination; }
+    get readyState() { return this.state; }
+    get bufferedAmount() { return 0; }
+    get extensions() { return ''; }
+    get protocol() { return ''; }
+    get binaryType() { return this.binary; }
+    set binaryType(value: string) { this.binary = value; }
+    constructor(private destination: string) {
       super();
       sockets.push(this);
-      queueMicrotask(() => this.dispatchEvent(new Event('open')));
+      queueMicrotask(() => {
+        this.state = 1;
+        this.dispatchEvent(new Event('open'));
+      });
     }
-    send(frame: Uint8Array) {
-      handle(frame, (data) =>
-        this.dispatchEvent(
-          new BrowserMessage('message', { data: data.buffer }),
-        ),
-      );
+    send(frame: Uint8Array | string) {
+      if (this.destination === 'ws://127.0.0.1:1234/?t=secret') {
+        handle(frame as Uint8Array, (data) =>
+          this.dispatchEvent(new BrowserMessage('message', { data: data.buffer })),
+        );
+      } else {
+        this.dispatchEvent(new BrowserMessage('message', { data: frame }));
+      }
     }
-    close() {}
+    close() {
+      this.state = 3;
+      queueMicrotask(() => this.dispatchEvent(new CloseEvent('close', { code: 1000, wasClean: true })));
+    }
   }
   const context = createContext({
     URL,
@@ -164,6 +184,9 @@ function browser(
     Response,
     AbortSignal,
     DOMException,
+    Event,
+    CloseEvent,
+    Blob,
     EventTarget: BrowserEvents,
     MessageEvent: BrowserMessage,
     TextEncoder: BrowserEncoder,
@@ -229,6 +252,65 @@ function browser(
 }
 
 describe('container fetch authorization', () => {
+  it('uses one Remote decision per WebSocket connection over either private transport', async () => {
+    for (const transport of ['port', 'socket'] as const) {
+      const authorized: string[] = [];
+      const realm = browser((url) => {
+        authorized.push(url);
+        return authorized.length === 1;
+      }, undefined, transport);
+      await runInContext(`
+        window.remote = new WebSocket('wss://api.example/socket');
+        new Promise((resolve, reject) => {
+          remote.addEventListener('open', resolve, { once: true });
+          remote.addEventListener('error', reject, { once: true });
+        });
+      `, realm.context);
+      const result = await runInContext(`
+        new Promise(resolve => {
+          remote.addEventListener('message', event => resolve({ data: event.data, target: event.target === remote }), { once: true });
+          remote.send('first');
+        });
+      `, realm.context);
+      expect(result).toEqual({ data: 'first', target: true });
+      await runInContext(`
+        window.denied = new WebSocket.prototype.constructor('wss://api.example/socket');
+        new Promise(resolve => denied.addEventListener('close', resolve, { once: true }));
+      `, realm.context);
+      const second = await runInContext(`
+        new Promise(resolve => {
+          remote.addEventListener('message', event => resolve(event.data), { once: true });
+          remote.send('still open');
+        });
+      `, realm.context);
+      expect({
+        authorized,
+        sockets: realm.sockets.map(socket => socket.url),
+        second,
+      }).toEqual({
+        authorized: ['wss://api.example/socket', 'wss://api.example/socket'],
+        sockets: transport === 'socket'
+          ? ['ws://127.0.0.1:1234/?t=secret', 'wss://api.example/socket']
+          : ['wss://api.example/socket'],
+        second: 'still open',
+      });
+    }
+  });
+
+  it('reserves only the exact private bridge endpoint without a Remote decision', async () => {
+    const authorized: string[] = [];
+    const realm = browser(url => { authorized.push(url); return false; }, undefined, 'socket');
+    runInContext(`window.bridge = new WebSocket('ws://127.0.0.1:1234/?t=secret');`, realm.context);
+    await runInContext(`
+      window.changed = new bridge.constructor('ws://127.0.0.1:1234/?t=other');
+      new Promise(resolve => changed.addEventListener('close', resolve, { once: true }));
+    `, realm.context);
+    expect({ authorized, sockets: realm.sockets.map(socket => socket.url) }).toEqual({
+      authorized: ['ws://127.0.0.1:1234/?t=other'],
+      sockets: ['ws://127.0.0.1:1234/?t=secret', 'ws://127.0.0.1:1234/?t=secret'],
+    });
+  });
+
   it('authorizes each capture over the private Rust channel', async () => {
     for (const transport of ['port', 'socket'] as const) {
       const decisions: { audio: boolean; video: boolean }[] = [];

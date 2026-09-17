@@ -27,33 +27,16 @@ import {
 import { consumeWebRtcPolicy, installWebRtcPolicy } from './webrtc.js';
 import { installFetchGate } from './network.js';
 import { installXhrGate } from './xhr.js';
+import { installWebSocketGate } from './websocket.js';
 import { installMediaPolicy } from './media.js';
 import { createPermissionAuthorization } from './network-transport.js';
 
 const _authorize = createPermissionAuthorization(window);
 
-const _NativeWebSocket = window.WebSocket;
 const _bridgeUrl: string | undefined = (window as any).__truapi_localhost?.url;
-
-const _GatedWebSocket = new Proxy(window.WebSocket, {
-  construct(target, args: [string, ...unknown[]]) {
-    if (_bridgeUrl !== undefined && args[0] === _bridgeUrl) {
-      return new _NativeWebSocket(args[0]);
-    }
-    throw new TypeError('Network access is not allowed');
-  },
-});
-
-freezeValue(window, 'WebSocket', _GatedWebSocket);
-
-// Close the prototype-constructor bypass: `new window.WebSocket.prototype.constructor(url)`
-// would reach the ungated native constructor without this.
-freezeCustom(
-  _NativeWebSocket.prototype,
-  'constructor',
-  { value: _GatedWebSocket, writable: false },
-  (current) => current === _GatedWebSocket,
-);
+const _webSocketBackend = (window as any).__truapi_websocket_connect__;
+freezeAndDelete(window, '__truapi_websocket_connect__');
+installWebSocketGate(window, _authorize.network, _bridgeUrl, _webSocketBackend);
 
 installFetchGate(window, _authorize.network);
 installXhrGate(window, _authorize.network);

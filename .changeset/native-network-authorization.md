@@ -3,4 +3,4 @@
 "@parity/truapi-host": minor
 ---
 
-Authorize product fetches and asynchronous XHR directly through the Rust protocol. Preserve one-use grants with explicit host permission decisions and a shared blessed-domain list. Simplify iOS integration by removing the separate WebKit content-rule and authorization relay layer. Present per-action confirmations without misleading persistent-permission choices.
+Authorize product fetches, asynchronous XHR and remote WebSocket connections directly through the Rust protocol. Preserve one-use grants with explicit host permission decisions and a shared blessed-domain list. Simplify iOS integration by removing the separate WebKit content-rule and authorization relay layer. Present per-action confirmations without misleading persistent-permission choices.
