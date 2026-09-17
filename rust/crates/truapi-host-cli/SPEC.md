@@ -821,15 +821,17 @@ and unsupported module loaders fail preparation. `@parity/truapi` resolves to
 the browser SDK shipped with the host. Product preparation does not execute
 package hooks or compile-time product code.
 
-The container checks fetch authorization through its captured host hook. The
-trusted launcher independently intercepts HTTP(S) requests and redirected
-destinations, applying the shared Rust Remote permission policy. CORS remains
+The container sends fetch intent through its private port. The trusted launcher
+intercepts the actual request and asks Rust to authorize its initial URL on the
+product's existing connection. Chromium request IDs associate CORS preflights
+and redirects with that one decision, so one-use grants are consumed once.
+Redirect destinations are not separately authorized. CORS remains
 browser-enforced. Workers, subframes, WebSockets, WebRTC and WebTransport are
 unavailable in the CLI product realm. Product code has no Bun/Node filesystem,
 subprocess or host-environment access.
 
 The browser execution phase times out after five minutes. Success, failure or
-timeout closes the browser and disposes both frame providers.
+timeout closes the browser and disposes the frame provider.
 
 `TRUAPI_SCRIPT_MODE=trusted` explicitly selects Bun execution
 for diagnostics that read host logs or write reports. It prints the selected
@@ -1682,6 +1684,7 @@ reports:
 - `Notifications/cancel_push_notification`
 - `Permissions/request_device_permission`
 - `Permissions/request_remote_permission`
+- `Permissions/authorize_network_access`
 - `Preimage/lookup_subscribe`
 - `Preimage/submit`
 - `Resource Allocation/request`
