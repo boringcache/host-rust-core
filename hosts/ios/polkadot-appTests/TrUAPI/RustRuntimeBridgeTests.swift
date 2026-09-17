@@ -71,6 +71,7 @@ private struct StubHostProvider: ProductHostProviding {
 private func makeBridge(
     productId: String = "test.product",
     permissionGuard: MockPermissionGuard = MockPermissionGuard(),
+    osPermissionAsker: MockOSPermissionAsker = MockOSPermissionAsker(),
     notificationScheduler: MockNotificationScheduler = MockNotificationScheduler(),
     chainRegistry: MockChainRegistry = MockChainRegistry(),
     confirmationPresenter: MockConfirmationPresenter = MockConfirmationPresenter(),
@@ -89,6 +90,7 @@ private func makeBridge(
     return RustProductExecutionBridge(dependencies: .init(
         productId: productId,
         permissionGuard: permissionGuard,
+        osPermissionAsker: osPermissionAsker,
         notificationScheduler: notificationScheduler,
         navigationRouter: router,
         chainRegistry: chainRegistry,
@@ -134,6 +136,39 @@ struct RustRuntimeBridgeTests {
 
         #expect(result == .deny)
         #expect(guard_.requestedPermission == .deviceCapability(.notifications))
+    }
+
+    @Test(arguments: [HostDevicePermissionRequest.camera, .microphone, .notifications], [
+        OSPermissionStatus.allowed, .denied, .notDetermined
+    ])
+    func devicePermissionStatusReadsOSWithoutPrompting(
+        request: HostDevicePermissionRequest,
+        status: OSPermissionStatus
+    ) async throws {
+        let osAsker = MockOSPermissionAsker()
+        osAsker.statusToReturn = status
+        let guard_ = MockPermissionGuard()
+        let bridge = makeBridge(permissionGuard: guard_, osPermissionAsker: osAsker)
+        let expected: NativeDevicePermissionStatus = switch status {
+        case .allowed: .granted
+        case .denied: .denied
+        case .notDetermined: .notDetermined
+        }
+
+        #expect(try await bridge.devicePermissionStatus(request: request) == expected)
+        #expect(osAsker.checkedCapabilities == [request.deviceCapabilityType])
+        #expect(osAsker.requestedCapabilities.isEmpty)
+        #expect(guard_.requestedPermission == nil)
+    }
+
+    @Test(arguments: [HostDevicePermissionRequest.openUrl, .bluetooth, .nfc, .location, .clipboard, .biometrics])
+    func devicePermissionStatusHasNoUnimplementedOSGate(request: HostDevicePermissionRequest) async throws {
+        let osAsker = MockOSPermissionAsker()
+        let bridge = makeBridge(osPermissionAsker: osAsker)
+
+        #expect(try await bridge.devicePermissionStatus(request: request) == .notApplicable)
+        #expect(osAsker.checkedCapabilities.isEmpty)
+        #expect(osAsker.requestedCapabilities.isEmpty)
     }
 
     // MARK: remotePermission
@@ -505,6 +540,7 @@ struct RustRuntimeBridgeTests {
         let bridge = RustProductExecutionBridge(dependencies: .init(
             productId: "test.dot",
             permissionGuard: MockPermissionGuard(),
+            osPermissionAsker: MockOSPermissionAsker(),
             notificationScheduler: MockNotificationScheduler(),
             navigationRouter: MockNavigationRouter(),
             chainRegistry: chainRegistry,

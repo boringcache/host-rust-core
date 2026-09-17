@@ -263,7 +263,7 @@ Both return `PermissionDecision`: `.allowOnce`, `.allowAlways`, or `.deny`. Pres
 
 Identity and account access reviews use `confirmPermission(review:)`, which also returns `PermissionDecision`. Override it to preserve Allow once. Its compatibility default maps `confirmUserAction`'s Boolean approval to `.allowAlways`; signing and other single-action reviews continue to use that Boolean callback.
 
-Fetch and existing remote-operation gates consume temporary grants. The current iOS camera/microphone checks only inspect status, so device one-use enforcement still requires a consuming operation path.
+Fetch, notification scheduling, external navigation and existing remote-operation gates consume temporary grants. The shared container authorizes each `getUserMedia` call through Rust, consuming camera/microphone consent for that capture. The returned stream remains usable until it is stopped; another capture requires a new authorization. Native media delegates resolve OS permission without consuming product consent again, even when WebKit caches its approval. SPA and Chat install the container at document start in every frame.
 
 ## SSO session handling
 
@@ -522,7 +522,7 @@ Redirects and stylesheet/font loads retain native WebKit behavior. They are not 
 
 Build the generated JavaScript SDK before the container: from the repository root, run `npm ci --ignore-scripts`, `npm run build --prefix js/packages/truapi`, then `npm run build --prefix js/container`. A protocol change also requires regenerating the SDK through the repository's normal build pipeline.
 
-`ProductNetworkAccessTests` exercises grant/deny/revocation, one-use fetch and WebRTC authorization, native redirects, stylesheet/font requests, and preserving a persistent store and existing navigation delegate. The tests require the built container, current Rust bindings and a real WKWebView in the UIKit test host. These Apple-only tests cannot run on Linux.
+`ProductNetworkAccessTests` exercises grant/deny/revocation, one-use fetch, WebRTC and media authorization, native redirects, stylesheet/font requests, and preserving a persistent store and existing navigation delegate. Media coverage uses a capture stub with the actual private Rust permission transport; it does not require simulator camera hardware. The tests require the built container, current Rust bindings and a real WKWebView in the UIKit test host. These Apple-only tests cannot run on Linux.
 
 
 ## Build outputs in detail

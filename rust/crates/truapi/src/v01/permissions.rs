@@ -113,6 +113,15 @@ pub struct AuthorizeNetworkAccessRequest {
     pub url: String,
 }
 
+/// Device capabilities needed by one media capture operation.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct AuthorizeMediaCaptureRequest {
+    /// Whether this capture needs microphone access.
+    pub audio: bool,
+    /// Whether this capture needs camera access.
+    pub video: bool,
+}
+
 /// Authorization for one network operation, consuming a temporary grant.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct AuthorizeNetworkAccessResponse {

@@ -26,6 +26,7 @@ import {
 } from './freeze.js';
 import { consumeWebRtcPolicy, installWebRtcPolicy } from './webrtc.js';
 import { installFetchGate } from './network.js';
+import { installMediaPolicy } from './media.js';
 import { createPermissionAuthorization } from './network-transport.js';
 
 const _authorize = createPermissionAuthorization(window);
@@ -54,6 +55,7 @@ freezeCustom(
 );
 
 installFetchGate(window, _authorize.network);
+installMediaPolicy(window, _authorize.media);
 
 // --- Network: delete (no future permission path) ---
 freezeAndDelete(window, 'XMLHttpRequest');

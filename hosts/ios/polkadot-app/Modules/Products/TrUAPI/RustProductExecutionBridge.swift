@@ -17,6 +17,7 @@ class RustProductExecutionBridge: HostBridge, @unchecked Sendable {
     struct Dependencies {
         let productId: ProductId
         let permissionGuard: ProductPermissionGuarding
+        let osPermissionAsker: OSPermissionAsking
         let notificationScheduler: ProductNotificationScheduling
         let navigationRouter: ProductsNavigationRouting
         let chainRegistry: ChainRegistryProtocol
@@ -66,6 +67,26 @@ class RustProductExecutionBridge: HostBridge, @unchecked Sendable {
             productId: dependencies.productId,
             capability: request.deviceCapabilityType
         ).hostDecision
+    }
+
+    func devicePermissionStatus(request: HostDevicePermissionRequest) async throws -> NativeDevicePermissionStatus {
+        switch request {
+        case .camera,
+             .microphone,
+             .notifications:
+            switch await dependencies.osPermissionAsker.checkPermission(for: request.deviceCapabilityType) {
+            case .allowed: .granted
+            case .denied: .denied
+            case .notDetermined: .notDetermined
+            }
+        case .bluetooth,
+             .nfc,
+             .location,
+             .clipboard,
+             .openUrl,
+             .biometrics:
+            .notApplicable
+        }
     }
 
     func remotePermission(request: RemotePermission) async throws -> TrUAPIPermissionDecision {

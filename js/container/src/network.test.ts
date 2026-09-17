@@ -11,10 +11,14 @@ import {
   VersionedAuthorizeWebRtcRequest,
   VersionedAuthorizeWebRtcResponse,
   VersionedAuthorizeWebRtcError,
+  VersionedAuthorizeMediaCaptureRequest,
+  VersionedAuthorizeMediaCaptureResponse,
+  VersionedAuthorizeMediaCaptureError,
 } from '@parity/truapi';
 import {
   PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
   PERMISSIONS_AUTHORIZE_WEB_RTC,
+  PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE,
 } from '@parity/truapi/wire-table';
 
 const build = await Bun.build({
@@ -32,6 +36,7 @@ function browser(
   transport: 'port' | 'socket' = 'port',
   transformReply: (bytes: Uint8Array) => Uint8Array = (bytes) => bytes,
   authorizeWebRtc: () => boolean | Promise<boolean> = () => false,
+  authorizeMedia: (request: { audio: boolean; video: boolean }) => boolean | Promise<boolean> = () => false,
 ) {
   class BrowserRequest extends Request {
     constructor(input: RequestInfo | URL, init?: RequestInit) {
@@ -102,18 +107,21 @@ function browser(
     sent.push(message);
     const decoded = decodeWireMessage(message)._unsafeUnwrap();
     const webRtc = decoded.payload.methodId === PERMISSIONS_AUTHORIZE_WEB_RTC.method;
+    const media = decoded.payload.methodId === PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE.method;
     expect({
       trait: decoded.payload.traitId,
       method: decoded.payload.methodId,
       kind: 'request',
-    }).toEqual(webRtc ? PERMISSIONS_AUTHORIZE_WEB_RTC : PERMISSIONS_AUTHORIZE_NETWORK_ACCESS);
-    const url = webRtc ? null : VersionedAuthorizeNetworkAccessRequest.dec(
+    }).toEqual(media ? PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE : webRtc ? PERMISSIONS_AUTHORIZE_WEB_RTC : PERMISSIONS_AUTHORIZE_NETWORK_ACCESS);
+    const url = webRtc || media ? null : VersionedAuthorizeNetworkAccessRequest.dec(
       decoded.payload.value,
     ).value.url;
     if (webRtc) {
       expect(VersionedAuthorizeWebRtcRequest.dec(decoded.payload.value)).toEqual({ tag: 'V1' });
     }
-    Promise.resolve(url === null ? authorizeWebRtc() : authorize!(url)).then(
+    Promise.resolve(media
+      ? authorizeMedia(VersionedAuthorizeMediaCaptureRequest.dec(decoded.payload.value).value)
+      : url === null ? authorizeWebRtc() : authorize!(url)).then(
       (allowed) => {
         const reply = encodeWireMessage({
           requestId: decoded.requestId,
@@ -122,8 +130,8 @@ function browser(
             messageType: MESSAGE_TYPE_RESPONSE,
             value: scale
               .Result(
-                webRtc ? VersionedAuthorizeWebRtcResponse : VersionedAuthorizeNetworkAccessResponse,
-                scale.CallError(webRtc ? VersionedAuthorizeWebRtcError : VersionedAuthorizeNetworkAccessError),
+                media ? VersionedAuthorizeMediaCaptureResponse : webRtc ? VersionedAuthorizeWebRtcResponse : VersionedAuthorizeNetworkAccessResponse,
+                scale.CallError(media ? VersionedAuthorizeMediaCaptureError : webRtc ? VersionedAuthorizeWebRtcError : VersionedAuthorizeNetworkAccessError),
               )
               .enc({ success: true, value: { tag: 'V1', value: { allowed } } }),
           },
@@ -154,6 +162,7 @@ function browser(
     Request: BrowserRequest,
     Response,
     AbortSignal,
+    DOMException,
     EventTarget: BrowserEvents,
     MessageEvent: BrowserMessage,
     TextEncoder: BrowserEncoder,
@@ -184,6 +193,13 @@ function browser(
   });
   runInContext('window = globalThis', context);
   runInContext(`
+    window.mediaCalls = [];
+    window.navigator.mediaDevices = new (class {
+      getUserMedia(constraints) {
+        mediaCalls.push(constraints);
+        return Promise.resolve('capture');
+      }
+    })();
     window.RTCPeerConnection = class {
       constructor(config = {}) { this.config = { ...config, iceCandidatePoolSize: config.iceCandidatePoolSize ?? 0 }; }
       getConfiguration() { return { ...this.config }; }
@@ -211,6 +227,37 @@ function browser(
 }
 
 describe('container fetch authorization', () => {
+  it('authorizes each capture over the private Rust channel', async () => {
+    for (const transport of ['port', 'socket'] as const) {
+      const decisions: { audio: boolean; video: boolean }[] = [];
+      const realm = browser(() => false, undefined, transport, (bytes) => bytes,
+        () => false, (request) => {
+          decisions.push(request);
+          return decisions.length === 1;
+        });
+      const capture = () => runInContext(
+        'navigator.mediaDevices.getUserMedia({ audio: true, video: true })', realm.context);
+      expect(await capture()).toBe('capture');
+      await expect(capture()).rejects.toMatchObject({ name: 'NotAllowedError' });
+      expect({ decisions, captures: realm.context.mediaCalls }).toEqual({
+        decisions: [{ audio: true, video: true }, { audio: true, video: true }],
+        captures: [{ audio: true, video: true }],
+      });
+    }
+  });
+
+  it('does not accept a WebRTC reply as capture approval', async () => {
+    const realm = browser(() => false, undefined, 'port', (bytes) => {
+      const message = decodeWireMessage(bytes)._unsafeUnwrap();
+      message.payload.methodId = PERMISSIONS_AUTHORIZE_WEB_RTC.method;
+      return encodeWireMessage(message)._unsafeUnwrap();
+    }, () => false, () => true);
+    await expect(runInContext(
+      'navigator.mediaDevices.getUserMedia({ video: true })', realm.context,
+    )).rejects.toMatchObject({ name: 'NotAllowedError' });
+    expect(realm.context.mediaCalls).toEqual([]);
+  });
+
   it('authorizes each peer connection over the private Rust channel', async () => {
     let authorizations = 0;
     const realm = browser(() => false, undefined, 'port', (bytes) => bytes,
