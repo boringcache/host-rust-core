@@ -56,9 +56,12 @@ async function main() {
 main().then(
   () => process.exit(0),
   (error) => {
-    console.error(
-      `[script error] ${error instanceof Error ? error.stack : String(error)}`,
-    );
+    const message = String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    const detail = stack?.includes(message)
+      ? stack
+      : `${message}${stack ? `\n${stack}` : ""}`;
+    console.error(`[script error] ${detail}`);
     process.exit(1);
   },
 );

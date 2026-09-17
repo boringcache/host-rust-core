@@ -54,18 +54,28 @@ it("packages the same browser assets used by source mode", async () => {
   expect({ container, client, bootstrap }).toEqual(expected);
 });
 
-it("resolves the packaged runner without a source checkout", () => {
-  const result = Bun.spawnSync(["bun", join(directory, "runner.js")], {
-    cwd: tmpdir(),
-    env: { PATH: process.env.PATH },
-  });
-  expect({
-    status: result.exitCode,
-    output: result.stdout.toString() + result.stderr.toString(),
-  }).toEqual({
-    status: 1,
-    output: expect.stringContaining("TRUAPI_FRAME_URL must be set"),
-  });
+it("resolves the packaged runner without a source checkout", async () => {
+  const preload = join(directory, "stack-format.js");
+  await writeFile(
+    preload,
+    'Error.prepareStackTrace = () => "Error\\n    at package-test";',
+  );
+  for (const args of [[], ["--preload", preload]]) {
+    const result = Bun.spawnSync(
+      ["bun", ...args, join(directory, "runner.js")],
+      {
+        cwd: tmpdir(),
+        env: { PATH: process.env.PATH },
+      },
+    );
+    expect({
+      status: result.exitCode,
+      output: result.stdout.toString() + result.stderr.toString(),
+    }).toEqual({
+      status: 1,
+      output: expect.stringContaining("TRUAPI_FRAME_URL must be set"),
+    });
+  }
 });
 
 it("ships a runnable browser installer with its dynamic dependencies", () => {
