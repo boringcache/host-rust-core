@@ -539,6 +539,16 @@ private final class PocketCallbackAdapter: NativePocketCallbacks, @unchecked Sen
     }
 }
 
+private extension PermissionDecision {
+    var native: NativePermissionDecision {
+        switch self {
+        case .allowOnce: .allowOnce
+        case .allowAlways: .allowAlways
+        case .deny: .deny
+        }
+    }
+}
+
 /// Adapter that bridges the public `HostBridge` to the generated UniFFI
 /// `HostCallbacks` protocol. Kept private so the generated names never
 /// leak into consumers.
@@ -575,9 +585,9 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
         }
     }
 
-    func devicePermission(request: HostDevicePermissionRequest) async throws -> PermissionDecision {
+    func devicePermission(request: HostDevicePermissionRequest) async throws -> NativePermissionDecision {
         try await withHostRejection {
-            try await bridge.devicePermission(request: request)
+            try await bridge.devicePermission(request: request).native
         }
     }
 
@@ -589,9 +599,9 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
         }
     }
 
-    func remotePermission(request: RemotePermission) async throws -> PermissionDecision {
+    func remotePermission(request: RemotePermission) async throws -> NativePermissionDecision {
         try await withHostRejection {
-            try await bridge.remotePermission(request: request)
+            try await bridge.remotePermission(request: request).native
         }
     }
 
