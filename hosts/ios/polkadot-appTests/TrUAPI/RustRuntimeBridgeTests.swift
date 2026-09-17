@@ -138,27 +138,25 @@ struct RustRuntimeBridgeTests {
         #expect(guard_.requestedPermission == .deviceCapability(.notifications))
     }
 
-    @Test(arguments: [HostDevicePermissionRequest.camera, .microphone, .notifications], [
-        OSPermissionStatus.allowed, .denied, .notDetermined
-    ])
-    func devicePermissionStatusReadsOSWithoutPrompting(
-        request: HostDevicePermissionRequest,
-        status: OSPermissionStatus
-    ) async throws {
-        let osAsker = MockOSPermissionAsker()
-        osAsker.statusToReturn = status
-        let guard_ = MockPermissionGuard()
-        let bridge = makeBridge(permissionGuard: guard_, osPermissionAsker: osAsker)
-        let expected: NativeDevicePermissionStatus = switch status {
-        case .allowed: .granted
-        case .denied: .denied
-        case .notDetermined: .notDetermined
-        }
+    @Test func devicePermissionStatusReadsOSWithoutPrompting() async throws {
+        for request in [HostDevicePermissionRequest.camera, .microphone, .notifications] {
+            for status in [OSPermissionStatus.allowed, .denied, .notDetermined] {
+                let osAsker = MockOSPermissionAsker()
+                osAsker.statusToReturn = status
+                let guard_ = MockPermissionGuard()
+                let bridge = makeBridge(permissionGuard: guard_, osPermissionAsker: osAsker)
+                let expected: NativeDevicePermissionStatus = switch status {
+                case .allowed: .granted
+                case .denied: .denied
+                case .notDetermined: .notDetermined
+                }
 
-        #expect(try await bridge.devicePermissionStatus(request: request) == expected)
-        #expect(osAsker.checkedCapabilities == [request.deviceCapabilityType])
-        #expect(osAsker.requestedCapabilities.isEmpty)
-        #expect(guard_.requestedPermission == nil)
+                #expect(try await bridge.devicePermissionStatus(request: request) == expected)
+                #expect(osAsker.checkedCapabilities == [request.deviceCapabilityType])
+                #expect(osAsker.requestedCapabilities.isEmpty)
+                #expect(guard_.requestedPermission == nil)
+            }
+        }
     }
 
     @Test(arguments: [HostDevicePermissionRequest.openUrl, .bluetooth, .nfc, .location, .clipboard, .biometrics])
