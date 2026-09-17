@@ -153,20 +153,6 @@ struct ChatRuntimeTests {
         await runtime.dispose()
     }
 
-    @Test func chatScriptsFactoryOrdersBootstrapBeforeContainer() throws {
-        let factory = ChatRustRuntimeScriptsFactory(bootstrapScript: "/*bootstrap*/")
-
-        let scripts = try factory.makeScripts()
-
-        #expect(scripts.count == 2)
-        #expect(scripts[0].content == "/*bootstrap*/")
-        #expect(scripts[0].frameScope == .mainFrameOnly)
-        #expect(scripts[0].insertionPoint == .atDocStart)
-        #expect(scripts[1].content.contains("__truapi_localhost"))
-        #expect(scripts[1].frameScope == .allFrames)
-        #expect(scripts[1].insertionPoint == .atDocStart)
-    }
-
     @Test func disposalDuringInitializationDestroysEngineBeforeProductCode() async {
         let execution = MockProductExecution()
         let engine = MockJSEngine()

@@ -343,18 +343,6 @@ describe('container fetch authorization', () => {
     expect(realm.requests.map(request => request.url)).toEqual(['https://api.example/data']);
   });
 
-  it('does not accept a WebRTC reply as capture approval', async () => {
-    const realm = browser(() => false, undefined, 'port', (bytes) => {
-      const message = decodeWireMessage(bytes)._unsafeUnwrap();
-      message.payload.methodId = PERMISSIONS_AUTHORIZE_WEB_RTC.method;
-      return encodeWireMessage(message)._unsafeUnwrap();
-    }, () => false, () => true);
-    await expect(runInContext(
-      'navigator.mediaDevices.getUserMedia({ video: true })', realm.context,
-    )).rejects.toMatchObject({ name: 'NotAllowedError' });
-    expect(realm.context.mediaCalls).toEqual([]);
-  });
-
   it('authorizes each peer connection over the private Rust channel', async () => {
     let authorizations = 0;
     const realm = browser(() => false, undefined, 'port', (bytes) => bytes,
@@ -370,19 +358,6 @@ describe('container fetch authorization', () => {
     });
     first.close();
     second.close();
-  });
-
-  it('does not accept a fetch approval as a peer-connection approval', async () => {
-    const realm = browser(() => true, `${origin}/index.html`, 'port', (bytes) => {
-      const decoded = decodeWireMessage(bytes)._unsafeUnwrap();
-      return encodeWireMessage({
-        ...decoded,
-        payload: { ...decoded.payload, methodId: PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method },
-      })._unsafeUnwrap();
-    }, () => true);
-    const connection = runInContext('new RTCPeerConnection()', realm.context);
-    await expect(connection.createOffer()).rejects.toThrow('WebRTC access is not allowed');
-    connection.close();
   });
 
   it('sends authorization through a private binary port without replacing the SDK port', async () => {

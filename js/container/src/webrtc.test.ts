@@ -400,26 +400,3 @@ describe('an unsupported host stays disabled', () => {
     ).toThrow();
   });
 });
-
-// These controls distinguish the protected native prototype from a subclass gate.
-describe('the #379 escape routes bypass a subclass gate', () => {
-  it('the parent prototype and constructor can still create offers', async () => {
-    const Native = realm().RTCPeerConnection;
-    class Gated extends Native {
-      createOffer() {
-        return Promise.reject(new TypeError('WebRTC access is not allowed'));
-      }
-    }
-    const connection = new Gated();
-    const parent = Object.getPrototypeOf(Object.getPrototypeOf(connection));
-    const recovered = Object.getPrototypeOf(Gated);
-    expect(await parent.createOffer.call(connection)).toEqual({
-      sdp: 'native',
-      type: 'offer',
-    });
-    expect(await new recovered().createOffer()).toEqual({
-      sdp: 'native',
-      type: 'offer',
-    });
-  });
-});

@@ -54,13 +54,14 @@ export function installWebSocketGate(
   const nativeSend = nativePrototype.send;
   const nativeClose = nativePrototype.close;
   const nativeProperties: Record<string, PropertyDescriptor> = create(null);
-  for (const name of [
+  const propertyNames = [
     'readyState',
     'bufferedAmount',
     'extensions',
     'protocol',
     'binaryType',
-  ])
+  ];
+  for (const name of propertyNames)
     nativeProperties[name] = descriptor(nativePrototype, name)!;
   const NativeTarget = win.EventTarget;
   const add = NativeTarget.prototype.addEventListener;
@@ -203,15 +204,8 @@ export function installWebSocketGate(
       ? factory(current.url, requested)
       : new NativeSocket(current.url, requested);
     const properties: Record<string, PropertyDescriptor> = create(null);
-    const names = [
-      'readyState',
-      'bufferedAmount',
-      'extensions',
-      'protocol',
-      'binaryType',
-    ];
-    for (let index = 0; index < names.length; index++) {
-      const name = names[index]!;
+    for (let index = 0; index < propertyNames.length; index++) {
+      const name = propertyNames[index]!;
       if (!factory) properties[name] = nativeProperties[name]!;
       else {
         let object: any = backend;

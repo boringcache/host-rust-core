@@ -60,7 +60,7 @@ actor ChatRustRuntime: ChatRuntimeProtocol {
         started = true
 
         let bootstrapScript = try executionModel.startBridge()
-        let scriptsFactory = ChatRustRuntimeScriptsFactory(bootstrapScript: bootstrapScript)
+        let scriptsFactory = RustRuntimeScriptsFactory(bootstrapScript: bootstrapScript)
         let jsEngine = try await bootEngine(scripts: scriptsFactory.makeScripts())
         try checkNotDisposed()
 
