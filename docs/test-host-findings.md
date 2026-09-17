@@ -722,9 +722,14 @@ because `@parity/host-api-test-sdk` has no `@parity/truapi` dependency and no
 codec constant at all -- being a reimplementation rather than the core, it
 answers whatever a product sends, at any wire version.
 
-By the same resolution, `host-playground` (`product-sdk-host` ^0.10.0) and
-`playground-app` (^0.15.1) are codec 1 too. All three external consumers are
-blocked on the same thing, and it is upstream of anything this branch does.
+By the same resolution `host-playground` and `playground-app` are codec 1 too.
+Read their versions from the REMOTE manifest, not a local clone: this laptop's
+`host-playground` declares `product-sdk-host ^0.10.0` against individual
+packages, while `main` declares the umbrella `@parity/product-sdk 0.27.0`,
+which resolves `product-sdk-host` 0.19.1 -> `@parity/truapi ^0.13.1`. Same
+verdict, very different distance -- one ordinary bump to 0.28.0 rather than a
+multi-generation migration. Local checkouts in this tree are stale enough to
+invert that judgement, so verify against the remote before quoting a number.
 
 **So the adoption order has a step before the one the PR body used to name:**
 product-sdk has to move its catalog to `@parity/truapi` 0.16.0 and re-release,
