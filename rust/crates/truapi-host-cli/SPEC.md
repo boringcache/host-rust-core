@@ -804,8 +804,8 @@ and `exec '/script ...'`. The trusted Bun runner:
 
 1. reads its required environment;
 2. bundles browser-compatible product imports without evaluating product code;
-3. opens product-frame and authorization connections over the host's Unix or
-   TCP endpoint, with a 15-second connection timeout;
+3. opens one connection for product frames and authorization over the host's
+   Unix or TCP endpoint, with a 15-second connection timeout;
 4. starts Chromium with its process sandbox enabled and a fresh browser context;
 5. installs the shared container, MessagePort relay and browser SDK before
    product code; and

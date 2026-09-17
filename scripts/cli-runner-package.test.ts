@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 import { buildBrowserAssets } from "../rust/crates/truapi-host-cli/js/browser-assets.ts";
 
 const repository = resolve(import.meta.dir, "..");
+const dependencies = (await Bun.file(join(repository, "package.json")).json())
+  .devDependencies;
 let directory: string;
 
 beforeAll(async () => {
@@ -37,11 +39,11 @@ it("ships each browser asset and the matching browser driver", async () => {
   const manifest = await Bun.file(
     join(directory, "node_modules/playwright-core/package.json"),
   ).json();
-  expect(manifest.version).toBe("1.59.1");
+  expect(manifest.version).toBe(dependencies["playwright-core"]);
   const builder = await Bun.file(
     join(directory, "node_modules/esbuild-wasm/package.json"),
   ).json();
-  expect(builder.version).toBe("0.28.1");
+  expect(builder.version).toBe(dependencies["esbuild-wasm"]);
 });
 
 it("packages the same browser assets used by source mode", async () => {
@@ -90,7 +92,10 @@ it("ships a runnable browser installer with its dynamic dependencies", () => {
   expect({
     status: result.exitCode,
     output: result.stdout.toString().trim(),
-  }).toEqual({ status: 0, output: "Version 1.59.1" });
+  }).toEqual({
+    status: 0,
+    output: `Version ${dependencies["playwright-core"]}`,
+  });
 });
 
 it("produces a valid browser client module with complete exports", () => {

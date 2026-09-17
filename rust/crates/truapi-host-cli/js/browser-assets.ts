@@ -9,7 +9,7 @@ export interface BrowserAssets {
 export async function buildBrowserAssets(
   repository: string,
 ): Promise<BrowserAssets> {
-  const { build } = await import("esbuild");
+  const { build } = await import("esbuild-wasm");
 
   async function bundle(
     entrypoint: string,

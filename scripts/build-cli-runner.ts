@@ -29,7 +29,7 @@ try {
     entrypoints: [join(repository, "rust/crates/truapi-host-cli/js/runner.ts")],
     target: "bun",
     format: "esm",
-    external: ["playwright-core", "esbuild", "esbuild-wasm"],
+    external: ["playwright-core", "esbuild-wasm"],
     env: "disable",
   });
   if (!runner.success || runner.outputs.length !== 1) {

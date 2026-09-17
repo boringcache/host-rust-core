@@ -156,7 +156,6 @@ export async function runBrowserScript(
       acceptDownloads: false,
     });
     await context.grantPermissions(["local-network-access"]);
-    await context.routeWebSocket("**/*", (socket) => socket.close());
     const page = await context.newPage();
     context.on("page", (other) => {
       if (other !== page) void other.close();
