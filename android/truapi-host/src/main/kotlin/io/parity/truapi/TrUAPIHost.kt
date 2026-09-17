@@ -234,36 +234,24 @@ interface HostCoreStorage {
  * Embedders render the typed request values in their own UI, then report the
  * user's decision as a `PermissionDecision`.
  *
- * Threading: the Rust core invokes every callback on a background thread it
- * owns, never the UI (main) thread. These six each run on their own thread from
- * a blocking pool, so an implementation may safely block its calling thread
- * (e.g. with a `CountDownLatch`) until the user decides; other TrUAPI traffic
- * keeps flowing: [navigateTo], [pushNotification], [devicePermission],
- * [remotePermission], [featureSupported], and [confirmUserAction]. The
- * remaining callbacks (auth state, storage, core storage, chain, theme,
- * preimage lookups, and [cancelNotification]) run inline on the dispatcher
- * thread and must return promptly without blocking. Any UI work
- * MUST still be marshalled onto the main thread, e.g. with
- * `Handler(Looper.getMainLooper()).post { ... }` or a `CoroutineScope` bound to
- * `Dispatchers.Main`. Touching views or the `WebView` directly from a callback
- * throws `CalledFromWrongThreadException`.
+ * The Rust core invokes callbacks on its shared background bridge executor.
+ * Suspend callbacks while waiting for a decision; blocking their thread stalls
+ * other TrUAPI traffic. Synchronous callbacks must return promptly. Run UI work
+ * on the main thread, for example with `withContext(Dispatchers.Main) { ... }`.
  */
 interface HostBridge {
     /** Lifecycle logger. Marker is a stable slug, detail is free-form. */
     fun onCoreLog(marker: String, detail: String) {}
 
     /**
-     * Open a URL in the system browser. Invoked on a blocking-pool thread;
-     * marshal the UI launch (e.g. `startActivity`) to the main thread. May
-     * block the calling thread if the user has to approve the navigation.
+     * Open a URL in the system browser, suspending for any approval on the main thread.
      */
     @Throws(HostNavigateRejection::class)
     suspend fun navigateTo(url: String)
 
     /**
      * Deliver a push notification and return the host-assigned notification
-     * id. Invoked on the dispatcher thread; marshal any UI work to the main
-     * thread and return promptly.
+     * id. Run any UI work on the main thread.
      */
     @Throws(HostRejection::class)
     suspend fun pushNotification(request: HostPushNotificationRequest): UInt = 0u
@@ -273,10 +261,8 @@ interface HostBridge {
     fun cancelNotification(id: UInt) {}
 
     /**
-     * Prompt for a device-level permission, preserving whether approval applies once or always.
-     * Invoked on a blocking-pool thread; present the prompt on the main thread
-     * and block the calling thread until the user decides. Blocking here does
-     * not stall other TrUAPI traffic.
+     * Prompt for a device-level permission on the main thread, suspending until
+     * the user decides. Preserve whether approval applies once or always.
      */
     @Throws(HostRejection::class)
     suspend fun devicePermission(request: HostDevicePermissionRequest): PermissionDecision
@@ -302,10 +288,8 @@ interface HostBridge {
     ): NativeDevicePermissionStatus = NativeDevicePermissionStatus.NOT_APPLICABLE
 
     /**
-     * Prompt for a remote (product-scoped) permission bundle. Invoked on a
-     * blocking-pool thread; present the prompt on the main thread and block the
-     * calling thread until the user decides. Blocking here does not stall other
-     * TrUAPI traffic.
+     * Prompt for a remote (product-scoped) permission bundle on the main thread,
+     * suspending until the user decides.
      */
     @Throws(HostRejection::class)
     suspend fun remotePermission(request: RemotePermission): PermissionDecision
@@ -340,10 +324,9 @@ interface HostBridge {
 
     /**
      * Confirm one user-reviewed core action; the review variant picks the
-     * prompt (sign payload, sign raw, create transaction, account alias,
-     * resource allocation, or preimage submit). Invoked on a blocking-pool
-     * thread; present the prompt on the main thread and block the calling
-     * thread until the user decides.
+     * prompt (sign payload, sign raw, create transaction, resource allocation,
+     * or preimage submit). Present it on the main thread, suspending until the
+     * user decides.
      */
     @Throws(HostRejection::class)
     suspend fun confirmUserAction(review: UserConfirmationReview): Boolean = false
@@ -1046,11 +1029,6 @@ class TrUAPIProductExecution internal constructor(
     /** Read the active session's X25519 chat identity private key, if any. */
     @Throws(HostRejection::class)
     fun sessionChatIdentityKey(): ByteArray? = inner.sessionChatIdentityKey()
-
-    /** Checks or prompts for this execution's product permission to contact the URL's destination. */
-    @Throws(HostRejection::class)
-    suspend fun authorizeNetworkAccess(url: String): PermissionAuthorizationStatus =
-        inner.authorizeNetworkAccess(url)
 
     /**
      * Read a permission authorization status without prompting.

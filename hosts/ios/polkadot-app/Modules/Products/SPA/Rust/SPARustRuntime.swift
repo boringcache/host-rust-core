@@ -69,7 +69,7 @@ extension SPARustRuntime: SPARuntimeProtocol {
             }
 
         try checkNotDisposed()
-        let bootstrapScript = try await executionModel.startBridge()
+        let bootstrapScript = try executionModel.startBridge()
         let scriptsFactory = SPARustRuntimeScriptsFactory(bootstrapScript: bootstrapScript)
 
         await engine.registerJSDeviceCapabilityHandler(

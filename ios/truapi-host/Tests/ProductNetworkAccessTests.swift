@@ -372,11 +372,9 @@ private final class NetworkTestServer: @unchecked Sendable {
             } else if path == "/style.css" {
                 headers = "Access-Control-Allow-Origin: *\r\nContent-Type: text/css\r\nCache-Control: no-store\r\n"
                 body = "body { color: green; }"
-            } else if path == "/redirect-denied" || path == "/redirect-revoked" {
+            } else if path == "/redirect-denied" {
                 status = "302 Found"
-                let destination = path == "/redirect-denied"
-                    ? self.url(host: "[::1]", path: "/blocked")
-                    : self.url(host: "127.0.0.1", path: "/allowed")
+                let destination = self.url(host: "[::1]", path: "/blocked")
                 headers += "Location: \(destination.absoluteString)\r\n"
                 body = ""
             }
