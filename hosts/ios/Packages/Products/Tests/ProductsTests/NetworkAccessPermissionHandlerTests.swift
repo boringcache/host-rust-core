@@ -236,4 +236,62 @@ struct NetworkAccessPermissionHandlerTests {
         #expect(repository.denyCalls.count == 1)
         #expect(repository.denyCalls.first?.permission == .networkAccess(domain: "new.com"))
     }
+
+    private func makeGuard(
+        repository: MockProductPermissionRepository,
+        requester: MockProductPermissionRequester
+    ) -> ProductPermissionGuard {
+        ProductPermissionGuard(
+            networkHandler: NetworkAccessPermissionHandler(repository: repository, requester: requester),
+            remoteHandler: RemotePermissionHandler(repository: repository, requester: requester),
+            deviceHandler: DeviceCapabilityPermissionHandler(
+                repository: repository, requester: requester, osAsker: MockOSPermissionAsker()
+            ),
+            accountHandler: AccountAccessPermissionHandler(repository: repository, requester: requester),
+            repository: repository, requester: requester
+        )
+    }
+
+    @Test(arguments: [PermissionDecision.allowOnce, .allowAlways, .deny])
+    func decisionPreservesConsentWithoutDuplicatingGrants(decision: PermissionDecision) async throws {
+        let (_, repository, requester) = makeSUT(promptDecision: decision)
+        let guardService = makeGuard(repository: repository, requester: requester)
+        let permission = ProductPermission.networkAccess(domain: "api.example.com")
+        let result = try await guardService.requestPermissionsDecision(productId: productId, permissions: [permission])
+        #expect(result == decision)
+        #expect(try await repository.getPermissionState(productId: productId, permission: permission) == .notDetermined)
+    }
+
+    @Test
+    func decisionTransfersExistingOneTimeConsentAndReusesPermanentConsent() async throws {
+        let (_, repository, requester) = makeSUT(promptDecision: .deny)
+        let guardService = makeGuard(repository: repository, requester: requester)
+        let temporary = ProductPermission.networkAccess(domain: "once.example.com")
+        let permanent = ProductPermission.networkAccess(domain: "always.example.com")
+        repository.grantOneTime(productId: productId, permission: temporary)
+        try await repository.grant(productId: productId, permission: permanent)
+        let first = try await guardService.requestPermissionsDecision(productId: productId, permissions: [temporary])
+        let second = try await guardService.requestPermissionsDecision(productId: productId, permissions: [temporary])
+        let existing = try await guardService.requestPermissionsDecision(productId: productId, permissions: [permanent])
+        #expect([first, second, existing] == [.allowOnce, .deny, .allowAlways])
+    }
+
+    @Test
+    func decisionCannotTransferAOneTimeGrantConsumedWhilePrompting() async throws {
+        let (_, repository, requester) = makeSUT(promptDecision: .allowAlways)
+        let guardService = makeGuard(repository: repository, requester: requester)
+        let temporary = ProductPermission.networkAccess(domain: "once.example.com")
+        let newPermission = ProductPermission.networkAccess(domain: "new.example.com")
+        repository.grantOneTime(productId: productId, permission: temporary)
+        requester.onPrompt = { [productId] in
+            _ = repository.consumeOneTimeGrant(productId: productId, permission: temporary)
+        }
+        await #expect(throws: PermissionDecisionError.self) {
+            try await guardService.requestPermissionsDecision(
+                productId: productId, permissions: [temporary, newPermission]
+            )
+        }
+        #expect(try await repository.getPermissionState(productId: productId, permission: temporary) == .notDetermined)
+        #expect(try await repository.getPermissionState(productId: productId, permission: newPermission) == .notDetermined)
+    }
 }

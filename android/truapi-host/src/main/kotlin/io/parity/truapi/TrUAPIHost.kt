@@ -56,6 +56,7 @@ import uniffi.truapi_platform.AuthState
 import uniffi.truapi_platform.HostChainSet
 import uniffi.truapi_platform.PermissionAuthorizationRequest
 import uniffi.truapi_platform.PermissionAuthorizationStatus
+import uniffi.truapi_platform.PermissionDecision
 import uniffi.truapi_platform.UserConfirmationReview
 import uniffi.truapi_server.HostCallbacks
 import uniffi.truapi_server.NativeChatCallbacks
@@ -221,7 +222,7 @@ interface HostCoreStorage {
  *     application running inside the WebView.
  *
  * Embedders render the typed request values in their own UI, then report the
- * user's decision as a `Boolean`.
+ * user's decision as a `PermissionDecision`.
  *
  * Threading: the Rust core invokes every callback on a background thread it
  * owns, never the UI (main) thread. These six each run on their own thread from
@@ -262,13 +263,13 @@ interface HostBridge {
     fun cancelNotification(id: UInt) {}
 
     /**
-     * Prompt for a device-level permission. Returns whether it was granted.
+     * Prompt for a device-level permission, preserving whether approval applies once or always.
      * Invoked on a blocking-pool thread; present the prompt on the main thread
      * and block the calling thread until the user decides. Blocking here does
      * not stall other TrUAPI traffic.
      */
     @Throws(HostRejection::class)
-    suspend fun devicePermission(request: HostDevicePermissionRequest): Boolean
+    suspend fun devicePermission(request: HostDevicePermissionRequest): PermissionDecision
 
     /**
      * Report the OS status of a device capability without prompting. Answer from
@@ -297,7 +298,7 @@ interface HostBridge {
      * TrUAPI traffic.
      */
     @Throws(HostRejection::class)
-    suspend fun remotePermission(request: RemotePermission): Boolean
+    suspend fun remotePermission(request: RemotePermission): PermissionDecision
 
     /**
      * Observe an auth state change, in transition order: render
@@ -492,14 +493,14 @@ private class HostCallbackAdapter(private val bridge: HostBridge) : HostCallback
     override fun cancelNotification(id: UInt) =
         withHostRejection { bridge.cancelNotification(id) }
 
-    override suspend fun devicePermission(request: HostDevicePermissionRequest): Boolean =
+    override suspend fun devicePermission(request: HostDevicePermissionRequest): PermissionDecision =
         withHostRejection { bridge.devicePermission(request) }
 
     override suspend fun devicePermissionStatus(
         request: HostDevicePermissionRequest,
     ): NativeDevicePermissionStatus = withHostRejection { bridge.devicePermissionStatus(request) }
 
-    override suspend fun remotePermission(request: RemotePermission): Boolean =
+    override suspend fun remotePermission(request: RemotePermission): PermissionDecision =
         withHostRejection { bridge.remotePermission(request) }
 
     override fun authStateChanged(state: AuthState) {

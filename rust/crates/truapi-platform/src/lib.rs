@@ -35,14 +35,14 @@ use truapi::latest::{
     HostChatCreateRoomError, HostChatCreateRoomRequest, HostChatCreateRoomResponse,
     HostChatListSubscribeItem, HostChatPostMessageError, HostChatPostMessageRequest,
     HostChatPostMessageResponse, HostChatRegisterBotError, HostChatRegisterBotRequest,
-    HostChatRegisterBotResponse, HostDevicePermissionRequest, HostDevicePermissionResponse,
-    HostFeatureSupportedRequest, HostFeatureSupportedResponse, HostLocaleSubscribeItem,
-    HostNavigateToError, HostPlatform, HostPocketListSubscribeItem, HostPocketRemoveCardError,
-    HostPocketRemoveCardRequest, HostPushNotificationRequest, HostPushNotificationResponse,
-    HostSignPayloadRequest, HostSignPayloadWithLegacyAccountRequest, HostSignRawRequest,
+    HostChatRegisterBotResponse, HostDevicePermissionRequest, HostFeatureSupportedRequest,
+    HostFeatureSupportedResponse, HostLocaleSubscribeItem, HostNavigateToError, HostPlatform,
+    HostPocketListSubscribeItem, HostPocketRemoveCardError, HostPocketRemoveCardRequest,
+    HostPushNotificationRequest, HostPushNotificationResponse, HostSignPayloadRequest,
+    HostSignPayloadWithLegacyAccountRequest, HostSignRawRequest,
     HostSignRawWithLegacyAccountRequest, HostThemeSubscribeItem, LegacyAccountTxPayload,
     NotificationId, ProductAccountId, ProductAccountTxPayload, ProductProofContext,
-    RemotePermission, RemotePermissionRequest, RemotePermissionResponse, RingLocation,
+    RemotePermission, RemotePermissionRequest, RingLocation,
 };
 use truapi::v01::HostAccountSignVrfRequest;
 use url::{Host, Url};
@@ -309,6 +309,9 @@ pub fn has_dotns_tld(normalized: &str) -> bool {
 /// Entries carry no TLD, so one entry covers the product on every network in
 /// [`DOTNS_TLDS`].
 pub const REMOTE_PERMISSION_TRUSTED_LABELS: &[&str] = &["peopl", "dim2", "stash"];
+
+/// Hosts available to every product unless a stored permission decision blocks them.
+pub const BLESSED_REMOTE_DOMAINS: &[&str] = &["fonts.googleapis.com", "fonts.gstatic.com"];
 
 /// Whether `product_id` holds every [`RemotePermission`] without prompting.
 ///
@@ -1017,6 +1020,18 @@ pub trait Notifications: Send + Sync {
     }
 }
 
+/// User decision including how long an authorization should last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PermissionDecision {
+    /// Authorize the next operation without saving a durable grant.
+    AllowOnce,
+    /// Save an authorization for future operations.
+    AllowAlways,
+    /// Save a refusal of the requested permission.
+    Deny,
+}
+
 /// Permission prompts. Device permissions (camera, mic, NFC, ...) are separate
 /// from remote permissions (domain access, chain submit, ...), so the platform
 /// surface mirrors that split.
@@ -1026,13 +1041,13 @@ pub trait Permissions: Send + Sync {
     async fn device_permission(
         &self,
         request: HostDevicePermissionRequest,
-    ) -> Result<HostDevicePermissionResponse, GenericError>;
+    ) -> Result<PermissionDecision, GenericError>;
 
     /// Prompt the user for a remote (product-scoped) permission bundle.
     async fn remote_permission(
         &self,
         request: RemotePermissionRequest,
-    ) -> Result<RemotePermissionResponse, GenericError>;
+    ) -> Result<PermissionDecision, GenericError>;
 }
 
 /// Permission request whose authorization status can be inspected or updated
@@ -1055,7 +1070,7 @@ pub enum PermissionAuthorizationRequest {
 
 /// Authorization status for a permission request.
 ///
-/// `NotDetermined` means the core has no persisted answer and will prompt the
+/// `NotDetermined` means the core has no saved or one-use answer and will prompt the
 /// host the next time the product requests this permission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

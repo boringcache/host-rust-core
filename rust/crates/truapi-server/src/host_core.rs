@@ -948,6 +948,8 @@ pub(crate) struct ConnectionAdapters {
     /// product execution, so the object that reports OS state has to be the
     /// same one that presents the prompt.
     pub(crate) permission_status: Option<Arc<dyn PermissionStatusHost>>,
+    /// SDK and internal network connections must share an execution's one-use grants.
+    pub(crate) permission_grants: Arc<crate::host_logic::permissions::TemporaryPermissions>,
     pub(crate) chat: Arc<ActionChannel<truapi::versioned::chat::HostChatActionSubscribeItem>>,
     pub(crate) renderer:
         Arc<ActionChannel<truapi::versioned::renderer::HostRendererActionSubscribeItem>>,
@@ -961,6 +963,7 @@ impl ConnectionAdapters {
             platform: services.platform.clone(),
             chat_platform: services.chat_platform.clone(),
             permission_status: services.permission_status_host(),
+            permission_grants: Arc::default(),
             chat: Arc::new(ActionChannel::chat()),
             renderer: Arc::new(ActionChannel::renderer()),
             pocket_platform: services.pocket_platform(),
@@ -1769,6 +1772,108 @@ mod tests {
                         },
                     ],
                 )
+            );
+        });
+    }
+
+    #[test]
+    fn network_authorization_frames_consume_an_upfront_one_use_grant() {
+        use truapi::CallError;
+        use truapi::versioned::permissions::{
+            AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest,
+            AuthorizeNetworkAccessResponse, RemotePermissionError,
+        };
+        use truapi_platform::PermissionDecision;
+
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform {
+                remote_permission_denied: true,
+                remote_permission_decisions: Mutex::new([PermissionDecision::AllowOnce].into()),
+                ..Default::default()
+            });
+            let sink = Arc::new(RecordingSink::default());
+            let (config, product) = runtime_config("fetch.dot");
+            let runtime = ProductRuntime::from_platform_with_config(
+                platform.clone(),
+                config,
+                product,
+                test_spawner(),
+                sink.clone(),
+            );
+            let permission = RemotePermissionRequest {
+                permission: RemotePermission::Remote {
+                    domains: vec!["api.example.com".to_string()],
+                },
+            };
+            let authorize = |url: &str| {
+                AuthorizeNetworkAccessRequest::V1(v01::AuthorizeNetworkAccessRequest {
+                    url: url.to_string(),
+                })
+                .encode()
+            };
+            let allowed = |allowed| {
+                Ok::<_, CallError<AuthorizeNetworkAccessError>>(AuthorizeNetworkAccessResponse::V1(
+                    v01::AuthorizeNetworkAccessResponse { allowed },
+                ))
+                .encode()
+            };
+            let requests = [
+                (
+                    "permissions_request_remote_permission",
+                    truapi::versioned::permissions::RemotePermissionRequest::V1(permission.clone())
+                        .encode(),
+                    Ok::<_, CallError<RemotePermissionError>>(
+                        truapi::versioned::permissions::RemotePermissionResponse::V1(
+                            RemotePermissionResponse { granted: true },
+                        ),
+                    )
+                    .encode(),
+                ),
+                (
+                    "permissions_authorize_network_access",
+                    authorize("file:///etc/passwd"),
+                    Err::<AuthorizeNetworkAccessResponse, _>(CallError::Domain(
+                        AuthorizeNetworkAccessError::V1(v01::GenericError {
+                            reason: "network access requires a concrete HTTP(S) or WS(S) URL"
+                                .to_string(),
+                        }),
+                    ))
+                    .encode(),
+                ),
+                (
+                    "permissions_authorize_network_access",
+                    authorize("https://api.example.com/first"),
+                    allowed(true),
+                ),
+                (
+                    "permissions_authorize_network_access",
+                    authorize("https://api.example.com/second"),
+                    allowed(false),
+                ),
+            ];
+            let mut expected = Vec::new();
+            for (index, (method, value, response)) in requests.into_iter().enumerate() {
+                let ids = crate::frame::request_ids(method).expect("known permission request");
+                let mut frame = ProtocolMessage {
+                    request_id: format!("permission:{index}"),
+                    payload: Payload {
+                        trait_id: ids.trait_id,
+                        method_id: ids.method_id,
+                        message_type: crate::frame::MESSAGE_TYPE_REQUEST,
+                        value,
+                    },
+                };
+                runtime.receive_frame(frame.encode()).await.unwrap();
+                frame.payload.message_type = crate::frame::MESSAGE_TYPE_RESPONSE;
+                frame.payload.value = response;
+                expected.push(frame.encode());
+            }
+            assert_eq!(
+                (
+                    sink.frames.lock().unwrap().clone(),
+                    platform.remote_permission_requests.lock().unwrap().clone(),
+                ),
+                (expected, vec![permission.clone(), permission]),
             );
         });
     }

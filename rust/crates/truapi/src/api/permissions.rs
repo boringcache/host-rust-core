@@ -1,6 +1,7 @@
 //! Unified [`Permissions`] trait.
 
 use crate::versioned::permissions::{
+    AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest, AuthorizeNetworkAccessResponse,
     HostDevicePermissionError, HostDevicePermissionRequest, HostDevicePermissionResponse,
     RemotePermissionError, RemotePermissionRequest, RemotePermissionResponse,
 };
@@ -47,4 +48,22 @@ pub trait Permissions: Send + Sync {
         cx: &CallContext,
         request: RemotePermissionRequest,
     ) -> Result<RemotePermissionResponse, CallError<RemotePermissionError>>;
+
+    /// Authorize one network operation for the current product, consuming an
+    /// available one-use grant. Used by the host's fetch wrapper immediately
+    /// before invoking native fetch.
+    ///
+    /// ```ts
+    /// const result = await truapi.permissions.authorizeNetworkAccess({
+    ///   url: "https://api.frankfurter.dev/v2/rates?base=EUR&quotes=USD",
+    /// });
+    /// assert(result.isOk(), "network authorization failed:", result);
+    /// console.log("network operation allowed:", result.value.allowed);
+    /// ```
+    #[wire(id = 2)]
+    async fn authorize_network_access(
+        &self,
+        cx: &CallContext,
+        request: AuthorizeNetworkAccessRequest,
+    ) -> Result<AuthorizeNetworkAccessResponse, CallError<AuthorizeNetworkAccessError>>;
 }

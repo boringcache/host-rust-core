@@ -18,8 +18,8 @@ export function makeHostCallbacks(
       cancelNotification: async () => {},
     },
     permissions: {
-      devicePermission: async () => ({ granted: false }),
-      remotePermission: async () => ({ granted: false }),
+      devicePermission: async () => "Deny",
+      remotePermission: async () => "Deny",
     },
     features: {
       featureSupported: async () => ({ supported: false }),

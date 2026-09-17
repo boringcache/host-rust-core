@@ -75,6 +75,8 @@ pub type StorageWriteHook = Arc<dyn Fn() + Send + Sync>;
 #[derive(Default)]
 pub(crate) struct StubPlatform {
     pub(crate) remote_permission_denied: bool,
+    pub(crate) remote_permission_decisions:
+        Mutex<std::collections::VecDeque<truapi_platform::PermissionDecision>>,
     /// Every `remote_permission` request, in order, so a test can assert which
     /// domains reached the prompt and that a stored grant suppresses a re-ask.
     pub(crate) remote_permission_requests: Arc<Mutex<Vec<v01::RemotePermissionRequest>>>,
@@ -973,20 +975,30 @@ impl PlatformPermissions for StubPlatform {
     async fn device_permission(
         &self,
         _request: v01::HostDevicePermissionRequest,
-    ) -> Result<v01::HostDevicePermissionResponse, v01::GenericError> {
-        Ok(v01::HostDevicePermissionResponse { granted: true })
+    ) -> Result<truapi_platform::PermissionDecision, v01::GenericError> {
+        Ok(truapi_platform::PermissionDecision::AllowAlways)
     }
 
     async fn remote_permission(
         &self,
         request: v01::RemotePermissionRequest,
-    ) -> Result<v01::RemotePermissionResponse, v01::GenericError> {
+    ) -> Result<truapi_platform::PermissionDecision, v01::GenericError> {
         self.remote_permission_requests
             .lock()
             .expect("remote permission list mutex poisoned")
             .push(request);
-        Ok(v01::RemotePermissionResponse {
-            granted: !self.remote_permission_denied,
+        if let Some(decision) = self
+            .remote_permission_decisions
+            .lock()
+            .expect("remote permission decisions mutex poisoned")
+            .pop_front()
+        {
+            return Ok(decision);
+        }
+        Ok(if self.remote_permission_denied {
+            truapi_platform::PermissionDecision::Deny
+        } else {
+            truapi_platform::PermissionDecision::AllowAlways
         })
     }
 }

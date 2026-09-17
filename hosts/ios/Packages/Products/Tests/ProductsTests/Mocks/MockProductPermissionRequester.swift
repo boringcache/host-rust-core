@@ -3,6 +3,7 @@ import Foundation
 
 final class MockProductPermissionRequester: ProductPermissionRequesting, @unchecked Sendable {
     var decision: PermissionDecision = .allowAlways
+    var onPrompt: (@Sendable () -> Void)?
 
     private(set) var promptCalls: [(productId: String, permission: ProductPermission)] = []
     private(set) var promptBatchedCalls: [(productId: String, permissions: [ProductPermission])] = []
@@ -12,6 +13,7 @@ final class MockProductPermissionRequester: ProductPermissionRequesting, @unchec
         permission: ProductPermission
     ) async -> PermissionDecision {
         promptCalls.append((productId, permission))
+        onPrompt?()
         return decision
     }
 
@@ -20,6 +22,7 @@ final class MockProductPermissionRequester: ProductPermissionRequesting, @unchec
         permissions: [ProductPermission]
     ) async -> PermissionDecision {
         promptBatchedCalls.append((productId, permissions))
+        onPrompt?()
         return decision
     }
 }

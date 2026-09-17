@@ -14,7 +14,6 @@ import {
   HostChatRegisterBotRequest,
   HostChatRegisterBotResponse,
   HostDevicePermissionRequest,
-  HostDevicePermissionResponse,
   HostFeatureSupportedRequest,
   HostFeatureSupportedResponse,
   HostLocaleSubscribeItem,
@@ -24,7 +23,6 @@ import {
   HostPushNotificationResponse,
   HostThemeSubscribeItem,
   RemotePermissionRequest,
-  RemotePermissionResponse,
 } from "@parity/truapi";
 import type { GenericError, NotificationId } from "@parity/truapi";
 import {
@@ -32,6 +30,7 @@ import {
   CoreStorageKey,
   DevicePermissionStatus,
   HostChainSet,
+  PermissionDecision,
   ProductContext,
   UserConfirmationReview,
 } from "./host-callbacks.js";
@@ -186,13 +185,13 @@ export function createWasmRawCallbacks(
         }
       : {}),
     devicePermission: async (request) =>
-      HostDevicePermissionResponse.enc(
+      PermissionDecision.enc(
         await callbacks.permissions.devicePermission(
           HostDevicePermissionRequest.dec(request),
         ),
       ),
     remotePermission: async (request) =>
-      RemotePermissionResponse.enc(
+      PermissionDecision.enc(
         await callbacks.permissions.remotePermission(
           RemotePermissionRequest.dec(request),
         ),

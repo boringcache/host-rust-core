@@ -9,7 +9,7 @@ The package lives in the truapi repo next to the Rust core it wraps. `Package.sw
 The `TrUAPIHost` SPM package an iOS host app imports directly. It carries:
 
 - [`Sources/TrUAPIHost/TrUAPIHost.swift`](Sources/TrUAPIHost/TrUAPIHost.swift) — the hand-written shell: `TrUAPIHostRuntime`, `TrUAPIProductExecution`, their configuration and bridge protocols, and `LocalhostBridgeBootstrap`.
-- [`Sources/TrUAPIHost/ProductScripts.swift`](Sources/TrUAPIHost/ProductScripts.swift) registers the shared container in every frame. Its web-view overload installs permission-controlled networking and returns a `ProductScriptInstallation` to retain with the view.
+- [`Sources/TrUAPIHost/ProductScripts.swift`](Sources/TrUAPIHost/ProductScripts.swift) registers the shared container in every frame. The patched fetch asks Rust directly through the existing WebSocket bridge.
 - the Rust core as a binary target — a GitHub release asset by default (`publishedBinaryURL` in the root `Package.swift`), or the locally built `Binaries/truapi_server.xcframework` when `useLocalBinary` is flipped to true.
 - `Sources/TrUAPIHost/truapi_server.swift` and `Sources/truapi_serverFFI/include/` — the generated UniFFI bindings.
 - [`js/container/`](../../js/container) — the TS lockdown container; built into `Sources/TrUAPIHost/Resources/truapi-container.js` and exposed via `ContainerScriptBundle.load()`.
@@ -249,7 +249,9 @@ The core's `Permissions` platform trait has two methods, and so does `HostCallba
 - `devicePermission(request:)` - OS-scoped grants (camera, mic, location, push). `request` is a typed `HostDevicePermissionRequest`.
 - `remotePermission(request:)` - per-product capabilities. `request` is a typed `RemotePermission`.
 
-Both return a `Bool` granted flag; the host renders the typed request in its own prompt UI. The same typed values drive the `TrUAPIProductExecution` permission admin API (`permissionAuthorizationStatus`, `setPermissionAuthorizationStatus`), which reads and updates the persisted decisions without prompting.
+Both return `PermissionDecision`: `.allowOnce`, `.allowAlways`, or `.deny`. Preserve the user’s choice; the core keeps one-use grants in memory and consumes them at the authorized operation. OS refusal after app consent should throw instead of returning `.deny`, which records a product denial. The same typed values drive the `TrUAPIProductExecution` permission admin API (`permissionAuthorizationStatus`, `setPermissionAuthorizationStatus`), which reads and updates the persisted decisions without prompting.
+
+Fetch and existing remote-operation gates consume temporary grants. The current iOS camera/microphone checks only inspect status, so device one-use enforcement still requires a consuming operation path.
 
 ## SSO session handling
 
@@ -386,14 +388,14 @@ final class MyBridge: HostBridge, @unchecked Sendable {
         DispatchQueue.main.async { /* cancel notification */ }
     }
 
-    func devicePermission(request: HostDevicePermissionRequest) async throws -> Bool {
+    func devicePermission(request: HostDevicePermissionRequest) async throws -> PermissionDecision {
         // Awaited by the core: present the prompt and suspend until the user
         // decides. Other TrUAPI traffic keeps flowing while suspended.
-        await MainActor.run { /* show prompt for request (.camera, .microphone, ...); */ false }
+        await MainActor.run { /* show prompt for request (.camera, .microphone, ...); */ PermissionDecision.deny }
     }
 
-    func remotePermission(request: RemotePermission) async throws -> Bool {
-        await MainActor.run { /* show prompt for request (.chainSubmit, .remote(domains:), ...); */ false }
+    func remotePermission(request: RemotePermission) async throws -> PermissionDecision {
+        await MainActor.run { /* show prompt for request (.chainSubmit, .remote(domains:), ...); */ PermissionDecision.deny }
     }
 
     // Core-owned auth state stream: render `.connected`/`.disconnected` as the
@@ -466,26 +468,23 @@ runtime.notifyChainClosed(connectionId: chainConnectionId)
 
 // Install before loading. The product URL comes from trusted host resolution.
 let configuration = WKWebViewConfiguration()
-configuration.websiteDataStore = .nonPersistent()
 let webView = WKWebView(frame: .zero, configuration: configuration)
 let productURL = URL(string: "https://your-product.example/")!
-let installation = try await TrUAPIHost.installProductScripts(
+try await TrUAPIHost.installProductScripts(
     into: webView,
     execution: execution,
-    endpoint: endpoint,
-    productURL: productURL
+    endpoint: endpoint
 )
 webView.load(URLRequest(url: productURL))
 
-// Retain installation with the view. Use this setter while views exist so
-// native request rules are restricted before the shared Rust decision changes.
-try await installation.setPermissionAuthorizationStatus(
+// Settings changes apply to subsequent permission-checked operations.
+try execution.setPermissionAuthorizationStatus(
     request: .remote(RemotePermissionRequest(permission: .remote(domains: ["api.example.com"]))),
     status: .denied
 )
 
-// On view teardown, before closing its execution:
-installation.dispose()
+// On view teardown:
+webView.stopLoading()
 execution.close()
 
 // On logout:
@@ -494,15 +493,15 @@ runtime.disconnect()
 
 The product page reads `window.__truapi_localhost.url` (set by the bootstrap script) and passes it to `@parity/truapi`'s `createWebSocketProvider(url)`.
 
-The web-view installation calls Rust's `authorizeNetworkAccess(url:)` through a native WebKit reply handler. It installs content rules that block unapproved network destinations, including fetch redirects, while preserving the exact product origin and bridge endpoint. A successful remote fetch registers that origin for WebKit's `raw` resource category. Remote images, scripts, and other resource categories remain blocked. The container still runs in every frame; only the main frame receives the authorization bridge.
+The shared container captures a private WebSocket connection to the product execution and asks Rust to authorize each fetch before invoking the native browser fetch. Swift supplies the endpoint and handles native permission prompts; it does not relay individual fetch permission messages. An upfront permission request and a fetch are separate operations, so an Allow once decision is consumed by the next permitted operation rather than persisted.
 
-The helper requires an unloaded web view, a nonpersistent website data store and an empty navigation delegate, then installs its own product-origin navigation check. It throws rather than replacing an existing delegate. A host that subsequently composes navigation handling must apply `installation.allowsNavigation(to:)` before allowing any load. Do not remove the installed content rules or message handler while the view is live.
+The installer adds the bootstrap and container scripts before loading. It preserves the host's website data store and navigation delegate. Hosts that assemble their own script lists can keep using `LocalhostBridgeBootstrap.script` followed by `ContainerScriptBundle.load()`, with the container injected into every frame.
 
-Use `installation.setPermissionAuthorizationStatus` for settings changes while views exist. It first restricts every live package-installed view, then updates Rust and refreshes each view against its own execution. Previously registered origins remain available for rechecking after overlapping settings changes. Disposing another view during refresh does not fail a committed settings change. This includes other executions of the same product; other products may briefly have remote loads blocked during the update. Calling the execution's low-level setter directly cannot update existing WebKit rules. Dispose installations before closing executions, switching products or disconnecting the runtime. Discard the view afterwards; create a fresh view for another product or installation.
+Redirects and stylesheet/font loads retain native WebKit behavior. They are not separately checked by the fetch wrapper. There is no content-rule registration, global settings refresh or installation disposal requirement. Close the execution when its product stops, and maintain the host's existing web-view navigation and teardown behavior.
 
-Redirects to origins that have never been registered by an authorized fetch in this view currently fail closed, even when Rust already stores a grant for the destination. Explicitly fetching the destination registers it. This conservative adapter does not enumerate wildcard grants into browser rules.
+Build the generated JavaScript SDK before the container: from the repository root, run `npm ci --ignore-scripts`, `npm run build --prefix js/packages/truapi`, then `npm run build --prefix js/container`. A protocol change also requires regenerating the SDK through the repository's normal build pipeline.
 
-Native verification must use the built container in a real WKWebView. `ProductNetworkAccessTests` checks grant/fetch, denied and unseen redirect destinations, revocation across two executions, raw preload before and after revocation, exact rule matching, overlapping grant/deny settings, and disposal of another view during refresh, including asynchronous rule-cache cleanup. The UIKit test host gives each web view a visible window on its active scene, with ordinary WebKit scheduling. These Apple-only tests cannot run on Linux. Consumer apps that assemble their own scripts must adopt the web-view helper and safe settings/teardown paths; rebuilding this package alone does not update that wiring.
+`ProductNetworkAccessTests` exercises grant/deny/revocation, one-use fetch authorization, native redirects, stylesheet/font requests, and preserving a persistent store and existing navigation delegate. The tests require the built container, current Rust bindings and a real WKWebView in the UIKit test host. These Apple-only tests cannot run on Linux.
 
 
 ## Build outputs in detail

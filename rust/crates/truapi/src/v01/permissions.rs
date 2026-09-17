@@ -3,9 +3,8 @@ use parity_scale_codec::{Decode, Encode};
 
 /// Device-capability permission requested from the host (RFC 0002).
 ///
-/// The user's decision is persisted indefinitely after the first prompt and
-/// survives app restarts, whether the decision was grant or deny; the host
-/// does not re-prompt on subsequent requests for the same capability.
+/// Lasting grants and denials survive app restarts. A host may also offer a
+/// one-use grant, held in memory until a permission-gated operation consumes it.
 ///
 /// That decision is about this product. The OS grant behind it belongs to the
 /// host application and can move independently, so a host that can read OS
@@ -114,4 +113,18 @@ pub struct HostDevicePermissionResponse {
 pub struct RemotePermissionResponse {
     /// Whether the permission was granted.
     pub granted: bool,
+}
+
+/// Network operation whose permission is checked immediately before use.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct AuthorizeNetworkAccessRequest {
+    /// Concrete HTTP(S) or WS(S) destination.
+    pub url: String,
+}
+
+/// Authorization for one network operation, consuming a temporary grant.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct AuthorizeNetworkAccessResponse {
+    /// Whether the operation may proceed.
+    pub allowed: bool,
 }

@@ -13,7 +13,16 @@ owner: "@johnthecat"
 
 ## Summary
 
-The Host API currently has two underdefined permission calls — `host_device_permission` and `remote_permission` — that lack coverage for several device capabilities (NFC, Clipboard, OpenUrl, Biometrics), do not support batched remote-permission requests, and have no specified lifecycle for when prompts occur or how decisions are persisted. This RFC defines the complete set of device and remote permissions, updates the `remote_permission` signature to accept a batch, specifies that permission decisions are prompted once and then stored permanently, and establishes that business methods (`host_sign_raw`, `host_sign_payload`, `host_create_transaction`, `host_create_transaction_with_non_product_account`, `remote_statement_store_submit`, `remote_preimage_submit`, `remote_chain_transaction_broadcast`) implicitly trigger permission prompts if permission has not yet been granted.
+The host callback distinguishes `AllowOnce`, `AllowAlways`, and `Deny`.
+One-use grants stay in memory for the product execution and are consumed by
+the operation that needs them. Requesting permission upfront does not consume
+the grant. Product-facing permission responses remain boolean.
+
+`BLESSED_REMOTE_DOMAINS` holds the domains that need no prompt, initially
+`fonts.googleapis.com` and `fonts.gstatic.com`. An explicit matching denial
+overrides this exception. These implicit grants are not written to storage.
+
+The Host API currently has two underdefined permission calls — `host_device_permission` and `remote_permission` — that lack coverage for several device capabilities (NFC, Clipboard, OpenUrl, Biometrics), do not support batched remote-permission requests, and have no specified lifecycle for when prompts occur or how decisions are persisted. This RFC defines the complete set of device and remote permissions, updates the `remote_permission` signature to accept a batch, specifies lasting and one-use permission decisions, and establishes that business methods (`host_sign_raw`, `host_sign_payload`, `host_create_transaction`, `host_create_transaction_with_non_product_account`, `remote_statement_store_submit`, `remote_preimage_submit`, `remote_chain_transaction_broadcast`) implicitly trigger permission prompts if permission has not yet been granted.
 
 ## Motivation
 
@@ -165,12 +174,24 @@ later request for one of those domains alone still gets its own prompt.
 ### Permission Lifecycle
 
 1. **First request** — When a permission is requested for the first time (either via an explicit permission API call or implicitly by a business method), the Host prompts the user with an approval dialog.
-2. **Decision persisted** — The user's decision (grant or deny) is stored by the Host and associated with the product identity. The persistence scope is indefinite; the decision survives app restarts and session boundaries.
-3. **Subsequent requests** — All subsequent calls for the same permission resolve immediately from persisted state without showing a prompt. The product does not need to re-request a permission it has already obtained.
+2. **Decision lifetime**: `AllowAlways` and `Deny` are stored for the product and survive restarts. `AllowOnce` stays in memory for the execution and authorizes one operation. It is never converted into a durable grant.
+3. **Subsequent requests**: Saved decisions resolve without another prompt. An upfront permission request can observe a one-use grant without consuming it; the operation atomically consumes it. After consumption, the next operation needs another decision unless a lasting grant or an automatic exemption covers it.
 4. **Device capabilities are also gated by the OS** — A device permission has a second gate the persisted decision does not describe: the OS grant held by the host application, which the user can revoke in system settings, device policy can suspend, and the platform can reset on its own. A host that can read that state serves `PermissionStatusHost`, and a device capability then resolves as usable only while both gates are open. An OS refusal denies the request without a prompt, since only system settings can reach it, and leaves the persisted product decision in place for when the user restores the OS grant. An OS grant that is merely undetermined does not change the answer: the OS puts its own dialog up when the capability is used, and the core cannot reach that dialog without also re-asking the product's question, which step 3 forbids. Reading a status without prompting resolves the same two gates, so a host settings screen and a request cannot disagree about whether a capability is usable. A host that cannot report OS state resolves from the persisted decision alone.
 5. **Revocation** — Revocation of the product-scoped decision is out of scope for this RFC. Hosts MAY provide a settings interface for users to revoke permissions, but the protocol does not define a revocation notification to the product.
 
 Products MAY request permissions lazily (on first use) or upfront during initialization. Both patterns are valid. Requesting upfront is recommended when the product can predict its needs, as it provides a better user experience by batching consent into a single moment.
+
+The shared fetch wrapper calls `permissions.authorizeNetworkAccess` through
+the existing product protocol before invoking native fetch. Rust parses the
+URL and authorizes its host, consuming a one-use grant when applicable. The
+wrapper checks the initial URL; native fetch retains the legacy redirect
+behavior. Redirect targets and DOM resource loads are not separately checked
+by this wrapper. Swift supplies native callbacks, such as the permission
+dialog, but does not forward the wrapper's authorization messages.
+
+The current implementation consumes temporary grants for fetch and existing
+remote-operation gates. Native browser camera/microphone checks still inspect
+status without consuming a grant; their operation integration remains incomplete.
 
 ### Implicit Permission Triggering by Business Methods
 

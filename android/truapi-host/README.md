@@ -156,7 +156,7 @@ The core's `Permissions` platform trait has two methods, and so does the bridge:
 - `devicePermission(request)` - OS-scoped grants (camera, mic, location, push). `request` is a typed `HostDevicePermissionRequest`.
 - `remotePermission(request)` - per-product capabilities. `request` is a typed `RemotePermission`.
 
-Both return a `Boolean` granted flag; the host renders the typed request in its own prompt UI. The same typed values drive the `TrUAPIProductExecution` permission admin API (`permissionAuthorizationStatus`, `setPermissionAuthorizationStatus`), which reads and updates the persisted decisions without prompting.
+Both return `PermissionDecision` (`ALLOW_ONCE`, `ALLOW_ALWAYS`, or `DENY`). Preserve the choice so the core can consume one-use grants without persisting them. OS refusal after app consent should throw rather than record a product denial. The same typed values drive the `TrUAPIProductExecution` permission admin API (`permissionAuthorizationStatus`, `setPermissionAuthorizationStatus`), which reads and updates the persisted decisions without prompting.
 
 ## Statement-store allowance renewal
 
@@ -257,6 +257,7 @@ import uniffi.truapi.ThemeVariant
 import uniffi.truapi.HostDevicePermissionRequest
 import uniffi.truapi.RemotePermission
 import uniffi.truapi_platform.UserConfirmationReview
+import uniffi.truapi_platform.PermissionDecision
 import uniffi.truapi.HostPushNotificationRequest
 
 class MyStorage : HostStorage {
@@ -297,14 +298,14 @@ class MyBridge(private val webView: WebView) : HostBridge {
         main.post { /* cancel notification */ }
     }
 
-    override suspend fun devicePermission(request: HostDevicePermissionRequest): Boolean {
+    override suspend fun devicePermission(request: HostDevicePermissionRequest): PermissionDecision {
         // Awaited by the core: present the prompt for the requested capability
         // (CAMERA, MICROPHONE, ...) and suspend until the user decides. Other
         // TrUAPI traffic keeps flowing while suspended.
-        return withContext(Dispatchers.Main) { /* show prompt; */ false }
+        return withContext(Dispatchers.Main) { /* show prompt; */ PermissionDecision.DENY }
     }
 
-    override suspend fun remotePermission(request: RemotePermission): Boolean = false
+    override suspend fun remotePermission(request: RemotePermission): PermissionDecision = PermissionDecision.DENY
     override suspend fun featureSupported(request: HostFeatureSupportedRequest): Boolean = false
 
     // Core-owned auth state stream: render AuthState.Pairing as the pairing
@@ -335,7 +336,7 @@ class MyBridge(private val webView: WebView) : HostBridge {
     // ResourceAllocation / PreimageSubmit / ...) to render the prompt with its
     // typed fields.
     override suspend fun confirmUserAction(review: UserConfirmationReview): Boolean {
-        return withContext(Dispatchers.Main) { /* show prompt; */ false }
+        return withContext(Dispatchers.Main) { /* show prompt; */ PermissionDecision.DENY }
     }
 }
 

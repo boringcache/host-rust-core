@@ -1644,7 +1644,7 @@ where
         });
     }
     {
-        let host = host;
+        let host = host.clone();
         dispatcher.on_request(wire_table::PERMISSIONS_REQUEST_REMOTE_PERMISSION, move |request_id: String, bytes: Vec<u8>| {
             let host = host.clone();
             Box::pin(async move {
@@ -1662,6 +1662,34 @@ where
                 let result: Result<versioned::permissions::RemotePermissionResponse, truapi::CallError<versioned::permissions::RemotePermissionError>> =
                     match host.request_remote_permission(&cx, request).await {
                         Ok(response) => Ok(<versioned::permissions::RemotePermissionResponse as truapi::versioned::FromLatest>::from_latest(
+                            truapi::versioned::IntoLatest::into_latest(response),
+                            target_version,
+                        )),
+                        Err(err) => Err(downgrade_call_error(err, target_version)),
+                    };
+                result.encode()
+            })
+        });
+    }
+    {
+        let host = host;
+        dispatcher.on_request(wire_table::PERMISSIONS_AUTHORIZE_NETWORK_ACCESS, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let request: versioned::permissions::AuthorizeNetworkAccessRequest = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<versioned::permissions::AuthorizeNetworkAccessError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        let result: Result<versioned::permissions::AuthorizeNetworkAccessResponse, truapi::CallError<versioned::permissions::AuthorizeNetworkAccessError>> = Err(error);
+                        return result.encode();
+                    }
+                };
+                let target_version = request.version();
+                let cx = CallContext::with_request_id(request_id);
+                let result: Result<versioned::permissions::AuthorizeNetworkAccessResponse, truapi::CallError<versioned::permissions::AuthorizeNetworkAccessError>> =
+                    match host.authorize_network_access(&cx, request).await {
+                        Ok(response) => Ok(<versioned::permissions::AuthorizeNetworkAccessResponse as truapi::versioned::FromLatest>::from_latest(
                             truapi::versioned::IntoLatest::into_latest(response),
                             target_version,
                         )),

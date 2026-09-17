@@ -1,17 +1,20 @@
-import { freezeAndDelete, freezeValue } from './freeze.js';
+import { freezeValue } from './freeze.js';
+import type { NetworkAuthorization } from './network-transport.js';
 
 function getter(prototype: object, name: string) {
   return Object.getOwnPropertyDescriptor(prototype, name)!.get!;
 }
 
-export function installFetchGate(win: Window & typeof globalThis): void {
+export function installFetchGate(
+  win: Window & typeof globalThis,
+  authorize: NetworkAuthorization,
+): void {
   const nativeFetch = win.fetch.bind(win);
   const NativeRequest = win.Request;
   const NativeURL = win.URL;
   const NativePromise = win.Promise;
   const NetworkError = win.TypeError;
   const apply = Reflect.apply;
-  const then = NativePromise.prototype.then;
   const requestUrl = getter(NativeRequest.prototype, 'url');
   const requestSignal = getter(NativeRequest.prototype, 'signal');
   const urlOrigin = getter(NativeURL.prototype, 'origin');
@@ -21,9 +24,6 @@ export function installFetchGate(win: Window & typeof globalThis): void {
   const signalReason = getter(win.AbortSignal.prototype, 'reason');
   const addEventListener = win.EventTarget.prototype.addEventListener;
   const removeEventListener = win.EventTarget.prototype.removeEventListener;
-  const authorize = (win as unknown as { __truapi_network__?: unknown })
-    .__truapi_network__;
-  freezeAndDelete(win, '__truapi_network__');
 
   function origin(url: URL): string {
     const value = apply(urlOrigin, url, []);
@@ -40,9 +40,11 @@ export function installFetchGate(win: Window & typeof globalThis): void {
       new NativePromise<Response>((resolve, reject) => {
         let signal: AbortSignal | undefined;
         let settled = false;
+        let cancelAuthorization: (() => void) | undefined;
 
         function finish(): void {
           settled = true;
+          cancelAuthorization?.();
           if (signal) apply(removeEventListener, signal, ['abort', abort]);
         }
 
@@ -89,12 +91,8 @@ export function installFetchGate(win: Window & typeof globalThis): void {
             }
           }
 
-          if (typeof authorize === 'function') {
-            // Native promise callbacks avoid product-controlled thenables and maps.
-            apply(then, authorize(destination), [authorized, deny]);
-          } else {
-            authorized(sameOrigin);
-          }
+          if (sameOrigin) authorized(true);
+          else cancelAuthorization = authorize(destination, authorized);
         } catch (error) {
           if (signal) deny();
           else reject(error);
