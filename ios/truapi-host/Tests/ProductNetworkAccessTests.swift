@@ -90,12 +90,16 @@ struct ProductNetworkAccessTests {
 
         let result = try await withNetworkTestTimeout("media permission") {
             try await product.webView.callAsyncJavaScript("""
+                if (typeof navigator.mediaDevices?.getUserMedia !== 'function') {
+                  throw new Error('Media capture API is not exposed');
+                }
                 const decisions = [];
                 for (let attempt = 0; attempt < 2; attempt++) {
                   try {
                     await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
                     decisions.push('allowed');
-                  } catch {
+                  } catch (error) {
+                    if (!(error instanceof DOMException) || error.name !== 'NotAllowedError') throw error;
                     decisions.push('denied');
                   }
                 }
