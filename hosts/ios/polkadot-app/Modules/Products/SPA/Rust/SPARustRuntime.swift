@@ -72,11 +72,8 @@ extension SPARustRuntime: SPARuntimeProtocol {
         let bootstrapScript = try await executionModel.startBridge()
         let scriptsFactory = SPARustRuntimeScriptsFactory(bootstrapScript: bootstrapScript)
 
-        // Camera/mic media capture (getUserMedia) is answered query-only from
-        // the execution's persisted device authorization. The container leaves
-        // RTCPeerConnection available, so no ContainerBridge is needed.
         await engine.registerJSDeviceCapabilityHandler(
-            executionModel.execution.makeDeviceCapabilityHandler()
+            executionModel.osPermissionAsker.makeDeviceCapabilityHandler()
         )
 
         try await engine.initialize(with: scriptsFactory.makeScripts())

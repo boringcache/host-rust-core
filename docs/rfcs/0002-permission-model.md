@@ -180,6 +180,21 @@ later request for one of those domains alone still gets its own prompt.
 
 Products MAY request permissions lazily (on first use) or upfront during initialization. Both patterns are valid. Requesting upfront is recommended when the product can predict its needs, as it provides a better user experience by batching consent into a single moment.
 
+The shared fetch wrapper calls `permissions.authorizeNetworkAccess` through
+the existing product protocol before invoking native fetch. Rust parses the
+URL and authorizes its host, consuming a one-use grant when applicable. The
+wrapper checks the initial URL; native fetch retains the legacy redirect
+behavior. Redirect targets and DOM resource loads are not separately checked
+by this wrapper. Swift supplies native callbacks, such as the permission
+dialog, but does not forward the wrapper's authorization messages.
+
+The shared container also calls `permissions.authorizeMediaCapture` before each
+`getUserMedia` request. Rust consumes camera and microphone consent for the
+requested tracks. One-use permission covers one capture request; its returned
+stream remains usable until stopped. Another capture requires new authorization,
+including when WebKit reuses its native permission decision. Native delegates
+resolve OS permission without consuming product consent again.
+
 ### Implicit Permission Triggering by Business Methods
 
 The following business methods gate on a specific `RemotePermission` and MUST internally trigger a permission prompt if the permission has not yet been resolved:

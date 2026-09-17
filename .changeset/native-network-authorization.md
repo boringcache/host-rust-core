@@ -3,4 +3,4 @@
 "@parity/truapi-host": minor
 ---
 
-Preserve one-use grants with explicit host permission decisions. Normalize remote domains, match legacy wildcard coverage and navigation permissions, and keep a shared blessed-domain list. Add network, media and WebRTC authorization APIs. Present per-action confirmations without misleading persistent-permission choices.
+Authorize product fetches, asynchronous XHR and remote WebSocket connections directly through the Rust protocol. Preserve one-use grants with explicit host permission decisions and a shared blessed-domain list. Simplify iOS integration by removing the separate WebKit content-rule and authorization relay layer. Present per-action confirmations without misleading persistent-permission choices.
