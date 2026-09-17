@@ -341,6 +341,7 @@ impl ProductRuntimeHost {
             self.authority.sign_statement_store_product_payload(
                 &cx,
                 &session,
+                Some(self.product_id().as_str()),
                 product_account_id,
                 payload,
             ),
@@ -486,6 +487,7 @@ mod tests {
             },
             [0; 32],
             [0xbb; 32],
+            [0xcc; 32],
             test_spawner(),
         );
         let signing_host = SigningHostRole::new(services.clone(), "paseo".to_string());
