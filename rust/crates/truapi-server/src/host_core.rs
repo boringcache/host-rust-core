@@ -19,6 +19,7 @@ use futures::{FutureExt, StreamExt, pin_mut};
 use parity_scale_codec::{Decode, Encode};
 use thiserror::Error;
 use tracing::{instrument, warn};
+use truapi::latest::GenericError;
 use truapi::v01;
 use truapi::{CallContext, CancellationReason};
 use truapi_platform::{ChatPlatform, PermissionStatusHost, PocketPlatform};
@@ -958,6 +959,8 @@ pub(crate) struct ConnectionAdapters {
     /// product execution, so the object that reports OS state has to be the
     /// same one that presents the prompt.
     pub(crate) permission_status: Option<Arc<dyn PermissionStatusHost>>,
+    /// SDK and internal network connections must share an execution's one-use grants.
+    pub(crate) permission_grants: Arc<crate::host_logic::permissions::TemporaryPermissions>,
     pub(crate) chat: Arc<ActionChannel<truapi::versioned::chat::HostChatActionSubscribeItem>>,
     pub(crate) renderer:
         Arc<ActionChannel<truapi::versioned::renderer::HostRendererActionSubscribeItem>>,
@@ -971,6 +974,7 @@ impl ConnectionAdapters {
             platform: services.platform.clone(),
             chat_platform: services.chat_platform.clone(),
             permission_status: services.permission_status_host(),
+            permission_grants: Arc::default(),
             chat: Arc::new(ActionChannel::chat()),
             renderer: Arc::new(ActionChannel::renderer()),
             pocket_platform: services.pocket_platform(),
@@ -1030,6 +1034,15 @@ impl HostAdmin {
     #[instrument(skip_all, fields(runtime.method = "host_admin.disconnect_session"))]
     pub async fn disconnect_session(&self) {
         self.authority.disconnect().await;
+    }
+
+    /// Authorize a concrete HTTP(S)/WS(S) destination, prompting when undecided.
+    #[instrument(skip_all, fields(runtime.method = "host_admin.authorize_network_access"))]
+    pub async fn authorize_network_access(
+        &self,
+        url: String,
+    ) -> Result<PermissionAuthorizationStatus, GenericError> {
+        self.product_runtime.authorize_network_access(url).await
     }
 
     /// Read a stored permission authorization status without prompting.
@@ -1641,6 +1654,7 @@ mod tests {
     use crate::test_support::{StubPlatform, runtime_config, test_spawner, wait_until};
     use parity_scale_codec::Encode;
     use std::sync::atomic::Ordering;
+    use truapi::latest::{RemotePermission, RemotePermissionRequest, RemotePermissionResponse};
 
     #[derive(Default)]
     struct RecordingSink {
@@ -1703,6 +1717,339 @@ mod tests {
     fn assert_send<T: Send>(_: T) {}
 
     fn assert_send_sync<T: Send + Sync>() {}
+
+    fn network_permission(domains: &[&str]) -> PermissionAuthorizationRequest {
+        PermissionAuthorizationRequest::Remote(RemotePermissionRequest {
+            permission: RemotePermission::Remote {
+                domains: domains.iter().map(|domain| domain.to_string()).collect(),
+            },
+        })
+    }
+
+    #[test]
+    fn network_access_reuses_product_grants_and_prompts_only_for_new_domains() {
+        use truapi::api::Permissions;
+
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform::default());
+            let (config, _) = runtime_config("fetch.dot");
+            let runtime = PairingHostRuntime::new(platform.clone(), config, test_spawner());
+            let admin = runtime.product_admin(product_context("fetch.dot").unwrap());
+            let request = RemotePermissionRequest {
+                permission: RemotePermission::Remote {
+                    domains: vec!["api.example.com".to_string()],
+                },
+            };
+            let granted = admin
+                .product_runtime
+                .request_remote_permission(
+                    &truapi::CallContext::default(),
+                    truapi::versioned::permissions::RemotePermissionRequest::V1(request.clone()),
+                )
+                .await
+                .unwrap();
+            let mut decisions = Vec::new();
+            for url in [
+                "https://API.EXAMPLE.COM.:8443/first",
+                "http://api.example.com/second",
+                "wss://api.example.com/socket",
+                "ws://api.example.com/socket",
+                "https://Bücher.example/data",
+            ] {
+                decisions.push(
+                    admin
+                        .authorize_network_access(url.to_string())
+                        .await
+                        .unwrap(),
+                );
+            }
+            let saved = admin
+                .permission_authorization_status(network_permission(&["xn--bcher-kva.example"]))
+                .await
+                .unwrap();
+            let prompted = platform.remote_permission_requests.lock().unwrap().clone();
+            assert_eq!(
+                (granted, decisions, saved, prompted),
+                (
+                    truapi::versioned::permissions::RemotePermissionResponse::V1(
+                        RemotePermissionResponse { granted: true },
+                    ),
+                    vec![PermissionAuthorizationStatus::Authorized; 5],
+                    PermissionAuthorizationStatus::Authorized,
+                    vec![
+                        request,
+                        RemotePermissionRequest {
+                            permission: RemotePermission::Remote {
+                                domains: vec!["xn--bcher-kva.example".to_string()],
+                            },
+                        },
+                    ],
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn network_authorization_frames_consume_an_upfront_one_use_grant() {
+        use truapi::CallError;
+        use truapi::versioned::permissions::{
+            AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest,
+            AuthorizeNetworkAccessResponse, RemotePermissionError,
+        };
+        use truapi_platform::PermissionDecision;
+
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform {
+                remote_permission_denied: true,
+                remote_permission_decisions: Mutex::new([PermissionDecision::AllowOnce].into()),
+                ..Default::default()
+            });
+            let sink = Arc::new(RecordingSink::default());
+            let (config, product) = runtime_config("fetch.dot");
+            let runtime = ProductRuntime::from_platform_with_config(
+                platform.clone(),
+                config,
+                product,
+                test_spawner(),
+                sink.clone(),
+            );
+            let permission = RemotePermissionRequest {
+                permission: RemotePermission::Remote {
+                    domains: vec!["api.example.com".to_string()],
+                },
+            };
+            let authorize = |url: &str| {
+                AuthorizeNetworkAccessRequest::V1(v01::AuthorizeNetworkAccessRequest {
+                    url: url.to_string(),
+                })
+                .encode()
+            };
+            let allowed = |allowed| {
+                Ok::<_, CallError<AuthorizeNetworkAccessError>>(AuthorizeNetworkAccessResponse::V1(
+                    v01::AuthorizeNetworkAccessResponse { allowed },
+                ))
+                .encode()
+            };
+            let requests = [
+                (
+                    "permissions_request_remote_permission",
+                    truapi::versioned::permissions::RemotePermissionRequest::V1(permission.clone())
+                        .encode(),
+                    Ok::<_, CallError<RemotePermissionError>>(
+                        truapi::versioned::permissions::RemotePermissionResponse::V1(
+                            RemotePermissionResponse { granted: true },
+                        ),
+                    )
+                    .encode(),
+                ),
+                (
+                    "permissions_authorize_network_access",
+                    authorize("file:///etc/passwd"),
+                    Err::<AuthorizeNetworkAccessResponse, _>(CallError::Domain(
+                        AuthorizeNetworkAccessError::V1(v01::GenericError {
+                            reason: "network access requires a concrete HTTP(S) or WS(S) URL"
+                                .to_string(),
+                        }),
+                    ))
+                    .encode(),
+                ),
+                (
+                    "permissions_authorize_network_access",
+                    authorize("https://api.example.com/first"),
+                    allowed(true),
+                ),
+                (
+                    "permissions_authorize_network_access",
+                    authorize("https://api.example.com/second"),
+                    allowed(false),
+                ),
+            ];
+            let mut expected = Vec::new();
+            for (index, (method, value, response)) in requests.into_iter().enumerate() {
+                let ids = crate::frame::request_ids(method).expect("known permission request");
+                let mut frame = ProtocolMessage {
+                    request_id: format!("permission:{index}"),
+                    payload: Payload {
+                        trait_id: ids.trait_id,
+                        method_id: ids.method_id,
+                        message_type: crate::frame::MESSAGE_TYPE_REQUEST,
+                        value,
+                    },
+                };
+                runtime.receive_frame(frame.encode()).await.unwrap();
+                frame.payload.message_type = crate::frame::MESSAGE_TYPE_RESPONSE;
+                frame.payload.value = response;
+                expected.push(frame.encode());
+            }
+            assert_eq!(
+                (
+                    sink.frames.lock().unwrap().clone(),
+                    platform.remote_permission_requests.lock().unwrap().clone(),
+                ),
+                (expected, vec![permission.clone(), permission]),
+            );
+        });
+    }
+
+    #[test]
+    fn network_access_honors_wildcard_precedence_revocation_and_product_isolation() {
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform {
+                remote_permission_denied: true,
+                ..Default::default()
+            });
+            let (config, _) = runtime_config("fetch.dot");
+            let runtime = PairingHostRuntime::new(platform.clone(), config, test_spawner());
+            let admin = runtime.product_admin(product_context("fetch.dot").unwrap());
+            admin
+                .set_permission_authorization_status(
+                    network_permission(&["*.example.com"]),
+                    PermissionAuthorizationStatus::Authorized,
+                )
+                .await
+                .unwrap();
+            let allowed = admin
+                .authorize_network_access("https://api.example.com/data".to_string())
+                .await
+                .unwrap();
+            let descendant = admin
+                .authorize_network_access("https://deep.api.example.com/data".to_string())
+                .await
+                .unwrap();
+            let root = admin
+                .authorize_network_access("https://example.com/data".to_string())
+                .await
+                .unwrap();
+            admin
+                .set_permission_authorization_status(
+                    network_permission(&["api.example.com"]),
+                    PermissionAuthorizationStatus::Denied,
+                )
+                .await
+                .unwrap();
+            let revoked = admin
+                .authorize_network_access("https://api.example.com/data".to_string())
+                .await
+                .unwrap();
+            let sibling = admin
+                .authorize_network_access("https://other.example.com/data".to_string())
+                .await
+                .unwrap();
+            let other = runtime.product_admin(product_context("other.dot").unwrap());
+            let mut isolated = Vec::new();
+            for _ in 0..2 {
+                isolated.push(
+                    other
+                        .authorize_network_access("https://other.example.com/data".to_string())
+                        .await
+                        .unwrap(),
+                );
+            }
+            assert_eq!(
+                (
+                    allowed,
+                    descendant,
+                    root,
+                    revoked,
+                    sibling,
+                    isolated,
+                    platform.remote_permission_requests.lock().unwrap().clone(),
+                ),
+                (
+                    PermissionAuthorizationStatus::Authorized,
+                    PermissionAuthorizationStatus::Authorized,
+                    PermissionAuthorizationStatus::Denied,
+                    PermissionAuthorizationStatus::Denied,
+                    PermissionAuthorizationStatus::Authorized,
+                    vec![PermissionAuthorizationStatus::Denied; 2],
+                    vec![
+                        RemotePermissionRequest {
+                            permission: RemotePermission::Remote {
+                                domains: vec!["example.com".to_string()],
+                            },
+                        },
+                        RemotePermissionRequest {
+                            permission: RemotePermission::Remote {
+                                domains: vec!["other.example.com".to_string()],
+                            },
+                        },
+                    ],
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn network_access_trusted_products_still_honor_explicit_denial() {
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform::default());
+            let (config, _) = runtime_config("peopl.dot");
+            let runtime = PairingHostRuntime::new(platform.clone(), config, test_spawner());
+            let admin = runtime.product_admin(product_context("peopl.dot").unwrap());
+            let allowed = admin
+                .authorize_network_access("https://api.example.com".to_string())
+                .await
+                .unwrap();
+            admin
+                .set_permission_authorization_status(
+                    network_permission(&["api.example.com"]),
+                    PermissionAuthorizationStatus::Denied,
+                )
+                .await
+                .unwrap();
+            let denied = admin
+                .authorize_network_access("https://api.example.com".to_string())
+                .await
+                .unwrap();
+            assert_eq!(
+                (
+                    allowed,
+                    denied,
+                    platform.remote_permission_requests.lock().unwrap().clone(),
+                ),
+                (
+                    PermissionAuthorizationStatus::Authorized,
+                    PermissionAuthorizationStatus::Denied,
+                    vec![],
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn network_access_rejects_non_destinations_without_requesting_broad_grants() {
+        futures::executor::block_on(async {
+            let platform = Arc::new(StubPlatform::default());
+            let (config, _) = runtime_config("peopl.dot");
+            let runtime = PairingHostRuntime::new(platform.clone(), config, test_spawner());
+            let admin = runtime.product_admin(product_context("peopl.dot").unwrap());
+            for url in [
+                "",
+                "/asset.json",
+                "//api.example.com/asset.json",
+                "api.example.com",
+                "https://",
+                "file:///etc/passwd",
+                "data:text/plain,hello",
+                "javascript:alert(1)",
+                "ftp://api.example.com/file",
+                "dot://peopl.dot/asset.json",
+                "https://*",
+                "https://*.example.com",
+                "https://%2A.example.com",
+                "https://./",
+            ] {
+                assert!(
+                    admin
+                        .authorize_network_access(url.to_string())
+                        .await
+                        .is_err(),
+                    "{url}"
+                );
+            }
+            assert_eq!(*platform.remote_permission_requests.lock().unwrap(), vec![]);
+        });
+    }
 
     #[test]
     fn a_cached_subtree_answers_without_reaching_the_wallet() {

@@ -18,6 +18,9 @@ use truapi::versioned::notifications::{
     HostPushNotificationResponse,
 };
 use truapi::versioned::permissions::{
+    AuthorizeMediaCaptureError, AuthorizeMediaCaptureRequest, AuthorizeMediaCaptureResponse,
+    AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest, AuthorizeNetworkAccessResponse,
+    AuthorizeWebRtcError, AuthorizeWebRtcRequest, AuthorizeWebRtcResponse,
     HostDevicePermissionError, HostDevicePermissionRequest, HostDevicePermissionResponse,
     RemotePermissionError, RemotePermissionRequest, RemotePermissionResponse,
 };
@@ -33,7 +36,7 @@ use truapi::versioned::theme::{
 use truapi::{CallContext, CallError, Subscription, v01, v02};
 use truapi_platform::PermissionAuthorizationStatus;
 
-use crate::host_logic::dotns::{NavigateDecision, external_host, parse_navigate};
+use crate::host_logic::dotns::{NavigateDecision, parse_navigate};
 use crate::host_logic::features::feature_supported;
 use crate::host_logic::product_manifest::Granted;
 use crate::runtime::ProductRuntimeHost;
@@ -88,20 +91,19 @@ impl System for ProductRuntimeHost {
             NavigateDecision::DotName { canonical_url, .. }
             | NavigateDecision::Localhost { canonical_url, .. }
             | NavigateDecision::Pocket { canonical_url, .. } => canonical_url,
-            // An `http(s)` URL hands an arbitrary host the referrer, the shape
-            // of the URL, and whatever the product put in it, so it needs the
-            // same per-domain grant that gates outbound access to that host.
-            // The other allowed schemes are app handoffs with no authorizable
-            // domain (`external_host` returns `None`) and pass straight through.
             NavigateDecision::External { url } => {
-                if let Some(host) = external_host(&url) {
-                    self.require_remote_permission(
-                        v01::RemotePermission::Remote {
-                            domains: vec![host],
-                        },
-                        HostNavigateToError::V1(v01::HostNavigateToError::PermissionDenied),
-                    )
-                    .await?;
+                let product_id = self.product_id();
+                let status = self
+                    .permissions_service(&product_id)
+                    .authorize_device(v01::HostDevicePermissionRequest::OpenUrl)
+                    .await
+                    .map_err(|error| CallError::HostFailure {
+                        reason: format!("permission storage failed: {error:?}"),
+                    })?;
+                if status != PermissionAuthorizationStatus::Authorized {
+                    return Err(CallError::Domain(HostNavigateToError::V1(
+                        v01::HostNavigateToError::PermissionDenied,
+                    )));
                 }
                 url
             }
@@ -129,6 +131,75 @@ impl System for ProductRuntimeHost {
 
 #[truapi::async_trait]
 impl Permissions for ProductRuntimeHost {
+    #[instrument(skip_all, fields(runtime.method = "permissions.authorize_media_capture"))]
+    async fn authorize_media_capture(
+        &self,
+        _cx: &CallContext,
+        request: AuthorizeMediaCaptureRequest,
+    ) -> Result<AuthorizeMediaCaptureResponse, CallError<AuthorizeMediaCaptureError>> {
+        let AuthorizeMediaCaptureRequest::V1(request) = request;
+        let product_id = self.product_id();
+        let service = self.permissions_service(&product_id);
+        let mut allowed = request.audio || request.video;
+        for (requested, capability) in [
+            (request.video, v01::HostDevicePermissionRequest::Camera),
+            (request.audio, v01::HostDevicePermissionRequest::Microphone),
+        ] {
+            if !requested {
+                continue;
+            }
+            let status = service
+                .authorize_device(capability)
+                .await
+                .map_err(|error| CallError::HostFailure {
+                    reason: format!("permission storage failed: {error:?}"),
+                })?;
+            if status != PermissionAuthorizationStatus::Authorized {
+                allowed = false;
+                break;
+            }
+        }
+        Ok(AuthorizeMediaCaptureResponse::V1(
+            v01::AuthorizeNetworkAccessResponse { allowed },
+        ))
+    }
+
+    async fn authorize_web_rtc(
+        &self,
+        _cx: &CallContext,
+        _request: AuthorizeWebRtcRequest,
+    ) -> Result<AuthorizeWebRtcResponse, CallError<AuthorizeWebRtcError>> {
+        let product_id = self.product_id();
+        self.permissions_service(&product_id)
+            .authorize_remote(v01::RemotePermissionRequest {
+                permission: v01::RemotePermission::WebRtc,
+            })
+            .await
+            .map(|status| {
+                AuthorizeWebRtcResponse::V1(v01::AuthorizeNetworkAccessResponse {
+                    allowed: status == PermissionAuthorizationStatus::Authorized,
+                })
+            })
+            .map_err(|error| CallError::Domain(AuthorizeWebRtcError::V1(error)))
+    }
+
+    #[instrument(skip_all, fields(runtime.method = "permissions.authorize_network_access"))]
+    async fn authorize_network_access(
+        &self,
+        _cx: &CallContext,
+        request: AuthorizeNetworkAccessRequest,
+    ) -> Result<AuthorizeNetworkAccessResponse, CallError<AuthorizeNetworkAccessError>> {
+        let AuthorizeNetworkAccessRequest::V1(request) = request;
+        ProductRuntimeHost::authorize_network_access(self, request.url)
+            .await
+            .map(|status| {
+                AuthorizeNetworkAccessResponse::V1(v01::AuthorizeNetworkAccessResponse {
+                    allowed: status == PermissionAuthorizationStatus::Authorized,
+                })
+            })
+            .map_err(|error| CallError::Domain(AuthorizeNetworkAccessError::V1(error)))
+    }
+
     #[instrument(skip_all, fields(runtime.method = "permissions.request_device_permission"))]
     async fn request_device_permission(
         &self,
@@ -303,6 +374,21 @@ impl Notifications for ProductRuntimeHost {
         request: HostPushNotificationRequest,
     ) -> Result<HostPushNotificationResponse, CallError<HostPushNotificationError>> {
         let HostPushNotificationRequest::V1(inner) = request;
+        let product_id = self.product_id();
+        let status = self
+            .permissions_service(&product_id)
+            .authorize_device(v01::HostDevicePermissionRequest::Notifications)
+            .await
+            .map_err(|err| CallError::HostFailure {
+                reason: format!("permission storage failed: {err:?}"),
+            })?;
+        if status != PermissionAuthorizationStatus::Authorized {
+            return Err(CallError::Domain(HostPushNotificationError::V1(
+                v01::HostPushNotificationError::Unknown {
+                    reason: "Notifications permission denied".to_string(),
+                },
+            )));
+        }
         self.platform
             .push_notification(inner)
             .await

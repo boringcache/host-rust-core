@@ -65,6 +65,7 @@ pub use signing_host::{PairedSsoPeer, ResponderExit};
 pub use signing_host::{StatementRenewalTarget, TrackedStatementRenewalTarget};
 use tracing::{instrument, warn};
 use truapi::api::{Chat, Pocket, Renderer};
+use truapi::latest::{GenericError, RemotePermission, RemotePermissionRequest};
 use truapi::versioned::account::{HostAccountGetError, HostAccountSignVrfError};
 use truapi::versioned::chat::{
     HostChatActionSubscribeError, HostChatActionSubscribeItem, HostChatActionSubscribeRequest,
@@ -85,8 +86,8 @@ use truapi::versioned::renderer::{
 use truapi::{CallContext, CallError, CancellationReason, Subscription, v01};
 use truapi_platform::{
     AccountAccessReview, ChatFieldError, IdentityDisclosureReview, PermissionAuthorizationRequest,
-    PermissionAuthorizationStatus, Platform, ProductContext, ProductStorageKey, SessionUiInfo,
-    UserConfirmationReview, normalize_chat_identifier, normalize_product_identifier,
+    PermissionAuthorizationStatus, PermissionDecision, Platform, ProductContext, ProductStorageKey,
+    SessionUiInfo, UserConfirmationReview, normalize_chat_identifier, normalize_product_identifier,
     validate_chat_icon, validate_chat_message_content, validate_chat_name,
 };
 #[cfg(target_arch = "wasm32")]
@@ -94,7 +95,7 @@ use web_time::Instant;
 
 use crate::chain_runtime::RuntimeFailure;
 use crate::host_logic::bulletin::preimage_key;
-use crate::host_logic::permissions::PermissionsService;
+use crate::host_logic::permissions::{PermissionsService, TemporaryPermissions};
 use crate::host_logic::product_account::{
     derivation_index_bytes, derive_product_public_key, public_key_from_address,
 };
@@ -252,6 +253,8 @@ pub struct ProductRuntimeHost {
     chat_platform: Option<Arc<dyn truapi_platform::ChatPlatform>>,
     /// Live OS permission state for this connection, when the host serves it.
     permission_status: Option<Arc<dyn truapi_platform::PermissionStatusHost>>,
+    /// Permission requests and consuming operations can arrive on different connections.
+    temporary_permissions: Arc<TemporaryPermissions>,
     authority: Arc<dyn ProductAuthority>,
     product: ProductContext,
     /// Stable per-product-runtime id used to scope long-lived chain follow
@@ -277,6 +280,7 @@ impl ProductRuntimeHost {
             platform: adapters.platform,
             chat_platform: adapters.chat_platform,
             permission_status: adapters.permission_status,
+            temporary_permissions: adapters.permission_grants,
             authority,
             product,
             core_instance,
@@ -303,6 +307,7 @@ impl ProductRuntimeHost {
     ) -> PermissionsService<'a, dyn Platform, dyn Platform> {
         PermissionsService::new(self.platform.as_ref(), self.platform.as_ref(), product_id)
             .with_status_host(self.permission_status.as_deref())
+            .with_temporary_permissions(self.temporary_permissions.clone())
     }
 
     /// Trusted executable kind attached to this product connection.
@@ -402,6 +407,7 @@ impl ProductRuntimeHost {
             platform,
             chat_platform: None,
             permission_status: None,
+            temporary_permissions: Arc::default(),
             authority: pairing_host.clone(),
             product,
             core_instance,
@@ -598,6 +604,30 @@ impl ProductRuntimeHost {
 }
 
 impl ProductRuntimeHost {
+    /// Apply the bound product's permissions to a concrete network destination.
+    #[instrument(skip_all, fields(runtime.method = "permissions.authorize_network_access"))]
+    pub(crate) async fn authorize_network_access(
+        &self,
+        url: String,
+    ) -> Result<PermissionAuthorizationStatus, GenericError> {
+        let host = url::Url::parse(&url)
+            .ok()
+            .filter(|url| matches!(url.scheme(), "http" | "https" | "ws" | "wss"))
+            .and_then(|url| url.host_str().map(truapi_platform::normalize_remote_domain))
+            .filter(|host| !host.is_empty() && !host.contains('*'))
+            .ok_or_else(|| GenericError {
+                reason: "network access requires a concrete HTTP(S) or WS(S) URL".to_string(),
+            })?;
+        let product_id = self.product_id();
+        self.permissions_service(&product_id)
+            .authorize_remote(RemotePermissionRequest {
+                permission: RemotePermission::Remote {
+                    domains: vec![host],
+                },
+            })
+            .await
+    }
+
     /// Read a stored permission authorization status without prompting.
     ///
     /// A device capability also resolves the host application's OS gate, so an
@@ -649,7 +679,7 @@ impl ProductRuntimeHost {
         let product_id = self.product_id();
         let service = self.permissions_service(&product_id);
         service
-            .check_or_prompt_remote(v01::RemotePermissionRequest { permission })
+            .authorize_remote(v01::RemotePermissionRequest { permission })
             .await
             .map_err(|err| format!("permission storage failed: {err:?}"))
     }
@@ -694,22 +724,22 @@ impl ProductRuntimeHost {
         // A dismissed/unavailable confirmation has no durable user decision.
         // Fail the current disclosure request closed but keep authorization in
         // the ask/default state so the next request can prompt again.
-        let confirmed = match self
+        let decision = match self
             .platform
-            .confirm_user_action(UserConfirmationReview::IdentityDisclosure(
+            .confirm_permission(UserConfirmationReview::IdentityDisclosure(
                 IdentityDisclosureReview {
                     product_id: product_id.clone(),
                 },
             ))
             .await
         {
-            Ok(confirmed) => confirmed,
+            Ok(decision) => decision,
             Err(_) => return Ok(PermissionAuthorizationStatus::NotDetermined),
         };
-        let status = if confirmed {
-            PermissionAuthorizationStatus::Authorized
-        } else {
-            PermissionAuthorizationStatus::Denied
+        let status = match decision {
+            PermissionDecision::AllowOnce => return Ok(PermissionAuthorizationStatus::Authorized),
+            PermissionDecision::AllowAlways => PermissionAuthorizationStatus::Authorized,
+            PermissionDecision::Deny => PermissionAuthorizationStatus::Denied,
         };
         service
             .set_authorization_status(&request, status)
@@ -790,17 +820,17 @@ async fn account_access_authorization(
         return Ok(cached);
     }
 
-    let confirmed = platform
-        .confirm_user_action(UserConfirmationReview::AccountAccess(AccountAccessReview {
+    let decision = platform
+        .confirm_permission(UserConfirmationReview::AccountAccess(AccountAccessReview {
             requesting_product_id: requesting_product_id.to_string(),
             target_product_id: target_product_id.to_string(),
         }))
         .await
         .map_err(AccountAccessAuthorizationError::Confirmation)?;
-    let status = if confirmed {
-        PermissionAuthorizationStatus::Authorized
-    } else {
-        PermissionAuthorizationStatus::Denied
+    let status = match decision {
+        PermissionDecision::AllowOnce => return Ok(PermissionAuthorizationStatus::Authorized),
+        PermissionDecision::AllowAlways => PermissionAuthorizationStatus::Authorized,
+        PermissionDecision::Deny => PermissionAuthorizationStatus::Denied,
     };
     service
         .set_authorization_status(&request, status)

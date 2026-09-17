@@ -1,6 +1,9 @@
 //! Unified [`Permissions`] trait.
 
 use crate::versioned::permissions::{
+    AuthorizeMediaCaptureError, AuthorizeMediaCaptureRequest, AuthorizeMediaCaptureResponse,
+    AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest, AuthorizeNetworkAccessResponse,
+    AuthorizeWebRtcError, AuthorizeWebRtcRequest, AuthorizeWebRtcResponse,
     HostDevicePermissionError, HostDevicePermissionRequest, HostDevicePermissionResponse,
     RemotePermissionError, RemotePermissionRequest, RemotePermissionResponse,
 };
@@ -40,4 +43,54 @@ pub trait Permissions: Send + Sync {
         cx: &CallContext,
         request: RemotePermissionRequest,
     ) -> Result<RemotePermissionResponse, CallError<RemotePermissionError>>;
+
+    /// Authorize one network operation for the current product, consuming an
+    /// available one-use grant. Used by the host's fetch, XHR and WebSocket
+    /// wrappers before sending a request or opening a connection.
+    ///
+    /// ```ts
+    /// const result = await truapi.permissions.authorizeNetworkAccess({
+    ///   url: "https://api.frankfurter.dev/v2/rates?base=EUR&quotes=USD",
+    /// });
+    /// assert(result.isOk(), "network authorization failed:", result);
+    /// console.log("network operation allowed:", result.value.allowed);
+    /// ```
+    #[wire(id = 2)]
+    async fn authorize_network_access(
+        &self,
+        cx: &CallContext,
+        request: AuthorizeNetworkAccessRequest,
+    ) -> Result<AuthorizeNetworkAccessResponse, CallError<AuthorizeNetworkAccessError>>;
+
+    /// Authorize one peer connection, consuming an available one-use grant.
+    ///
+    /// ```ts
+    /// const result = await truapi.permissions.authorizeWebRtc();
+    /// assert(result.isOk(), "WebRTC authorization failed:", result);
+    /// console.log("peer connection allowed:", result.value.allowed);
+    /// ```
+    #[wire(id = 3)]
+    async fn authorize_web_rtc(
+        &self,
+        cx: &CallContext,
+        request: AuthorizeWebRtcRequest,
+    ) -> Result<AuthorizeWebRtcResponse, CallError<AuthorizeWebRtcError>>;
+
+    /// Authorize one media capture, consuming available one-use camera and
+    /// microphone grants for the requested capabilities.
+    ///
+    /// ```ts
+    /// const result = await truapi.permissions.authorizeMediaCapture({
+    ///   audio: true,
+    ///   video: true,
+    /// });
+    /// assert(result.isOk(), "media capture authorization failed:", result);
+    /// console.log("media capture allowed:", result.value.allowed);
+    /// ```
+    #[wire(id = 4)]
+    async fn authorize_media_capture(
+        &self,
+        cx: &CallContext,
+        request: AuthorizeMediaCaptureRequest,
+    ) -> Result<AuthorizeMediaCaptureResponse, CallError<AuthorizeMediaCaptureError>>;
 }
