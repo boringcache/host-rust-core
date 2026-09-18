@@ -28,6 +28,9 @@ dwarf-debug-info = false
 [features]
 default = ["wasm-signing-host"]
 wasm-signing-host = []
+# Test-host-only shortcuts a shipping host must not carry, such as answering
+# resource allocation as granted without allocating anything.
+test-host = []
 ws-bridge = ["dep:tokio", "dep:tokio-tungstenite", "dep:rand", "dep:base64"]
 
 [dependencies]

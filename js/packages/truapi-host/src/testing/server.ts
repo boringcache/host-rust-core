@@ -91,7 +91,16 @@ async function bundle(
   entry: string,
   wasmBundle: "web" | "testing" = "testing",
 ): Promise<string> {
-  const { build } = await import("esbuild");
+  // esbuild is an optional peer: it bundles the host page and nothing else in
+  // this package needs it, so a product that only imports `./web` never pulls
+  // it in. Name it when it is absent, since the module-not-found alone does
+  // not say which dependency to add.
+  const { build } = await import("esbuild").catch(() => {
+    throw new Error(
+      "@parity/truapi-host/testing/server needs esbuild. Install it as a dev " +
+        "dependency alongside this package.",
+    );
+  });
   const result = await build({
     entryPoints: [join(distRoot, entry)],
     bundle: true,

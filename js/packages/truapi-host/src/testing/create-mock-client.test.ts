@@ -2,8 +2,18 @@
 // mock host, over a real MessagePort, with the result observable on the mock.
 import { describe, expect, it } from "bun:test";
 
+import type { RemotePreimageLookupSubscribeItem } from "@parity/truapi";
+
 import { createMockClient } from "./create-mock-client.js";
 import { wasmIsBuilt } from "./require-wasm.js";
+
+/** `0x`-prefixed lowercase hex, the shape the generated client takes. */
+function hex(bytes: Uint8Array): `0x${string}` {
+  const digits = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  );
+  return `0x${digits.join("")}`;
+}
 
 const suite = wasmIsBuilt("testing/truapi_server.js") ? describe : describe.skip;
 
@@ -41,6 +51,38 @@ suite("createMockClient", () => {
       const stored = Object.entries(host.getProductStorage());
       expect(stored.length).toBeGreaterThan(0);
       expect(stored.some(([key]) => key.endsWith(":greeting"))).toBe(true);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("resolves a seeded preimage, so the seeded key is the one the core asks for", async () => {
+    // `seedPreimage` is only worth anything if the key it hands back is the key
+    // the core asks the host for. The core content-addresses preimages and
+    // downgrades a hash mismatch to a miss, so a mock that keys its store any
+    // other way round-trips perfectly against itself while every seeded
+    // preimage stays unreachable from a product. Only a lookup driven through
+    // the client, with the core in the path, can tell those apart.
+    const { client, host, dispose } = await createMockClient();
+    try {
+      const content = new TextEncoder().encode("seeded through the core");
+      const key = host.seedPreimage(content);
+
+      const item = await new Promise<RemotePreimageLookupSubscribeItem>(
+        (resolve, reject) => {
+          const subscription = client.preimage
+            .lookupSubscribe({ request: { key: hex(key) } })
+            .subscribe({
+              next(value) {
+                subscription.unsubscribe();
+                resolve(value);
+              },
+              error: reject,
+            });
+        },
+      );
+
+      expect(item.value).toBe(hex(content));
     } finally {
       dispose();
     }

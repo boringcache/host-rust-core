@@ -123,9 +123,10 @@ pub(crate) struct SigningHost {
     ///
     /// For test hosts whose suites exercise a product's allowance-dependent
     /// paths without an on-chain personhood identity. Compiled only into a
-    /// build carrying `wasm-signing-host`, which the production browser bundle
-    /// excludes, so a shipping host cannot set it.
-    #[cfg(feature = "wasm-signing-host")]
+    /// build carrying `test-host`, which is off by default and which neither
+    /// the production browser bundle nor a released native host enables, so a
+    /// shipping host has no way to set it.
+    #[cfg(feature = "test-host")]
     grant_allowances_unchecked: std::sync::atomic::AtomicBool,
     /// Root BIP-39 entropy held only while a session is active.
     root_entropy: Mutex<Option<Zeroizing<Vec<u8>>>>,
@@ -150,7 +151,7 @@ impl SigningHost {
             services,
             platform: platform.clone(),
             network_suffix,
-            #[cfg(feature = "wasm-signing-host")]
+            #[cfg(feature = "test-host")]
             grant_allowances_unchecked: std::sync::atomic::AtomicBool::new(false),
             session_state: SessionState::new(),
             auth_state: AuthStateMachine::new(platform.clone()),
@@ -164,14 +165,14 @@ impl SigningHost {
     }
 
     /// Whether allocation is answered as granted without performing it.
-    #[cfg(feature = "wasm-signing-host")]
+    #[cfg(feature = "test-host")]
     pub(crate) fn grants_allowances_unchecked(&self) -> bool {
         self.grant_allowances_unchecked
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Answer resource allocation as granted without performing it.
-    #[cfg(feature = "wasm-signing-host")]
+    #[cfg(feature = "test-host")]
     pub(crate) fn set_grant_allowances_unchecked(&self, granted: bool) {
         self.grant_allowances_unchecked
             .store(granted, std::sync::atomic::Ordering::Relaxed);
@@ -215,7 +216,7 @@ impl SigningHost {
             services,
             platform: platform.clone(),
             network_suffix: network_suffix.to_string(),
-            #[cfg(feature = "wasm-signing-host")]
+            #[cfg(feature = "test-host")]
             grant_allowances_unchecked: std::sync::atomic::AtomicBool::new(false),
             session_state: SessionState::new(),
             auth_state: AuthStateMachine::new(platform.clone()),
@@ -1156,7 +1157,7 @@ impl ProductAuthority for SigningHost {
         request: v01::HostRequestResourceAllocationRequest,
     ) -> Result<v01::HostRequestResourceAllocationResponse, AuthorityError> {
         self.require_current_session(session)?;
-        #[cfg(feature = "wasm-signing-host")]
+        #[cfg(feature = "test-host")]
         if self
             .grant_allowances_unchecked
             .load(std::sync::atomic::Ordering::Relaxed)

@@ -5,6 +5,13 @@ import type { CoreStorageKey } from "../generated/host-callbacks.js";
 import { createMockHost, mockRuntimeConfig } from "./create-mock-host.js";
 import { createWebWorkerPairingHostRuntime } from "./index.js";
 
+/** Lowercase hex without `0x`. */
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
 describe("createMockHost callbacks", () => {
   it("product storage round-trips and is namespaced from core", async () => {
     const { callbacks } = createMockHost();
@@ -138,20 +145,28 @@ describe("createMockHost callbacks", () => {
     // The core owns Bulletin submission on current core; the host only
     // retrieves content, so tests seed the content store directly.
     const host = createMockHost();
-    const key = host.seedPreimage(new Uint8Array([4, 5, 6]));
-    expect(key).toBeDefined();
+    const key = host.seedPreimage(new Uint8Array([1, 2, 3]));
+    // The key is the content address the core asks for, not an arbitrary
+    // digest: the core recomputes blake2b-256 over whatever comes back and
+    // reports a mismatch as a miss, so a key derived any other way makes every
+    // seeded preimage unreachable through the core. The expected value is the
+    // published blake2b-256 of `[1, 2, 3]`, so this fails even if the mock and
+    // its Rust sibling change algorithm together.
+    expect(hex(key)).toBe(
+      "11c0e79b71c3976ccd0c02d1310e2516c08edc9d8b6f57ccd680d63a4d8e72da",
+    );
     const found = await host.callbacks.preimage
       .lookupPreimage(key)
       [Symbol.asyncIterator]()
       .next();
-    expect(found.value).toEqual(ok(new Uint8Array([4, 5, 6])));
+    expect(found.value).toEqual(ok(new Uint8Array([1, 2, 3])));
   });
 
   it("preimage lookup misses on an unknown key", async () => {
     const host = createMockHost();
     host.seedPreimage(new Uint8Array([1, 2, 3]));
     const miss = await host.callbacks.preimage
-      .lookupPreimage(new Uint8Array([9, 9, 9, 9, 9, 9, 9, 9]))
+      .lookupPreimage(new Uint8Array(32).fill(9))
       [Symbol.asyncIterator]()
       .next();
     expect(miss.value).toEqual(ok(undefined));

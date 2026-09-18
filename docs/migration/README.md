@@ -88,11 +88,12 @@ Against the TrUAPI test host, on the production Web Worker topology:
   `UnsupportedProtocolVersion`. Applied on its own, this patch therefore produces
   a handshake failure that reads like a broken test host. `@parity/truapi` must
   reach 0.16.0 first (product-sdk #376).
-- **Catalog pin.** `pnpm-workspace.yaml` gains `"@parity/truapi-host": ^0.16.0`.
-  Note that `@parity/truapi-host` published 0.10.1 and then 0.16.0 with nothing
-  in between — 0.11 through 0.15 were cut in-repo but never reached npm — so a
-  pin anywhere in that range fails to install rather than resolving to something
-  older.
+- **Catalog pin.** `pnpm-workspace.yaml` gains `"@parity/truapi-host": ^0.18.0`.
+  0.18.0 is the release that carries the `./testing` subpath; no published
+  version before it has one. `@parity/truapi-host` also published 0.10.1 and
+  then 0.16.0 with nothing in between, because 0.11 through 0.15 were cut
+  in-repo and never reached npm, so a pin anywhere in that range fails to
+  install rather than resolving to something older.
 - **product-sdk does not compile against `@parity/truapi` 0.15+ as-is.**
   `packages/host/src/testing.ts` (`createFakeHost`) is missing
   `signRawUnwatermarkedDeprecated` and its `LegacyAccount` twin, and

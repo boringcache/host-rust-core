@@ -19,6 +19,7 @@
 // the mock only implements host-side content retrieval via `lookupPreimage`;
 // seed retrievable content with the returned `insertPreimage`.
 
+import { blake2b } from "@noble/hashes/blake2.js";
 import { ok } from "neverthrow";
 
 import type {
@@ -109,8 +110,9 @@ export type PermissionKind = "device" | "remote";
 /**
  * One notification the product pushed, recorded for assertions.
  *
- * Field names follow `@parity/host-api-test-sdk`'s `NotificationLogEntry` so a
- * migrating suite's assertions keep working. The entry outlives the request:
+ * Field names are `@parity/host-api-test-sdk`'s `NotificationLogEntry`, so an
+ * assertion written against that shape reads this one. The entry outlives the
+ * request:
  * `cancelled` flips in place when the product cancels by id, which is what a
  * suite asserts on rather than a separate cancellation list.
  */
@@ -132,8 +134,8 @@ export interface NotificationLogEntry {
 /**
  * One permission answer the mock gave, recorded for assertions.
  *
- * Field names follow `@parity/host-api-test-sdk`'s `PermissionLogEntry` so a
- * migrating suite's assertions keep working.
+ * Field names are `@parity/host-api-test-sdk`'s `PermissionLogEntry`, so an
+ * assertion written against that shape reads this one.
  */
 export interface PermissionDecision {
   /** The request's tag, the same key `grantPermission` takes. */
@@ -580,20 +582,16 @@ function connectToChain(
   };
 }
 
-/** Deterministic 8-byte key for a preimage value (FNV-1a), so `insertPreimage`
- *  then `lookupPreimage` round-trips without using the full value as its key. */
+/**
+ * Content address of a preimage value: blake2b-256 of the raw bytes.
+ *
+ * This is the key the core derives before it asks the host to look a preimage
+ * up, and it discards any value whose hash does not match the key it asked
+ * for. A key computed any other way is unreachable through the core, however
+ * well it round-trips against the mock alone.
+ */
 function preimageKey(value: Uint8Array): Uint8Array {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
-  for (const byte of value) {
-    hash = ((hash ^ BigInt(byte)) * prime) & mask;
-  }
-  const key = new Uint8Array(8);
-  for (let i = 0; i < 8; i++) {
-    key[i] = Number((hash >> BigInt(8 * i)) & 0xffn);
-  }
-  return key;
+  return blake2b(value, { dkLen: 32 });
 }
 
 function hex(bytes: Uint8Array): string {

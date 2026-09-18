@@ -26,8 +26,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -473,7 +471,8 @@ impl MockPlatform {
     /// `TransactionStorage.store` transaction; the host's only preimage duty is
     /// content retrieval. This helper lets tests and host simulators pre-load
     /// the content-addressed store the mock's `lookup_preimage` reads from, and
-    /// returns the deterministic lookup key for the value.
+    /// returns the blake2b-256 content address of the value, which is the key
+    /// the core looks it up under.
     pub fn insert_preimage(&self, value: Vec<u8>) -> Vec<u8> {
         let key = preimage_key(&value);
         self.preimages
@@ -611,15 +610,12 @@ impl MockPlatform {
     /// `connect` calls, as a dropped transport would.
     pub fn simulate_disconnect(&self) {
         *self.chain_status.lock().expect("chain status poisoned") = ChainStatus::Disconnected;
-        for disconnector in self
-            .chain_disconnectors
+        // Dropping each sender completes the `take_until` future on that
+        // connection's response stream, which is what ends it.
+        self.chain_disconnectors
             .lock()
             .expect("chain disconnectors poisoned")
-            .drain(..)
-        {
-            // A receiver dropped with its connection needs no signal.
-            let _ = disconnector.unbounded_send(());
-        }
+            .clear();
     }
 
     /// Allow `connect` to succeed again after a simulated disconnect.
@@ -762,12 +758,14 @@ fn core_key(key: &CoreStorageKey) -> String {
     }
 }
 
-/// Deterministic short key for a preimage value, so `submit` then `lookup`
-/// round-trips without storing the full value as its own key.
+/// Content address of a preimage value: blake2b-256 of the raw bytes.
+///
+/// This is the same key the core derives before it asks the host to look a
+/// preimage up, and the core discards any value whose hash does not match the
+/// key it asked for. A key computed any other way is therefore unreachable
+/// through the core, however well it round-trips against the mock alone.
 fn preimage_key(value: &[u8]) -> Vec<u8> {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish().to_le_bytes().to_vec()
+    sp_crypto_hashing::blake2_256(value).to_vec()
 }
 
 #[async_trait]
@@ -1243,6 +1241,16 @@ mod tests {
     use futures::FutureExt;
     use futures::executor::block_on;
 
+    /// Decode a lowercase hex string into bytes.
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|index| {
+                u8::from_str_radix(&hex[index..index + 2], 16).expect("test vector is valid hex")
+            })
+            .collect()
+    }
+
     fn resource_review() -> UserConfirmationReview {
         UserConfirmationReview::ResourceAllocation(crate::ResourceAllocationReview {
             calling_product_id: "mock.dot".to_string(),
@@ -1257,15 +1265,12 @@ mod tests {
     }
 
     #[test]
-    fn product_storage_round_trips_and_is_namespaced() {
+    fn product_storage_round_trips() {
+        // Namespacing is `core_and_product_keys_do_not_collide`'s subject; this
+        // is the write/read/clear cycle on its own.
         let p = MockPlatform::new();
         block_on(p.write("k".into(), vec![1, 2, 3])).unwrap();
         assert_eq!(block_on(p.read("k".into())).unwrap(), Some(vec![1, 2, 3]));
-        // A product key never collides with a core slot.
-        assert_eq!(
-            block_on(p.read_core_storage(CoreStorageKey::AuthSession)).unwrap(),
-            None
-        );
         block_on(p.clear("k".into())).unwrap();
         assert_eq!(block_on(p.read("k".into())).unwrap(), None);
     }
@@ -1481,10 +1486,20 @@ mod tests {
         // The core owns Bulletin submission on main; the host only retrieves
         // content, so tests seed the content-addressed store directly.
         let key = p.insert_preimage(vec![1, 2, 3]);
+        // The key is the content address the core asks for, not an arbitrary
+        // digest: the core recomputes blake2b-256 over whatever comes back and
+        // reports a mismatch as a miss, so a key derived any other way makes
+        // every seeded preimage unreachable through the core. The expected
+        // value is the published blake2b-256 of `[1, 2, 3]`, so this fails if
+        // the algorithm changes even where both sides change together.
+        assert_eq!(
+            key,
+            hex_bytes("11c0e79b71c3976ccd0c02d1310e2516c08edc9d8b6f57ccd680d63a4d8e72da")
+        );
         let found = block_on(p.lookup_preimage(key).next()).unwrap().unwrap();
         assert_eq!(found, Some(vec![1, 2, 3]));
         // An unknown key misses.
-        let miss = block_on(p.lookup_preimage(vec![9, 9, 9, 9, 9, 9, 9, 9]).next())
+        let miss = block_on(p.lookup_preimage(vec![9; 32]).next())
             .unwrap()
             .unwrap();
         assert_eq!(miss, None);

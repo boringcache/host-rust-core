@@ -9,8 +9,12 @@ provides a fixture that runs the real core in a Web Worker with the product in a
 server behind it, `./testing/client` a no-iframe variant for unit tests, and `./testing/dev-accounts` named accounts
 that sign with real sr25519 from fixed entropy.
 
-A second WASM bundle at `./wasm/testing` carries `wasm-signing-host`, which is what lets the test host own keys; the
-`./wasm/web` production bundle is unchanged.
+A second WASM bundle at `./wasm/testing` carries the `wasm-signing-host` and `test-host` Cargo features, which is what
+lets the test host own keys and answer resource allocation as granted without allocating anything. Neither feature is on
+in the `./wasm/web` production bundle, so no shipping browser host has an entry point to either.
+
+Statement Store and Bulletin allowance allocation compiles for `wasm32` as well as native, so a browser signing host
+reaches the same on-chain allocation path a native one does. That adds about 1.7 KB to the `./wasm/web` bundle.
 
 Statement-store controls are served through the chain connection the host owns: `injectStatement` publishes a
 SCALE-encoded statement into the product's subscriptions, `getSubmittedStatements` reads submissions back off the

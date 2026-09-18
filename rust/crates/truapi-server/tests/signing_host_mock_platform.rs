@@ -17,7 +17,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use parity_scale_codec::{Decode, Encode};
 use schnorrkel::Signature;
@@ -26,7 +27,8 @@ use truapi::v01;
 use truapi_platform::mock::{ConfirmKind, MockConfig, MockPlatform};
 use truapi_platform::{HostInfo, PlatformInfo, ProductContext, SigningHostConfig};
 use truapi_server::frame::{
-    MESSAGE_TYPE_REQUEST, MESSAGE_TYPE_RESPONSE, Payload, ProtocolMessage, request_ids,
+    MESSAGE_TYPE_RECEIVE, MESSAGE_TYPE_REQUEST, MESSAGE_TYPE_RESPONSE, MESSAGE_TYPE_START, Payload,
+    ProtocolMessage, request_ids, subscription_ids,
 };
 use truapi_server::host_logic::product_account::{
     SR25519_SIGNING_CONTEXT, derivation_index_bytes, derive_product_keypair,
@@ -45,16 +47,38 @@ const ENTROPY: [u8; 32] = [0xab; 32];
 const PRODUCT_ID: &str = "myapp.dot";
 /// Message the product asks to have signed.
 const MESSAGE: &[u8] = b"keystone";
+/// Content seeded into the mock's preimage store.
+const PREIMAGE: &[u8] = b"seeded through the core";
 
 /// Frame sink that keeps every emitted frame in send order.
 #[derive(Default)]
 struct RecordingSink {
     frames: Mutex<Vec<Vec<u8>>>,
+    emitted: Condvar,
+}
+
+impl RecordingSink {
+    /// Wait until at least `count` frames have been emitted, or `timeout`
+    /// elapses. A subscription's frames come from the spawner, so the dispatch
+    /// that starts one returns before any of them are sent.
+    fn wait_for(&self, count: usize, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        let mut frames = self.frames.lock().unwrap();
+        while frames.len() < count {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let (guard, _) = self.emitted.wait_timeout(frames, deadline - now).unwrap();
+            frames = guard;
+        }
+    }
 }
 
 impl FrameSink for RecordingSink {
     fn emit_frame(&self, frame: Vec<u8>) {
         self.frames.lock().unwrap().push(frame);
+        self.emitted.notify_all();
     }
 }
 
@@ -269,4 +293,57 @@ fn a_declined_confirmation_withholds_the_signature() {
         "a declined review still produced {decoded:?}",
     );
     assert_eq!(platform.confirmations(), vec![ConfirmKind::SignRaw]);
+}
+
+#[test]
+fn a_seeded_preimage_is_reachable_through_the_core() {
+    // `insert_preimage` is only worth anything if the key it hands back is the
+    // key the core asks the host for. The core content-addresses preimages and
+    // downgrades a hash mismatch to a miss, so a mock that keys its store any
+    // other way round-trips perfectly against itself while every seeded
+    // preimage stays unreachable from a product. Only a lookup driven as a
+    // product frame, with the core in the path, can tell those apart.
+    let platform = Arc::new(MockPlatform::new());
+    let key = platform.insert_preimage(PREIMAGE.to_vec());
+
+    let runtime = SigningHostRuntime::new(platform.clone(), signing_config(), test_spawner());
+    let product = ProductContext::new(PRODUCT_ID.to_string()).expect("product context is valid");
+    let sink = Arc::new(RecordingSink::default());
+    let product_runtime = runtime.product_runtime(product, sink.clone());
+
+    let ids = subscription_ids("preimage_lookup_subscribe").expect("known subscription method");
+    let value = truapi::versioned::preimage::RemotePreimageLookupSubscribeRequest::V1(
+        v01::RemotePreimageLookupSubscribeRequest { key },
+    )
+    .encode();
+    let frame = ProtocolMessage {
+        request_id: "preimage:1".to_string(),
+        payload: Payload {
+            trait_id: ids.trait_id,
+            method_id: ids.method_id,
+            message_type: MESSAGE_TYPE_START,
+            value,
+        },
+    };
+    futures::executor::block_on(product_runtime.receive_frame(frame.encode()))
+        .expect("dispatcher accepted the lookup_subscribe frame");
+
+    sink.wait_for(1, Duration::from_secs(5));
+    let frames = sink.frames.lock().unwrap().clone();
+    let item = frames
+        .iter()
+        .map(|bytes| ProtocolMessage::decode(&mut &bytes[..]).expect("decode emitted frame"))
+        .find(|message| {
+            message.payload.trait_id == ids.trait_id
+                && message.payload.method_id == ids.method_id
+                && message.payload.message_type == MESSAGE_TYPE_RECEIVE
+        })
+        .expect("the subscription emitted its current-value item");
+
+    // A subscription item frame carries the item itself; only an interrupt
+    // carries a `Result`.
+    let truapi::versioned::preimage::RemotePreimageLookupSubscribeItem::V1(payload) =
+        Decode::decode(&mut &item.payload.value[..])
+            .expect("lookup_subscribe item decodes at the wire shape");
+    assert_eq!(payload.value, Some(PREIMAGE.to_vec()));
 }

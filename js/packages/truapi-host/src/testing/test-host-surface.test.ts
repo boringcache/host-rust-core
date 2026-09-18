@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { publishTestHostGlobals } from "./host-page.js";
+
 /**
  * Every member of `@parity/host-api-test-sdk`'s `TestHostAPI`, as shipped.
  *
@@ -90,53 +92,44 @@ describe("TestHost covers TestHostAPI", () => {
 });
 
 describe("the host page publishes the compatibility global", () => {
-  const source = readFileSync(
-    fileURLToPath(new URL("./host-page.ts", import.meta.url)),
-    "utf8",
-  );
+  /** Stands in for `startTestHost`'s control surface, which these read only by
+   *  identity. */
+  const control = { marker: "the one control surface" };
 
-  /** Both global names, in assignment and in deletion. */
-  const assigned = [...source.matchAll(/window\.(__\w*TEST_HOST__) = (\w+);/g)];
-  const deleted = [...source.matchAll(/delete window\.(__\w*TEST_HOST__);/g)];
+  function withStubWindow(body: (stub: Record<string, unknown>) => void): void {
+    const stub: Record<string, unknown> = {};
+    const target = globalThis as { window?: unknown };
+    const had = "window" in target;
+    const previous = target.window;
+    target.window = stub;
+    try {
+      body(stub);
+    } finally {
+      if (had) target.window = previous;
+      else delete target.window;
+    }
+  }
 
   it("assigns both names, and assigns the same object to each", () => {
-    // Parse floor: a rename that made these patterns match nothing would
-    // otherwise satisfy every assertion below vacuously.
-    expect(assigned.length).toBe(2);
-
-    const names = assigned.map((m) => m[1]).sort();
-    expect(names).toEqual(["__TEST_HOST__", "__TRUAPI_TEST_HOST__"]);
-
-    // The point of the alias: one control object under two names. Assigning a
-    // copy would let the two drift apart.
-    const values = new Set(assigned.map((m) => m[2]));
-    expect(values.size).toBe(1);
+    withStubWindow((stub) => {
+      publishTestHostGlobals(control as never);
+      // The point of the alias: one control object under two names. Assigning
+      // a copy would let a suite on one name drift from a suite on the other.
+      expect(stub.__TRUAPI_TEST_HOST__).toBe(control);
+      expect(stub.__TEST_HOST__).toBe(control);
+    });
   });
 
   it("clears both names on dispose", () => {
-    expect(deleted.length).toBe(2);
-    expect(deleted.map((m) => m[1]).sort()).toEqual([
-      "__TEST_HOST__",
-      "__TRUAPI_TEST_HOST__",
-    ]);
+    withStubWindow((stub) => {
+      publishTestHostGlobals(control as never)();
+      expect(Object.keys(stub)).toEqual([]);
+    });
   });
 });
 
-describe("the inbound Chat action path", () => {
-  const source = readFileSync(
-    fileURLToPath(new URL("./host-page.ts", import.meta.url)),
-    "utf8",
-  );
-
-  it("does not narrow publishChatAction off the provider type", () => {
-    // Narrowing it away is exactly what made `injectChatAction` look
-    // unservable, so this is the regression worth pinning. The wiring itself
-    // is not covered here: no product in reach subscribes to Chat actions, and
-    // a source grep for the call site passes whether or not it is reached.
-    const declaration = source.slice(
-      source.indexOf("interface WorkerSigningRuntime"),
-      source.indexOf("interface ProductCore"),
-    );
-    expect(declaration).toMatch(/publishChatAction/);
-  });
-});
+// The inbound Chat action path is not covered here. It had three source-level
+// assertions, of which only the `publishChatAction` declaration check could be
+// made to fail at all, and that one proved nothing a type error would not. No
+// product in reach subscribes to Chat actions, so `injectChatAction` is
+// declared and untested.

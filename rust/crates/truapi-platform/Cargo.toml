@@ -11,6 +11,7 @@ async-trait = "0.1"
 derive_more = { version = "2", features = ["debug", "display", "error"] }
 futures = "0.3"
 parity-scale-codec = { version = "3", features = ["derive"] }
+sp-crypto-hashing = { version = "0.1", default-features = false, optional = true }
 unicode-normalization = "0.1"
 url = "2"
 uniffi = { workspace = true, optional = true }
@@ -18,7 +19,7 @@ zeroize = { version = "1", default-features = false, features = ["derive"] }
 
 [features]
 # In-memory `MockPlatform` for tests and host simulators.
-mock = []
+mock = ["dep:sp-crypto-hashing"]
 # FFI derives on the review types consumed by native hosts.
 uniffi = ["dep:uniffi", "truapi/uniffi"]
 

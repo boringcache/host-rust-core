@@ -45,8 +45,8 @@ export const DEV_ACCOUNTS: Record<DevAccountName, Uint8Array> = {
 /**
  * The built-in dev account names.
  *
- * Exported under `@parity/host-api-test-sdk`'s name so a migrating suite that
- * iterates the roster keeps working.
+ * Named as `@parity/host-api-test-sdk` names it, so a suite iterating the
+ * roster reads the same export from either.
  */
 export const DEV_ACCOUNT_NAMES = Object.keys(DEV_ACCOUNTS) as DevAccountName[];
 
@@ -114,8 +114,9 @@ export const LIVE_CHAINS = {
 /**
  * Paseo Asset Hub in `@parity/host-api-test-sdk`'s `NetworkConfig` shape.
  *
- * Exported under the old name so a migrating suite's `networks: [PASEO_ASSET_HUB]`
- * keeps working. The genesis hash is the one the chain reports today, NOT the
+ * Named as `@parity/host-api-test-sdk` names it, so `networks: [PASEO_ASSET_HUB]`
+ * means the same thing here. The genesis hash is the one the chain reports
+ * today, NOT the
  * value that package ships -- its own constant went stale across a chain reset
  * and no longer matches this endpoint, so copying it would import a known-bad
  * value. Re-pin from `chain_getBlockHash(0)` after a reset.

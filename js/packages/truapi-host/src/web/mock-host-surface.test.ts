@@ -4,8 +4,10 @@
 // other is exactly the drift this mock exists to remove, and it is invisible to
 // `tsc` because the two surfaces share no types.
 //
-// So the agreement is asserted here, against the Rust source. Adding a control
-// method to `mock.rs` without adding it to `createMockHost` fails this test.
+// So the agreement is asserted here, against the Rust source, in both
+// directions. Adding a control method to `mock.rs` without adding it to
+// `createMockHost` fails, and so does adding one to `createMockHost` that has
+// no Rust sibling and no entry in `JS_ONLY`.
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -45,6 +47,31 @@ const ALIASES: Record<string, string> = {
   product_storage: "getProductStorage",
 };
 
+/**
+ * JS members the Rust mock deliberately has no sibling for, and why.
+ *
+ * Without this, walking JS -> Rust would fail on every one of them and the
+ * direction would have to be dropped. With it, a JS-only control method is a
+ * decision someone writes down rather than something that appears silently.
+ */
+const JS_ONLY: Record<string, string> = {
+  callbacks: "the host seam the core calls, not a control surface",
+  dispose: "lifecycle, not state; `reset` is what clears the recordings",
+  getHostCallCount: "host-api-test-sdk readiness signal, no Rust caller",
+  getIsAuthenticated: "host-api-test-sdk reader over the auth-state log",
+  getConnectionStatus: "host-api-test-sdk alias over the chain status",
+  getSigningLog: "host-api-test-sdk shape over the confirmation reviews",
+  setPermissionBehavior:
+    "host-api-test-sdk name for the policy Rust sets through MockConfig",
+  statements: "loopback statement store, refused on both sides",
+  getSubmittedStatements: "loopback statement store, refused on both sides",
+  getInjectedStatements: "loopback statement store, refused on both sides",
+  injectStatement: "loopback statement store, refused on both sides",
+  clearStatements: "loopback statement store, refused on both sides",
+  payment: "unimplemented by every host; the mock refuses and explains",
+  coinPayment: "unimplemented by every host; the mock refuses and explains",
+};
+
 /** snake_case -> camelCase, unless the name is an explicit alias. */
 function jsName(name: string): string {
   return (
@@ -69,7 +96,7 @@ function rustControlSurface(): string[] {
   expect(end).toBeGreaterThan(start);
   const block = source.slice(start, end);
 
-  return [...block.matchAll(/\n    pub fn ([a-z0-9_]+)/g)]
+  return [...block.matchAll(/\n    pub (?:async )?fn ([a-z0-9_]+)/g)]
     .map((match) => match[1])
     .filter((name) => name !== "new" && name !== "with_config");
 }
@@ -79,7 +106,10 @@ describe("mock host surface agreement", () => {
     const host = createMockHost();
     const missing = rustControlSurface()
       .map(jsName)
-      .filter((name) => !(name in host));
+      // `Object.hasOwn`, not `in`: `in` walks `Object.prototype`, so a Rust
+      // `to_string`, `has_own_property` or `value_of` would be reported as
+      // present on a host that has no such member at all.
+      .filter((name) => !Object.hasOwn(host, name));
 
     expect(
       missing,
@@ -88,13 +118,44 @@ describe("mock host surface agreement", () => {
     ).toEqual([]);
   });
 
-  it("reads a non-empty Rust surface, so the check cannot pass vacuously", () => {
-    // A regex that silently matched nothing would make the test above green
-    // forever. Pin a floor and a few known members.
+  it("has no control method the Rust MockPlatform lacks", () => {
+    // The other direction. Walking Rust -> JS alone means a capability dropped
+    // from `mock.rs` while `createMockHost` keeps it leaves the two surfaces
+    // disagreeing with nothing failing.
+    const known = new Set(rustControlSurface().map(jsName));
+    const extra = Object.keys(createMockHost()).filter(
+      (name) => !known.has(name) && !Object.hasOwn(JS_ONLY, name),
+    );
+
+    expect(
+      extra,
+      `createMockHost has control methods the Rust MockPlatform does not: ` +
+        `${extra.join(", ")}. Add them there, or record why they are JS-only ` +
+        `in JS_ONLY.`,
+    ).toEqual([]);
+  });
+
+  it("keeps the alias and JS-only maps live", () => {
+    // Both maps are escape hatches from the two checks above, so a stale entry
+    // silently widens them. An alias naming a Rust method that no longer
+    // exists, or a JS-only entry for a member that is gone, fails here.
+    const rust = new Set(rustControlSurface());
+    const host = createMockHost();
+    expect(Object.keys(ALIASES).filter((name) => !rust.has(name))).toEqual([]);
+    expect(
+      Object.keys(JS_ONLY).filter((name) => !Object.hasOwn(host, name)),
+    ).toEqual([]);
+  });
+
+  it("reads a whole Rust surface, so the check cannot pass vacuously", () => {
+    // A regex that silently matched nothing, or a block slice that stopped
+    // early, would make the checks above green forever. Pin a floor plus the
+    // first, a middle and the last method in the block, so a parse truncated
+    // anywhere in it is visible.
     const surface = rustControlSurface();
-    expect(surface.length).toBeGreaterThan(20);
-    expect(surface).toContain("reviews");
-    expect(surface).toContain("grant_permission");
-    expect(surface).toContain("reset");
+    expect(surface.length).toBeGreaterThan(30);
+    expect(surface[0]).toBe("navigations");
+    expect(surface).toContain("clear_storage");
+    expect(surface.at(-1)).toBe("reset");
   });
 });

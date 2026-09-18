@@ -82,20 +82,25 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@noble/hashes": "^2.2.0",
     "@parity/truapi": "^0.17.0",
-    "esbuild": "^0.28.2"
+    "neverthrow": "^8.2.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/bun": "^1.3.0",
-    "neverthrow": "^8.2.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7"
   },
   "peerDependencies": {
-    "@playwright/test": ">=1.40"
+    "@playwright/test": ">=1.40",
+    "esbuild": ">=0.20"
   },
   "peerDependenciesMeta": {
     "@playwright/test": {
+      "optional": true
+    },
+    "esbuild": {
       "optional": true
     }
   }

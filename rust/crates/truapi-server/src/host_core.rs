@@ -563,7 +563,7 @@ impl SigningHostRuntime {
     /// Answer resource allocation as granted without performing it.
     ///
     /// For test hosts only; see [`SigningHostRole::set_grant_allowances_unchecked`].
-    #[cfg(feature = "wasm-signing-host")]
+    #[cfg(feature = "test-host")]
     pub fn set_grant_allowances_unchecked(&self, granted: bool) {
         self.signing_host.set_grant_allowances_unchecked(granted);
     }

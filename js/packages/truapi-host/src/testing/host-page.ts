@@ -156,13 +156,28 @@ declare global {
     /** Published for the Playwright fixture; see the module comment. */
     __TRUAPI_TEST_HOST__?: TestHostControl;
     /**
-     * The same object under the name `@parity/host-api-test-sdk` published.
-     * Suites that drive the host page directly, rather than through the
-     * fixture, reach it here, so migrating one does not mean rewriting every
-     * `page.evaluate` that names the global.
+     * The same object under the name `@parity/host-api-test-sdk` publishes.
+     * A suite that drives the host page directly, rather than through the
+     * fixture, reaches it here under whichever of the two names its
+     * `page.evaluate` calls already use.
      */
     __TEST_HOST__?: TestHostControl;
   }
+}
+
+/**
+ * Publish `control` under both global names, and return the undo.
+ *
+ * One object under two names, never a copy: a suite reaching the page through
+ * either name drives the same mock, and two objects would let them drift.
+ */
+export function publishTestHostGlobals(control: TestHostControl): () => void {
+  window.__TRUAPI_TEST_HOST__ = control;
+  window.__TEST_HOST__ = control;
+  return () => {
+    delete window.__TRUAPI_TEST_HOST__;
+    delete window.__TEST_HOST__;
+  };
 }
 
 /**
@@ -263,8 +278,8 @@ export async function startTestHost(
     if (active) await runtime.disconnectSession();
     // Named, not anonymous: a session with no username makes
     // `account.get_user_id` answer `Unknown`, where a real host names the
-    // signed-in identity. `@parity/host-api-test-sdk` answers with the account
-    // name, so a migrating suite asserting on it keeps working.
+    // signed-in identity. The name is the account's, which is what
+    // `@parity/host-api-test-sdk` answers with too.
     await runtime.activateLocalSession(account.entropy, account.name);
     active = account;
   };
@@ -381,15 +396,13 @@ export async function startTestHost(
   // one -- a production host has no reason to -- so the test host does.
   iframeHost.iframe.id = PRODUCT_FRAME_ID;
 
-  window.__TRUAPI_TEST_HOST__ = control;
-  window.__TEST_HOST__ = control;
+  const unpublish = publishTestHostGlobals(control);
 
   return {
     host: control,
     iframe: iframeHost.iframe,
     dispose() {
-      delete window.__TRUAPI_TEST_HOST__;
-      delete window.__TEST_HOST__;
+      unpublish();
       detach?.();
       iframeHost.dispose();
       worker?.terminate();

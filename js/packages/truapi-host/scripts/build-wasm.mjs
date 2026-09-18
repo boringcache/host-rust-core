@@ -9,8 +9,10 @@
 //             holds the keys, and never holds key material itself.
 //   testing/  the mock host used by tests. Adds `wasm-signing-host`, because a
 //             test host owns dev accounts and signs locally instead of waiting
-//             on a wallet that is not there. Shipped under the `./testing`
-//             subpath so a product bundling `./web` never pulls it in.
+//             on a wallet that is not there, and `test-host`, which carries the
+//             shortcuts a shipping host must not have. Shipped under the
+//             `./testing` subpath so a product bundling `./web` never pulls it
+//             in.
 
 import { execFile } from "node:child_process";
 import { readFile, rm, writeFile } from "node:fs/promises";
@@ -203,4 +205,4 @@ async function build(target, subdir, features = []) {
 }
 
 await build("web", "web");
-await build("web", "testing", ["wasm-signing-host"]);
+await build("web", "testing", ["wasm-signing-host", "test-host"]);

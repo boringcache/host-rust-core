@@ -4,9 +4,9 @@
 // a `page.evaluate` against `window.__TRUAPI_TEST_HOST__`, so the control
 // surface a test drives is the same object the core is answering through.
 //
-// The method names match `@parity/host-api-test-sdk`'s `TestHost` so a suite
-// migrating onto this changes its import, not its assertions. Where a name is
-// absent it is because TrUAPI has no seam for it -- see `notModeled` in
+// The method names are `@parity/host-api-test-sdk`'s `TestHost` names, so a
+// suite written against either reads the same. Where a name is absent it is
+// because TrUAPI has no seam for it -- see `notModeled` in
 // `create-mock-host.ts`; those throw rather than silently pass.
 
 import type { Page, FrameLocator } from "@playwright/test";
@@ -26,8 +26,8 @@ import { createTestHostServer } from "./server.js";
 import { hostPageUrl } from "./host-page-url.js";
 import type { TestHostServer } from "./server.js";
 
-// Re-exported so a migrating test file imports from one path, the way
-// `@parity/host-api-test-sdk/playwright` does.
+// Re-exported so a test file imports the fixture and the chain constants from
+// one path, the way `@parity/host-api-test-sdk/playwright` does.
 export {
   DEFAULT_CHAIN,
   DEV_ACCOUNTS,
@@ -79,9 +79,9 @@ export interface TestHostFixtureOptions {
   /**
    * A single chain, as older `@parity/host-api-test-sdk` versions spell it.
    *
-   * Accepted so a suite written against that vintage needs no edit here; it is
-   * exactly `networks: [chain]`. Passing both is refused rather than merged,
-   * because guessing which one the author meant is worse than saying so.
+   * Exactly `networks: [chain]`, under the name that vintage uses. Passing
+   * both is refused rather than merged, because guessing which one the author
+   * meant is worse than saying so.
    */
   chain?: NetworkConfig;
   /**
@@ -269,8 +269,9 @@ export interface TestHost {
    * Release the host.
    *
    * A no-op. Playwright owns the page's lifetime and closes it when the test
-   * ends, so a suite has nothing to release. Present so a migrating suite does
-   * not have to strip a teardown call that is simply unnecessary here.
+   * ends, so a suite has nothing to release. Declared because
+   * `@parity/host-api-test-sdk`'s surface has it, so a teardown call written
+   * against that surface is still valid here.
    */
   dispose(): Promise<void>;
 

@@ -8,8 +8,12 @@
 //
 // Chain calls are closed rather than left silent so the battery terminates: a
 // silent chain parks every chain-routed method until the process is killed.
-// Those methods therefore fail HERE for a harness reason, which is why the
-// guard in `fidelity.test.ts` compares agreement rather than counting passes.
+// Those methods therefore fail HERE for a harness reason, which is why
+// `diagnosis-reports.test.ts` compares agreement rather than counting passes.
+//
+// Run by hand. Nothing in CI regenerates this report, so the committed one is
+// only as current as the last run, and `diagnosis-reports.test.ts` compares
+// committed files rather than live behaviour.
 //
 //   bun js/packages/truapi-host/scripts/fidelity-report.ts
 import { mkdirSync, writeFileSync } from "node:fs";

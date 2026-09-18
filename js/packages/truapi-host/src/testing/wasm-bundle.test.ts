@@ -38,4 +38,17 @@ suite("testing wasm bundle", () => {
       "export class WasmSigningHostRuntime",
     );
   });
+
+  it("is the only bundle that can answer allocation as granted", () => {
+    // `setGrantAllowancesUnchecked` hands a product a grant nothing allocated.
+    // It is gated on the non-default `test-host` Cargo feature, which only
+    // `scripts/build-wasm.mjs` turns on and only for this bundle, so a shipping
+    // host has no entry point to it at all.
+    expect(readFileSync(testingGlue, "utf8")).toContain(
+      "setGrantAllowancesUnchecked",
+    );
+    expect(readFileSync(webGlue, "utf8")).not.toContain(
+      "setGrantAllowancesUnchecked",
+    );
+  });
 });

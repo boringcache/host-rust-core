@@ -1195,6 +1195,7 @@ impl WasmSigningHostRuntime {
     /// paths without an on-chain personhood identity. Nothing is allocated, so
     /// a green run says the product handles a grant, not that a host would
     /// have given one.
+    #[cfg(feature = "test-host")]
     #[wasm_bindgen(js_name = setGrantAllowancesUnchecked)]
     pub fn set_grant_allowances_unchecked(&self, granted: bool) {
         self.runtime.set_grant_allowances_unchecked(granted);
