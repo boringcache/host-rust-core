@@ -616,6 +616,14 @@ pub(super) async fn allocate_statement_store_allowance(
     let entropy = signing_host.root_entropy()?;
     let allowance =
         derive_sr25519_hard_path(&entropy, &["allowance", "statement-store", product_id])?;
+    // The key is derived locally; only its registration needs the chain. A
+    // host answering allocation as granted hands back the derived key so a
+    // product can sign with it, and skips the registration, so nothing it
+    // signs is accepted by a real statement store.
+    #[cfg(feature = "wasm-signing-host")]
+    if signing_host.grants_allowances_unchecked() {
+        return Ok(allowance.secret.to_bytes().to_vec());
+    }
     let target = allowance.public.to_bytes();
     let candidates = signing_host.reserved_person_collection_candidates(session)?;
     let client = services
@@ -743,6 +751,10 @@ pub(super) async fn allocate_bulletin_allowance(
     signing_host.require_current_session(session)?;
     let entropy = signing_host.root_entropy()?;
     let allowance = derive_sr25519_hard_path(&entropy, &["allowance", "bulletin", product_id])?;
+    #[cfg(feature = "wasm-signing-host")]
+    if signing_host.grants_allowances_unchecked() {
+        return Ok(allowance.secret.to_bytes().to_vec());
+    }
     let target = allowance.public.to_bytes();
 
     let bulletin_rpc = statement_allowance::rpc::RpcClient::new(

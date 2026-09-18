@@ -163,6 +163,13 @@ impl SigningHost {
         })
     }
 
+    /// Whether allocation is answered as granted without performing it.
+    #[cfg(feature = "wasm-signing-host")]
+    pub(crate) fn grants_allowances_unchecked(&self) -> bool {
+        self.grant_allowances_unchecked
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Answer resource allocation as granted without performing it.
     #[cfg(feature = "wasm-signing-host")]
     pub(crate) fn set_grant_allowances_unchecked(&self, granted: bool) {
