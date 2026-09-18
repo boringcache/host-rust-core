@@ -1323,6 +1323,30 @@ Note for anyone reading host-playground's helpers: its `runTest` also takes
 one action, so the oldest row is the only row. A spec that calls it twice would
 silently read the first result both times.
 
+## 29. Both truapi 0.16.0 and 0.17.0 consumers are already served
+
+The test host depends on `@parity/truapi` `^0.17.0`, because its generated
+adapter imports Pocket types 0.16.0 does not export. That does not constrain the
+*product*: the two versions coexist under ordinary nested resolution.
+
+Installed into browse, whose app pins 0.16.0:
+
+| copy | version | used by |
+| --- | --- | --- |
+| `app/node_modules/@parity/truapi` | 0.16.0 | the product |
+| the store's `@parity+truapi@0.17.0` | 0.17.0 | the test host |
+
+and the host runs: the server starts, serves its page, and bundles a 175 KB
+`test-host.js` with no bare `@parity/truapi` specifier left in it. The bundle is
+self-contained, so the host's truapi never has to agree with the product's at
+the module level. They meet on the wire, and 0.16.0 and 0.17.0 are both codec 2.
+
+The only requirement is that a consumer **installs** the package rather than
+copying `dist/` into `node_modules` by hand. Two hand-copied directories left
+over from earlier in this work shadowed the properly installed one and made
+resolution look broken; removing them and reinstalling gave a single 0.17.0 copy.
+That trap has now cost time three times in this document -- install, do not copy.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is
