@@ -4,22 +4,16 @@ import {
   MESSAGE_TYPE_RESPONSE,
   type MethodIds,
   scale,
+  VersionedRemotePermissionRequest,
+  VersionedRemotePermissionResponse,
+  VersionedRemotePermissionError,
+  VersionedHostDevicePermissionRequest,
+  VersionedHostDevicePermissionResponse,
+  VersionedHostDevicePermissionError,
 } from '@parity/truapi';
 import {
-  VersionedAuthorizeNetworkAccessRequest,
-  VersionedAuthorizeNetworkAccessResponse,
-  VersionedAuthorizeNetworkAccessError,
-  VersionedAuthorizeWebRtcRequest,
-  VersionedAuthorizeWebRtcResponse,
-  VersionedAuthorizeWebRtcError,
-  VersionedAuthorizeMediaCaptureRequest,
-  VersionedAuthorizeMediaCaptureResponse,
-  VersionedAuthorizeMediaCaptureError,
-} from '../../packages/truapi/src/generated/internal.js';
-import {
-  PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
-  PERMISSIONS_AUTHORIZE_WEB_RTC,
-  PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE,
+  PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION,
+  PERMISSIONS_AUTHORIZE_DEVICE_PERMISSION,
 } from '@parity/truapi/wire-table';
 import { freezeAndDelete } from './freeze.js';
 
@@ -85,6 +79,10 @@ export function createPermissionAuthorization(
   const encode = win.TextEncoder.prototype.encode;
   const schedule = win.setTimeout.bind(win);
   const cancel = win.clearTimeout.bind(win);
+  const NativeURL = win.URL;
+  const hostname = descriptor(NativeURL.prototype, 'hostname')!.get!;
+  const protocol = descriptor(NativeURL.prototype, 'protocol')!.get!;
+  const indexOf = String.prototype.indexOf;
 
   // Codecs run before product code can replace the primitives they use.
   const requestId = '0000000000000000';
@@ -106,51 +104,47 @@ export function createPermissionAuthorization(
     })._unsafeUnwrap();
   }
   const requestTemplate = template(
-    PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
+    PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION,
     MESSAGE_TYPE_REQUEST,
-    VersionedAuthorizeNetworkAccessRequest.enc({
+    VersionedRemotePermissionRequest.enc({
       tag: 'V1',
-      value: { url: '' },
+      value: { permission: { tag: 'Remote', value: { domains: [''] } } },
     }),
   );
   const requestPrefixLength = requestTemplate.length - scale.str.enc('').length;
   const responseTemplate = template(
-    PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
+    PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION,
     MESSAGE_TYPE_RESPONSE,
     scale.Result(
-      VersionedAuthorizeNetworkAccessResponse,
-      scale.CallError(VersionedAuthorizeNetworkAccessError),
-    ).enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
+      VersionedRemotePermissionResponse,
+      scale.CallError(VersionedRemotePermissionError),
+    ).enc({ success: true, value: { tag: 'V1', value: { granted: true } } }),
   );
   const webRtcRequest = template(
-    PERMISSIONS_AUTHORIZE_WEB_RTC,
+    PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION,
     MESSAGE_TYPE_REQUEST,
-    VersionedAuthorizeWebRtcRequest.enc({ tag: 'V1' }),
-  );
-  const webRtcResponse = template(
-    PERMISSIONS_AUTHORIZE_WEB_RTC,
-    MESSAGE_TYPE_RESPONSE,
-    scale.Result(
-      VersionedAuthorizeWebRtcResponse,
-      scale.CallError(VersionedAuthorizeWebRtcError),
-    ).enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
-  );
-
-  const mediaRequests = [0, 1, 2, 3].map((requested) => template(
-    PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE,
-    MESSAGE_TYPE_REQUEST,
-    VersionedAuthorizeMediaCaptureRequest.enc({
+    VersionedRemotePermissionRequest.enc({
       tag: 'V1',
-      value: { audio: (requested & 1) !== 0, video: (requested & 2) !== 0 },
+      value: { permission: { tag: 'WebRtc' } },
     }),
-  ));
-  const mediaResponse = template(
-    PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE,
+  );
+  const cameraRequest = template(
+    PERMISSIONS_AUTHORIZE_DEVICE_PERMISSION,
+    MESSAGE_TYPE_REQUEST,
+    VersionedHostDevicePermissionRequest.enc({ tag: 'V1', value: 'Camera' }),
+  );
+  const microphoneRequest = template(
+    PERMISSIONS_AUTHORIZE_DEVICE_PERMISSION,
+    MESSAGE_TYPE_REQUEST,
+    VersionedHostDevicePermissionRequest.enc({ tag: 'V1', value: 'Microphone' }),
+  );
+  const deviceResponse = template(
+    PERMISSIONS_AUTHORIZE_DEVICE_PERMISSION,
     MESSAGE_TYPE_RESPONSE,
     scale.Result(
-      VersionedAuthorizeMediaCaptureResponse,
-      scale.CallError(VersionedAuthorizeMediaCaptureError),
-    ).enc({ success: true, value: { tag: 'V1', value: { allowed: true } } }),
+      VersionedHostDevicePermissionResponse,
+      scale.CallError(VersionedHostDevicePermissionError),
+    ).enc({ success: true, value: { tag: 'V1', value: { granted: true } } }),
   );
 
   let pending: PendingRequest | undefined;
@@ -276,7 +270,7 @@ export function createPermissionAuthorization(
   function authorize(
     template: Uint8Array,
     response: Uint8Array,
-    url: string | null,
+    domain: string | null,
     decide: (allowed: boolean) => void,
   ): () => void {
     if (closed || !send) {
@@ -284,17 +278,17 @@ export function createPermissionAuthorization(
       return () => {};
     }
     try {
-      const encodedUrl = url === null
+      const encodedDomain = domain === null
         ? new NativeBytes(0)
-        : apply(encode, encoder, [url]) as Uint8Array;
-      const length = apply(bytesLength, encodedUrl, []) as number;
+        : apply(encode, encoder, [domain]) as Uint8Array;
+      const length = apply(bytesLength, encodedDomain, []) as number;
       if (length >= 2 ** 30) {
         decide(false);
         return () => {};
       }
-      const width = url === null ? 0 : length < 64 ? 1 : length < 16384 ? 2 : 4;
+      const width = domain === null ? 0 : length < 64 ? 1 : length < 16384 ? 2 : 4;
       let compactLength = length * 4 + (width === 1 ? 0 : width === 2 ? 1 : 2);
-      const prefixLength = url === null
+      const prefixLength = domain === null
         ? apply(bytesLength, template, [])
         : requestPrefixLength;
       const responseLength = apply(bytesLength, response, []);
@@ -315,7 +309,7 @@ export function createPermissionAuthorization(
         compactLength >>>= 8;
       }
       for (let index = 0; index < length; index++)
-        frame[prefixLength + width + index] = encodedUrl[index];
+        frame[prefixLength + width + index] = encodedDomain[index];
       const entry: PendingRequest = {
         expected,
         frame,
@@ -339,11 +333,61 @@ export function createPermissionAuthorization(
     }
   }
 
+  function authorizeNetwork(
+    url: string,
+    decide: (allowed: boolean) => void,
+  ): () => void {
+    let domain: string;
+    try {
+      const destination = new NativeURL(url);
+      const scheme = apply(protocol, destination, []);
+      domain = apply(hostname, destination, []);
+      if (
+        (scheme !== 'http:' && scheme !== 'https:' && scheme !== 'ws:' && scheme !== 'wss:') ||
+        !domain ||
+        apply(indexOf, domain, ['*']) !== -1
+      ) {
+        decide(false);
+        return () => {};
+      }
+    } catch {
+      decide(false);
+      return () => {};
+    }
+    return authorize(requestTemplate, responseTemplate, domain, decide);
+  }
+
+  function authorizeMedia(
+    audio: boolean,
+    video: boolean,
+    decide: (allowed: boolean) => void,
+  ): () => void {
+    let pending: { cancel: (() => void) | undefined } | undefined;
+    function request(template: Uint8Array, microphoneNext: boolean): void {
+      const entry = { cancel: undefined as (() => void) | undefined };
+      pending = entry;
+      const cancel = authorize(template, deviceResponse, null, (allowed) => {
+        if (pending !== entry) return;
+        pending = undefined;
+        if (allowed && microphoneNext) request(microphoneRequest, false);
+        else decide(allowed);
+      });
+      if (pending === entry) entry.cancel = cancel;
+      else cancel();
+    }
+    if (video) request(cameraRequest, audio);
+    else if (audio) request(microphoneRequest, false);
+    else decide(false);
+    return () => {
+      const cancel = pending?.cancel;
+      pending = undefined;
+      cancel?.();
+    };
+  }
+
   return {
-    network: (url, decide) => authorize(requestTemplate, responseTemplate, url, decide),
-    webRtc: closed ? false : (decide) => authorize(webRtcRequest, webRtcResponse, null, decide),
-    media: closed ? false : (audio, video, decide) => authorize(
-      mediaRequests[(audio ? 1 : 0) + (video ? 2 : 0)]!, mediaResponse, null, decide,
-    ),
+    network: authorizeNetwork,
+    webRtc: closed ? false : (decide) => authorize(webRtcRequest, responseTemplate, null, decide),
+    media: closed ? false : authorizeMedia,
   };
 }

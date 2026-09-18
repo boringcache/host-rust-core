@@ -4427,21 +4427,18 @@ mod tests {
     }
 
     #[test]
-    fn native_network_access_uses_the_execution_permission_callback() {
-        for (answer, expected) in [
-            (
-                Ok(NativePermissionDecision::AllowAlways),
-                PermissionAuthorizationStatus::Authorized,
-            ),
-            (
-                Ok(NativePermissionDecision::Deny),
-                PermissionAuthorizationStatus::Denied,
-            ),
+    fn native_remote_authorization_uses_the_execution_permission_callback() {
+        use truapi::api::Permissions;
+        use truapi::versioned::permissions;
+
+        for (answer, granted) in [
+            (Ok(NativePermissionDecision::AllowAlways), true),
+            (Ok(NativePermissionDecision::Deny), false),
             (
                 Err(HostRejection::Rejected {
                     reason: "permission UI unavailable".to_string(),
                 }),
-                PermissionAuthorizationStatus::NotDetermined,
+                false,
             ),
         ] {
             let host = NativeTrUApiHostRuntime::with_runtime_config(
@@ -4449,25 +4446,45 @@ mod tests {
                 native_host_runtime_config(),
             )
             .unwrap();
+            let callbacks = Arc::new(EventCallbacks {
+                remote_permission_result: answer,
+                ..EventCallbacks::new()
+            });
             let execution = host
                 .open_product_execution(
-                    Arc::new(EventCallbacks {
-                        remote_permission_result: answer,
-                        ..EventCallbacks::new()
-                    }),
+                    callbacks.clone(),
                     None,
                     None,
                     native_execution_config("fetch.dot", ProductExecutionKind::App),
                 )
                 .unwrap();
-            let result = futures::executor::block_on(
+            let request = v01::RemotePermissionRequest {
+                permission: v01::RemotePermission::Remote {
+                    domains: vec!["api.example.com".to_string()],
+                },
+            };
+            let response = futures::executor::block_on(
                 execution
                     .admin()
                     .product_runtime()
-                    .authorize_network_access("https://api.example.com/data".to_string()),
+                    .authorize_remote_permission(
+                        &truapi::CallContext::default(),
+                        permissions::RemotePermissionRequest::V1(request),
+                    ),
             )
             .unwrap();
-            assert_eq!(result, expected);
+            assert_eq!(
+                (
+                    response,
+                    callbacks.remote_permission_calls.load(Ordering::SeqCst)
+                ),
+                (
+                    permissions::RemotePermissionResponse::V1(v01::RemotePermissionResponse {
+                        granted
+                    }),
+                    1,
+                ),
+            );
         }
     }
 
@@ -4549,7 +4566,10 @@ mod tests {
             let consumed = execution
                 .admin()
                 .product_runtime()
-                .authorize_network_access("https://api.example.com/data".to_string())
+                .authorize_remote_permission(
+                    &context,
+                    truapi::versioned::permissions::RemotePermissionRequest::V1(request.clone()),
+                )
                 .await
                 .unwrap();
             let after_use = execution
@@ -4577,7 +4597,9 @@ mod tests {
                         v01::RemotePermissionResponse { granted: true },
                     ),
                     PermissionAuthorizationStatus::NotDetermined,
-                    PermissionAuthorizationStatus::Authorized,
+                    truapi::versioned::permissions::RemotePermissionResponse::V1(
+                        v01::RemotePermissionResponse { granted: true },
+                    ),
                     PermissionAuthorizationStatus::NotDetermined,
                     1,
                     PermissionAuthorizationStatus::NotDetermined,

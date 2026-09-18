@@ -5,23 +5,19 @@ import {
   encodeWireMessage,
   MESSAGE_TYPE_RESPONSE,
   scale,
+  type HostDevicePermissionRequest,
+  VersionedRemotePermissionRequest,
+  VersionedRemotePermissionResponse,
+  VersionedRemotePermissionError,
+  VersionedHostDevicePermissionRequest,
+  VersionedHostDevicePermissionResponse,
+  VersionedHostDevicePermissionError,
 } from '@parity/truapi';
 import {
-  VersionedAuthorizeNetworkAccessRequest,
-  VersionedAuthorizeNetworkAccessResponse,
-  VersionedAuthorizeNetworkAccessError,
-  VersionedAuthorizeWebRtcRequest,
-  VersionedAuthorizeWebRtcResponse,
-  VersionedAuthorizeWebRtcError,
-  VersionedAuthorizeMediaCaptureRequest,
-  VersionedAuthorizeMediaCaptureResponse,
-  VersionedAuthorizeMediaCaptureError,
-} from '../../packages/truapi/src/generated/internal.js';
-import {
-  PERMISSIONS_AUTHORIZE_NETWORK_ACCESS,
-  PERMISSIONS_AUTHORIZE_WEB_RTC,
-  PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE,
+  PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION,
+  PERMISSIONS_AUTHORIZE_DEVICE_PERMISSION,
 } from '@parity/truapi/wire-table';
+import { createPermissionAuthorization } from './network-transport.js';
 
 const build = await Bun.build({
   entrypoints: [new URL('./index.ts', import.meta.url).pathname],
@@ -33,12 +29,12 @@ const container = await build.outputs[0].text();
 const origin = 'https://product.example';
 
 function browser(
-  authorize?: (url: string) => boolean | Promise<boolean>,
+  authorize?: (domain: string) => boolean | Promise<boolean>,
   pageUrl = `${origin}/index.html`,
   transport: 'port' | 'socket' = 'port',
   transformReply: (bytes: Uint8Array) => Uint8Array = (bytes) => bytes,
   authorizeWebRtc: () => boolean | Promise<boolean> = () => false,
-  authorizeMedia: (request: { audio: boolean; video: boolean }) => boolean | Promise<boolean> = () => false,
+  authorizeDevice: (request: HostDevicePermissionRequest) => boolean | Promise<boolean> = () => false,
   mediaAllowed = true,
 ) {
   class BrowserRequest extends Request {
@@ -109,23 +105,27 @@ function browser(
     message = new Uint8Array(buffer, offset, length);
     sent.push(message);
     const decoded = decodeWireMessage(message)._unsafeUnwrap();
-    const webRtc = decoded.payload.methodId === PERMISSIONS_AUTHORIZE_WEB_RTC.method;
-    const media = decoded.payload.methodId === PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE.method;
+    const device = decoded.payload.methodId === PERMISSIONS_AUTHORIZE_DEVICE_PERMISSION.method;
     expect({
       trait: decoded.payload.traitId,
       method: decoded.payload.methodId,
       kind: 'request',
-    }).toEqual(media ? PERMISSIONS_AUTHORIZE_MEDIA_CAPTURE : webRtc ? PERMISSIONS_AUTHORIZE_WEB_RTC : PERMISSIONS_AUTHORIZE_NETWORK_ACCESS);
-    const url = webRtc || media ? null : VersionedAuthorizeNetworkAccessRequest.dec(
-      decoded.payload.value,
-    ).value.url;
-    if (webRtc) {
-      expect(VersionedAuthorizeWebRtcRequest.dec(decoded.payload.value)).toEqual({ tag: 'V1' });
+    }).toEqual(device ? PERMISSIONS_AUTHORIZE_DEVICE_PERMISSION : PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION);
+    let decision: boolean | Promise<boolean>;
+    if (device) {
+      decision = authorizeDevice(VersionedHostDevicePermissionRequest.dec(decoded.payload.value).value);
+    } else {
+      const { permission } = VersionedRemotePermissionRequest.dec(decoded.payload.value).value;
+      if (permission.tag === 'Remote') {
+        expect(permission.value.domains).toHaveLength(1);
+        decision = authorize!(permission.value.domains[0]!);
+      } else {
+        expect(permission).toEqual({ tag: 'WebRtc' });
+        decision = authorizeWebRtc();
+      }
     }
-    Promise.resolve(media
-      ? authorizeMedia(VersionedAuthorizeMediaCaptureRequest.dec(decoded.payload.value).value)
-      : url === null ? authorizeWebRtc() : authorize!(url)).then(
-      (allowed) => {
+    Promise.resolve(decision).then(
+      (granted) => {
         const reply = encodeWireMessage({
           requestId: decoded.requestId,
           payload: {
@@ -133,10 +133,10 @@ function browser(
             messageType: MESSAGE_TYPE_RESPONSE,
             value: scale
               .Result(
-                media ? VersionedAuthorizeMediaCaptureResponse : webRtc ? VersionedAuthorizeWebRtcResponse : VersionedAuthorizeNetworkAccessResponse,
-                scale.CallError(media ? VersionedAuthorizeMediaCaptureError : webRtc ? VersionedAuthorizeWebRtcError : VersionedAuthorizeNetworkAccessError),
+                device ? VersionedHostDevicePermissionResponse : VersionedRemotePermissionResponse,
+                scale.CallError(device ? VersionedHostDevicePermissionError : VersionedRemotePermissionError),
               )
-              .enc({ success: true, value: { tag: 'V1', value: { allowed } } }),
+              .enc({ success: true, value: { tag: 'V1', value: { granted } } }),
           },
         })._unsafeUnwrap();
         deliver(transformReply(reply));
@@ -290,7 +290,7 @@ describe('container fetch authorization', () => {
         sockets: realm.sockets.map(socket => socket.url),
         second,
       }).toEqual({
-        authorized: ['wss://api.example/socket', 'wss://api.example/socket'],
+        authorized: ['api.example', 'api.example'],
         sockets: transport === 'socket'
           ? ['ws://127.0.0.1:1234/?t=secret', 'wss://api.example/socket']
           : ['wss://api.example/socket'],
@@ -308,27 +308,85 @@ describe('container fetch authorization', () => {
       new Promise(resolve => changed.addEventListener('close', resolve, { once: true }));
     `, realm.context);
     expect({ authorized, sockets: realm.sockets.map(socket => socket.url) }).toEqual({
-      authorized: ['ws://127.0.0.1:1234/?t=other'],
+      authorized: ['127.0.0.1'],
       sockets: ['ws://127.0.0.1:1234/?t=secret', 'ws://127.0.0.1:1234/?t=secret'],
     });
   });
 
   it('authorizes each capture over the private Rust channel', async () => {
     for (const transport of ['port', 'socket'] as const) {
-      const decisions: { audio: boolean; video: boolean }[] = [];
+      const decisions: HostDevicePermissionRequest[] = [];
+      const grants = [true, true, false, true, false];
       const realm = browser(() => false, undefined, transport, (bytes) => bytes,
         () => false, (request) => {
           decisions.push(request);
-          return decisions.length === 1;
+          return grants[decisions.length - 1]!;
         });
-      const capture = () => runInContext(
-        'navigator.mediaDevices.getUserMedia({ audio: true, video: true })', realm.context);
-      expect(await capture()).toBe('capture');
-      await expect(capture()).rejects.toMatchObject({ name: 'NotAllowedError' });
+      const capture = (audio: boolean, video: boolean) => runInContext(
+        `navigator.mediaDevices.getUserMedia({ audio: ${audio}, video: ${video} })`, realm.context);
+      expect(await capture(true, true)).toBe('capture');
+      await expect(capture(true, true)).rejects.toMatchObject({ name: 'NotAllowedError' });
+      expect(await capture(true, false)).toBe('capture');
+      await expect(capture(false, true)).rejects.toMatchObject({ name: 'NotAllowedError' });
       expect({ decisions, captures: realm.context.mediaCalls }).toEqual({
-        decisions: [{ audio: true, video: true }, { audio: true, video: true }],
-        captures: [{ audio: true, video: true }],
+        decisions: ['Camera', 'Microphone', 'Camera', 'Microphone', 'Camera'],
+        captures: [{ audio: true, video: true }, { audio: true, video: false }],
       });
+    }
+  });
+
+  it('cancels whichever media permission is pending without continuing capture', () => {
+    for (const cancelAfterCamera of [false, true]) {
+      const frames: Uint8Array[] = [];
+      const port = {
+        onmessage: null as ((event: MessageEvent) => void) | null,
+        postMessage(frame: Uint8Array) {
+          frames.push(frame);
+        },
+      };
+      const win = {
+        Uint8Array,
+        ArrayBuffer,
+        URL,
+        MessageEvent,
+        TextEncoder,
+        setTimeout,
+        clearTimeout,
+        __truapi_network_port__: port,
+      };
+      const { media } = createPermissionAuthorization(
+        win as unknown as Window & typeof globalThis,
+      );
+      if (!media) throw new Error('Expected media authorization transport');
+      function approve(frame: Uint8Array): void {
+        const message = decodeWireMessage(frame)._unsafeUnwrap();
+        message.payload.messageType = MESSAGE_TYPE_RESPONSE;
+        message.payload.value = scale.Result(
+          VersionedHostDevicePermissionResponse,
+          scale.CallError(VersionedHostDevicePermissionError),
+        ).enc({ success: true, value: { tag: 'V1', value: { granted: true } } });
+        port.onmessage!(new MessageEvent('message', {
+          data: encodeWireMessage(message)._unsafeUnwrap(),
+        }));
+      }
+      const decisions: boolean[] = [];
+      const cancel = media(true, true, (allowed) => decisions.push(allowed));
+      if (cancelAfterCamera) approve(frames[0]!);
+      cancel();
+      approve(frames[frames.length - 1]!);
+      expect({
+        decisions,
+        requested: frames.map((frame) =>
+          VersionedHostDevicePermissionRequest.dec(
+            decodeWireMessage(frame)._unsafeUnwrap().payload.value,
+          ).value,
+        ),
+      }).toEqual({
+        decisions: [],
+        requested: cancelAfterCamera ? ['Camera', 'Microphone'] : ['Camera'],
+      });
+      media(false, false, (allowed) => decisions.push(allowed));
+      expect(decisions).toEqual([false]);
     }
   });
 
@@ -381,7 +439,7 @@ describe('container fetch authorization', () => {
       requested: realm.requests.map((request) => request.url),
     }).toEqual({
       status: 200,
-      authorized: ['https://api.example/data'],
+      authorized: ['api.example'],
       requested: ['https://api.example/data'],
     });
   });
@@ -402,7 +460,7 @@ describe('container fetch authorization', () => {
       sockets: realm.sockets.map((socket) => socket.url),
       requests: realm.requests.length,
     }).toEqual({
-      authorized: ['https://api.example/data'],
+      authorized: ['api.example'],
       sockets: ['ws://127.0.0.1:1234/?t=secret'],
       requests: 1,
     });
@@ -418,20 +476,20 @@ describe('container fetch authorization', () => {
     );
     const denied = realm.fetch('https://denied.example/data');
     const granted = realm.fetch('https://allowed.example/data');
-    decisions.get('https://allowed.example/data')!(true);
+    decisions.get('allowed.example')!(true);
     await granted;
     const stale = decodeWireMessage(realm.sent[1]!)._unsafeUnwrap();
     stale.payload.messageType = MESSAGE_TYPE_RESPONSE;
     stale.payload.value = scale
       .Result(
-        VersionedAuthorizeNetworkAccessResponse,
-        scale.CallError(VersionedAuthorizeNetworkAccessError),
+        VersionedRemotePermissionResponse,
+        scale.CallError(VersionedRemotePermissionError),
       )
-      .enc({ success: true, value: { tag: 'V1', value: { allowed: true } } });
+      .enc({ success: true, value: { tag: 'V1', value: { granted: true } } });
     realm.privatePort.onmessage!({
       data: encodeWireMessage(stale)._unsafeUnwrap(),
     } as MessageEvent);
-    decisions.get('https://denied.example/data')!(false);
+    decisions.get('denied.example')!(false);
     await expect(denied).rejects.toThrow('Network access is not allowed');
     expect(realm.requests.map((request) => request.url)).toEqual([
       'https://allowed.example/data',
@@ -470,19 +528,20 @@ describe('container fetch authorization', () => {
     });
   }
 
-  it('encodes long URLs and Unicode using the generated protocol schema', async () => {
+  it('encodes concrete domains with the generated permission schema', async () => {
     const authorized: string[] = [];
     const realm = browser((url) => {
       authorized.push(url);
       return true;
     });
     const urls = [
-      'https://api.example/short',
-      `https://api.example/\u96ea?value=${'a'.repeat(100)}`,
-      `https://api.example/?value=${'b'.repeat(16_400)}`,
+      'https://API.EXAMPLE:8443/short',
+      'https://Bücher.example/雪',
+      `https://${'a'.repeat(100)}.example/path`,
+      `https://${'b'.repeat(16_400)}.example/path`,
     ];
     for (const url of urls) await realm.fetch(url);
-    expect(authorized).toEqual(urls.map((url) => new URL(url).href));
+    expect(authorized).toEqual(urls.map((url) => new URL(url).hostname));
   });
 
   it('denies pending and later fetches when the private transport closes', async () => {
@@ -555,7 +614,7 @@ describe('container fetch authorization', () => {
       'Network access is not allowed',
     );
     expect({ authorized, requests: realm.requests }).toEqual({
-      authorized: ['https://denied.example/data'],
+      authorized: ['denied.example'],
       requests: [],
     });
   });
@@ -641,9 +700,9 @@ describe('container fetch authorization', () => {
       authorized.push(url);
       return true;
     });
-    await expect(realm.fetch('file:///secret')).rejects.toThrow(
-      'Network access is not allowed',
-    );
+    for (const url of ['file:///secret', 'https://*.example/data']) {
+      await expect(realm.fetch(url)).rejects.toThrow('Network access is not allowed');
+    }
     expect({ authorized, requests: realm.requests }).toEqual({
       authorized: [],
       requests: [],
@@ -695,7 +754,7 @@ describe('container fetch authorization', () => {
       body: await request.text(),
       header: request.headers.get('x-product'),
     }).toEqual({
-      authorized: ['https://api.example/data'],
+      authorized: ['api.example'],
       url: 'https://api.example/data',
       method: 'POST',
       body: 'original',
@@ -782,7 +841,7 @@ describe('container fetch authorization', () => {
       'Network access is not allowed',
     );
     expect({ authorized, requests: realm.requests }).toEqual({
-      authorized: ['https://denied.example/data'],
+      authorized: ['denied.example'],
       requests: [],
     });
   });
