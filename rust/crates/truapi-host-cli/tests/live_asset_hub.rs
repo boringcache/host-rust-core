@@ -392,3 +392,38 @@ async fn live_asset_hub_reports_registered_names_as_unavailable() {
         "an unminted name is available"
     );
 }
+
+/// The NFT purse reads `pallet-scarcity` storage, builds `Scarcity.transfer`,
+/// and authorizes it through `AsScarcity::AsNft` on a V4 signed extrinsic.
+/// That last choice holds only while Asset Hub declares no
+/// `VerifyMultiSignature`; the day it does, the transfer can become a General
+/// V5 transaction and this test says so.
+#[tokio::test]
+#[ignore = "needs network access to a live Asset Hub"]
+async fn live_asset_hub_declares_the_nft_purse_shape() {
+    use truapi_server::statement_allowance::extension::AS_SCARCITY;
+
+    let (_rpc, metadata) = asset_hub().await;
+
+    for entry in ["NftsByOwner", "Locked", "Instances", "ItemDefs"] {
+        assert!(
+            metadata.storage_value_type("Scarcity", entry).is_some(),
+            "Asset Hub declares Scarcity.{entry}"
+        );
+    }
+    metadata
+        .call_indices("Scarcity", "transfer")
+        .expect("Asset Hub declares Scarcity.transfer");
+    let as_scarcity = metadata
+        .extension_index(AS_SCARCITY)
+        .expect("Asset Hub declares the AsScarcity extension");
+    let as_nft = metadata
+        .extension_info_variant_index(AS_SCARCITY, "AsNft")
+        .expect("AsScarcity carries an AsNft variant");
+    println!("live AsScarcity at extension {as_scarcity}: AsNft={as_nft}");
+    assert!(
+        metadata.extension_index("VerifyMultiSignature").is_none(),
+        "Asset Hub gained VerifyMultiSignature; the purse transfer can move to a General V5 \
+         transaction"
+    );
+}

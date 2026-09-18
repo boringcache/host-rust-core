@@ -911,6 +911,7 @@ The top-level `--script` option does not update remembered `/script` state.
 | `ring-vrf-smoke.ts` | Verify RFC-0024 registration, listing, alias, non-membership proof, and direct signing behavior. |
 | `preimage-smoke.ts` | Exercise Bulletin preimage submission and lookup. |
 | `smart-contract-allowance-smoke.ts` | Requests a PGAS allowance for product account index 0 and reports the outcome. |
+| `nft-purse-smoke.ts` | List the product's NFT purse, allocate stable receive keys, and check the typed refusals for an unheld instance and a numeric target purse. |
 
 `battery.ts` writes to `explorer/diagnosis-reports/spa/<role>-cli.md` unless
 `TRUAPI_BATTERY_REPORT_PATH` overrides the destination. `scripts/battery.sh` in
@@ -1591,6 +1592,7 @@ surface.
 | Chain | chainHead-v1 follow/header/body/storage/call/unpin/continue/stop, chain spec queries, transaction broadcast/stop. |
 | Entropy | Product-scoped deterministic entropy from the active account/session. |
 | Local Storage | Persistent product-scoped read, write, and clear. |
+| NFT Purse | Real `pallet-scarcity` purses on Asset Hub: listing, idempotent receive-key allocation, and host-signed transfers with a consent sheet per move; derived locally on a signing host, relayed to the paired signing host on a pairing host. |
 | Notifications | In-process immediate/scheduled delivery and cancellation with transcript events. |
 | Permissions | Device and remote permission approval through the CLI policy. |
 | Preimage | Real Bulletin submission/lookup path plus bounded in-core read-after-write cache. |

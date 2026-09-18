@@ -625,6 +625,14 @@ Scripts under `js/scripts/` include:
   its alias, verifies a fresh non-member key returns `NotMember` for a proof,
   and exercises direct ring-VRF signing.
 - `preimage-smoke.ts` — a focused Bulletin preimage flow check.
+- `nft-purse-smoke.ts` — every `nftPurse` method a product can call without
+  holding an NFT: lists the product's purse on Asset Hub, checks receive keys
+  are stable per idempotency key and distinct across keys, drives a transfer of
+  an unheld instance to `Failed { NotFound }`, and expects a numeric target
+  purse to be refused as `UnknownTarget`. Landing a real transfer needs an NFT
+  minted into a receive address first. On a direct signing host the purse keys
+  are derived locally; on a pairing host every call is relayed to the paired
+  signing host, which also shows the transfer sheet.
 
 The generated examples are baked to the `truapi-playground.dot` product. With
 live routing enabled, `Chain/stop_transaction` uses host-owned operation ids and
