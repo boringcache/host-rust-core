@@ -3,4 +3,9 @@
 "@parity/truapi-host": minor
 ---
 
-Preserve one-use grants with explicit host permission decisions. Normalize remote domains, match legacy wildcard coverage and navigation permissions, and keep a shared blessed-domain list. Add internal `authorize_remote_permission` and `authorize_device_permission` methods for containers, reusing the public request types while consuming one-use grants. Keep these methods out of the public SDK and API documentation. Present per-action confirmations without misleading persistent-permission choices.
+- Host `device_permission` and `remote_permission` callbacks return `PermissionDecision` (`AllowOnce`, `AllowAlways`, or `Deny`). Embedders must update their callbacks; product-facing responses remain boolean.
+- Keep one-use grants in memory. Internal `authorize_remote_permission` and `authorize_device_permission` methods consume them using the public request types, without exposing the methods in the public SDK or API documentation.
+- Normalize remote domains, match legacy wildcard coverage, and keep a shared blessed-domain list.
+- Require `OpenUrl` for external navigation, including allowed application schemes. A lasting grant covers all external destinations; domain permissions govern outbound network requests.
+- Require `Notifications` before `send_push_notification`, prompting when undecided and rejecting delivery when denied.
+- Present per-action confirmations without misleading persistent-permission choices.
