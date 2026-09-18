@@ -12,6 +12,10 @@ that sign with real sr25519 from fixed entropy.
 A second WASM bundle at `./wasm/testing` carries `wasm-signing-host`, which is what lets the test host own keys; the
 `./wasm/web` production bundle is unchanged.
 
-Capabilities the protocol declares but no host implements — payments, and the statement-store controls — throw with the
-reason rather than returning a plausible value, so a test reaching an unserved path learns why instead of passing
-against a fake.
+Statement-store controls are served through the chain connection the host owns: `injectStatement` publishes a
+SCALE-encoded statement into the product's subscriptions, `getSubmittedStatements` reads submissions back off the
+transport, and `injectChatAction` publishes a host-authored Chat action into the product's action stream.
+
+Payments throw with the reason rather than returning a plausible value: the protocol declares them but no host
+implements them, so a test reaching that path learns why instead of passing against a fake. `setLoginBehavior` throws
+too, pointing at the `loginBehavior` fixture option, which is where the test host takes it.
