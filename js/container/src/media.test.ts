@@ -9,6 +9,10 @@ function realm() {
   const stream = { id: 'native-stream' };
   let failure: unknown;
   class MediaDevices {
+    getDisplayMedia() {
+      calls.push('display');
+      return Promise.resolve(stream);
+    }
     getUserMedia(constraints: any) {
       calls.push(constraints);
       return failure ? Promise.reject(failure) : Promise.resolve(stream);
@@ -219,7 +223,7 @@ describe('constraints agree with the authorized media types', () => {
 });
 
 describe('capture entry points stay protected', () => {
-  it('guards the prototype method and rejects incompatible receivers without consuming consent', async () => {
+  it('guards prototype methods and blocks unsupported screen capture without consuming consent', async () => {
     const { win, requests, calls } = gated();
     const method = Object.getPrototypeOf(
       win.navigator.mediaDevices,
@@ -239,7 +243,18 @@ describe('capture entry points stay protected', () => {
     const pending = method.call(win.navigator.mediaDevices, { video: true });
     requests[0]!.decide(false);
     await expect(pending).rejects.toMatchObject({ name: 'NotAllowedError' });
-    expect(calls).toEqual([]);
+    await expect(
+      win.navigator.mediaDevices.getDisplayMedia(),
+    ).rejects.toMatchObject({ name: 'NotAllowedError' });
+    await expect(
+      win.MediaDevices.prototype.getDisplayMedia.call(
+        win.navigator.mediaDevices,
+      ),
+    ).rejects.toMatchObject({ name: 'NotAllowedError' });
+    expect(() => {
+      delete (win.MediaDevices.prototype as any).getDisplayMedia;
+    }).toThrow();
+    expect([requests.length, calls]).toEqual([1, []]);
   });
 
   it('routes standard and prefixed callback APIs through the same per-call check', () => {

@@ -256,14 +256,16 @@ The product running in the `WKWebView` opens a `WebSocket` to the localhost port
 
 The core's `Permissions` platform trait has two methods, and so does `HostCallbacks`:
 
-- `devicePermission(request:)` - OS-scoped grants (camera, mic, location, push). `request` is a typed `HostDevicePermissionRequest`.
+- `devicePermission(request:)` - product consent for device capabilities (camera, mic, location, push). `request` is a typed `HostDevicePermissionRequest`.
 - `remotePermission(request:)` - per-product capabilities. `request` is a typed `RemotePermission`.
 
 Both return `PermissionDecision`: `.allowOnce`, `.allowAlways`, or `.deny`. Preserve the user’s choice; the core keeps one-use grants in memory and consumes them at the authorized operation. OS refusal after app consent should throw instead of returning `.deny`, which records a product denial. The same typed values drive the `TrUAPIProductExecution` permission admin API (`permissionAuthorizationStatus`, `setPermissionAuthorizationStatus`), which reads and updates the persisted decisions without prompting.
 
 Identity and account access reviews use `confirmPermission(review:)`, which also returns `PermissionDecision`. Override it to preserve Allow once. Its compatibility default maps `confirmUserAction`'s Boolean approval to `.allowAlways`; signing and other single-action reviews continue to use that Boolean callback.
 
-Fetch, XHR, WebSocket connections, notification scheduling, external navigation and existing remote-operation gates consume temporary grants. The shared container authorizes each `getUserMedia` call through Rust, consuming camera/microphone consent for that capture. The returned stream remains usable until it is stopped; another capture requires a new authorization. Native media delegates resolve OS permission without consuming product consent again, even when WebKit caches its approval. SPA and Chat install the container at document start in every frame.
+Fetch, XHR, WebSocket connections, notification scheduling, external navigation and existing remote-operation gates consume temporary grants. The shared container authorizes each `getUserMedia` call through `authorize_device_permission`, camera before microphone. Each approval consumes its one-use grant for that attempt: a later microphone denial or native capture failure does not restore the camera grant. The returned stream remains usable until stopped; another capture requires new authorization.
+
+The container enforces product consent, while native media delegates resolve OS permission without consuming product consent again. An OS grant does not establish product consent. This boundary requires the container to run before product code in every frame, with its native methods and prototypes locked. SPA and Chat install it at document start. Authorization uses a private transport and response handler with captured browser primitives, so replacing public SDK replies, collection methods or Promise methods cannot approve a pending capture.
 
 ## SSO session handling
 
@@ -512,7 +514,7 @@ runtime.disconnect()
 
 The product page reads `window.__truapi_localhost.url` (set by the bootstrap script) and passes it to `@parity/truapi`'s `createWebSocketProvider(url)`.
 
-The shared container captures a private WebSocket connection to the product execution and asks Rust to authorize each fetch or XHR before sending it, and each remote WebSocket before connecting. Swift supplies the endpoint and handles native permission prompts; it does not relay individual network permission messages. An upfront permission request and a network operation are separate, so an Allow once decision is consumed by the next permitted operation rather than persisted.
+The shared container captures a private WebSocket connection to the product execution and asks Rust to authorize each fetch or XHR before sending it, and each remote WebSocket before connecting. It parses the URL with captured browser primitives and sends its hostname to `authorize_remote_permission`; Rust normalizes and checks the domain. Swift supplies the endpoint and handles native permission prompts; it does not relay individual network permission messages. An upfront permission request and a network operation are separate, so an Allow once decision is consumed by the next permitted operation rather than persisted.
 
 XHR keeps native request headers, response types and browser CORS behavior. `open()` configures the request synchronously; `send()` waits for permission before sending. Aborting or reopening during that wait cancels the pending send. Synchronous XHR is unsupported because it cannot wait for an asynchronous permission decision.
 
@@ -523,6 +525,10 @@ Forwarded WebSocket events and XHR failures before sending are synthetic, with `
 WebRTC uses the same private transport. Each peer connection asks Rust for permission at its first network method, such as `createOffer`, and shares that decision across later methods on the connection. Allow once permits one connection. New connections check the current permission without requiring a page reload.
 
 The installer adds the bootstrap and container scripts before loading. It preserves the host's website data store and navigation delegate. Hosts that assemble their own script lists can keep using `LocalhostBridgeBootstrap.script` followed by `ContainerScriptBundle.load()`, with the container injected into every frame.
+
+Update existing integrations for the changed signatures: `installProductScripts(into:endpoint:)` now takes a `WKWebView`, without an execution argument or `await`. Both the Swift and Kotlin `LocalhostBridgeBootstrap.script` methods drop `webRtcAllowed`. Permission changes apply to new operations instead of requiring a new startup snapshot.
+
+`Worker`, `WebTransport` and `getDisplayMedia` screen capture are unavailable. Workers would provide a separate realm with unguarded network APIs; WebTransport has no permission wrapper, and screen capture has no product permission.
 
 Redirects and stylesheet/font loads retain native WebKit behavior. Redirect destinations are not separately authorized by the fetch/XHR wrappers; direct DOM resource loads remain outside those wrappers. There is no content-rule registration, global settings refresh or installation disposal requirement. Close the execution when its product stops, and maintain the host's existing web-view navigation and teardown behavior.
 
