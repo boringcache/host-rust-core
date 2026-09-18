@@ -346,6 +346,9 @@ struct PairingHostArgs {
     /// Product script to run (JS/TS). If omitted, start the terminal UI.
     #[arg(long)]
     script: Option<PathBuf>,
+    /// Run the script with unrestricted Bun access to the host filesystem and environment.
+    #[arg(long, requires = "script")]
+    trusted_script: bool,
     /// Product id the host serves; scopes storage and product accounts.
     #[arg(long = "product-id", default_value = DEFAULT_PRODUCT_ID)]
     product_id: String,
@@ -416,6 +419,9 @@ struct SigningHostArgs {
     /// Product script to run (JS/TS). If omitted, start an interactive shell.
     #[arg(long)]
     script: Option<PathBuf>,
+    /// Run the script with unrestricted Bun access to the host filesystem and environment.
+    #[arg(long, requires = "script")]
+    trusted_script: bool,
     /// Product id used by scripts and product-scoped operations.
     #[arg(long = "product-id", default_value = DEFAULT_PRODUCT_ID)]
     product_id: String,
@@ -1118,6 +1124,7 @@ async fn run_pairing_host(
                 &script_product_id,
                 &script,
                 script_runner::ScriptHostRole::PairingHost,
+                args.trusted_script,
             )
             .await
         })
@@ -1228,6 +1235,7 @@ async fn run_signing_host(
                 &script_product_id,
                 &script,
                 script_runner::ScriptHostRole::SigningHost,
+                args.trusted_script,
             )
             .await?;
             session.responders.stop_all();
@@ -3653,6 +3661,7 @@ async fn execute_non_interactive_command(
                 &product_id,
                 &script,
                 script_runner::ScriptHostRole::SigningHost,
+                false,
             )
             .await?;
             let code = status.code().unwrap_or(1);
@@ -4203,6 +4212,33 @@ test -s "$TRUAPI_DEV_COMMAND_TEST_READY_PATH"
             args.frame_listen,
             Some("127.0.0.1:0".parse().expect("valid socket address"))
         );
+    }
+
+    #[test]
+    fn trusted_script_requires_an_explicit_script() {
+        for role in ["pairing-host", "signing-host"] {
+            let error = Cli::try_parse_from(["truapi-host", role, "--trusted-script"])
+                .err()
+                .expect("trusted mode requires a script");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument
+            );
+
+            for trusted in [false, true] {
+                let mut arguments = vec!["truapi-host", role, "--script", "smoke.ts"];
+                if trusted {
+                    arguments.push("--trusted-script");
+                }
+                let cli = Cli::try_parse_from(arguments).expect("script options should parse");
+                let actual = match cli.command {
+                    Command::PairingHost(args) => (args.script, args.trusted_script),
+                    Command::SigningHost(args) => (args.script, args.trusted_script),
+                    _ => panic!("expected a script host"),
+                };
+                assert_eq!(actual, (Some(PathBuf::from("smoke.ts")), trusted));
+            }
+        }
     }
 
     #[test]

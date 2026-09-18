@@ -38,9 +38,6 @@
 
 set -euo pipefail
 
-# Diagnostics read host transcripts and write reports outside the product sandbox.
-export TRUAPI_SCRIPT_MODE=trusted
-
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -101,10 +98,6 @@ fi
 # The battery imports the generated example manifest and the playground's
 # example runner, so both the codegen output and the playground's dependency
 # tree have to exist before a host starts.
-if [ ! -f "node_modules/playwright-core/package.json" ] || [ ! -f "node_modules/esbuild-wasm/package.json" ]; then
-  npm ci --ignore-scripts
-fi
-
 # The Rust dispatcher and wire table are ignored build outputs too, and the
 # host will not compile without them, so codegen is judged complete only when
 # every generated artifact exists rather than the TypeScript ones alone.
@@ -198,7 +191,7 @@ signing_phase() {
   TRUAPI_BATTERY_REPORT_PATH="${TRUAPI_BATTERY_REPORT_PATH:-$report}" \
     "$HOST" signing-host \
     --product-id "$PRODUCT_ID" \
-    --script "$SCRIPT" \
+    --trusted-script --script "$SCRIPT" \
     --auto-accept \
     ${HOST_ARGS[@]+"${HOST_ARGS[@]}"} > >(tee "$log") 2>&1 &
   local host_pid=$! rc=0
@@ -218,7 +211,7 @@ chat_phase() {
   "$HOST" signing-host \
     --product-id "$PRODUCT_ID" \
     --execution-kind worker \
-    --script "$CHAT_SCRIPT" \
+    --trusted-script --script "$CHAT_SCRIPT" \
     --auto-accept \
     ${HOST_ARGS[@]+"${HOST_ARGS[@]}"} > >(tee "$log") 2>&1 &
   local host_pid=$! rc=0
@@ -239,7 +232,7 @@ pocket_phase() {
   "$HOST" signing-host \
     --product-id "$PRODUCT_ID" \
     --execution-kind worker \
-    --script "$POCKET_SCRIPT" \
+    --trusted-script --script "$POCKET_SCRIPT" \
     --auto-accept \
     ${HOST_ARGS[@]+"${HOST_ARGS[@]}"} > >(tee "$log") 2>&1 &
   local host_pid=$! rc=0
@@ -270,7 +263,7 @@ pairing_phase() {
     "$HOST" pairing-host \
     --base-path "$PAIRING_STATE" \
     --product-id "$PRODUCT_ID" \
-    --script "$SCRIPT" \
+    --trusted-script --script "$SCRIPT" \
     --auto-accept \
     ${HOST_ARGS[@]+"${HOST_ARGS[@]}"} > >(tee "$log") 2>&1 &
   local host_pid=$! rc=0

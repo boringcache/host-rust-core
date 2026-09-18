@@ -77,7 +77,6 @@ async function main() {
   const environment = {
     ...process.env,
     ...installEnvironment(home, release.baseUrl),
-    TRUAPI_SCRIPT_MODE: "sandboxed",
     PLAYWRIGHT_BROWSERS_PATH:
       process.env.PLAYWRIGHT_BROWSERS_PATH ||
       (process.platform === "darwin"

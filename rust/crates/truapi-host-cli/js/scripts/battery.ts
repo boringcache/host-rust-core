@@ -4,8 +4,8 @@
 // generated service manifest automatically adds it to this suite.
 //
 // Run via:
-//   TRUAPI_SCRIPT_MODE=trusted truapi-host pairing-host --product-id truapi-playground.dot \
-//     --auto-accept --script js/scripts/battery.ts
+//   truapi-host pairing-host --product-id truapi-playground.dot \
+//     --auto-accept --trusted-script --script js/scripts/battery.ts
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";

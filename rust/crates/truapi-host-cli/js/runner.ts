@@ -3,8 +3,6 @@ import type {
   ProductAccountId,
   TrUApiClient,
 } from "../../../../js/packages/truapi/src/index.ts";
-import { runSandboxScript } from "./sandbox-runner.ts";
-import { runTrustedScript } from "./trusted-runner.ts";
 
 /// The host context injected alongside `truapi`. It only exposes what a script
 /// can't get from `truapi` alone: the product id the host serves, so product
@@ -38,18 +36,21 @@ async function main() {
   const frameUrl = requireEnv("TRUAPI_FRAME_URL");
   const productId = requireEnv("TRUAPI_PRODUCT_ID");
   const scriptPath = requireEnv("TRUAPI_SCRIPT");
-  const mode = process.env.TRUAPI_SCRIPT_MODE ?? "sandboxed";
-  if (mode === "trusted") {
+  const [mode, ...extraArguments] = process.argv.slice(2);
+  if (extraArguments.length || (mode && mode !== "--trusted-script")) {
+    throw new Error("runner accepts only --trusted-script");
+  }
+  if (mode === "--trusted-script") {
     if (process.env.TRUAPI_SCRIPT_CWD)
       process.chdir(process.env.TRUAPI_SCRIPT_CWD);
     console.error(
       "[runner] Trusted script mode: running with host Bun capabilities",
     );
+    const { runTrustedScript } = await import("./trusted-runner.ts");
     await runTrustedScript(frameUrl, productId, scriptPath);
-  } else if (mode === "sandboxed") {
-    await runSandboxScript(frameUrl, productId, scriptPath);
   } else {
-    throw new Error("TRUAPI_SCRIPT_MODE must be sandboxed or trusted");
+    const { runSandboxScript } = await import("./sandbox-runner.ts");
+    await runSandboxScript(frameUrl, productId, scriptPath);
   }
 }
 

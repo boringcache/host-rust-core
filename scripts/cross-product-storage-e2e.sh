@@ -34,14 +34,14 @@ host="target/debug/truapi-host"
 run_phase() {
   local phase="$1" product="$2"
   echo "==> $phase (as $product)"
-  TRUAPI_SCRIPT_MODE=trusted E2E_PHASE="$phase" "$host" signing-host \
+  E2E_PHASE="$phase" "$host" signing-host \
     --network "$network" \
     --base-path "$state" \
     --product-id "$product" \
     --product-config "$fixtures/peopl.paseo.json" \
     --product-config "$fixtures/dim2.paseo.json" \
     --auto-accept \
-    --script "$script"
+    --trusted-script --script "$script"
 }
 
 run_phase write peopl.paseo

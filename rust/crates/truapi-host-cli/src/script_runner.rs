@@ -228,8 +228,9 @@ pub async fn run(
     product_id: &str,
     script: &Path,
     host_role: ScriptHostRole,
+    trusted_script: bool,
 ) -> Result<ExitStatus> {
-    let mut command = command(frame_url, product_id, script, host_role)?;
+    let mut command = command(frame_url, product_id, script, host_role, trusted_script)?;
     terminal_ui::output_event(SystemEvent::ScriptStarted);
     command
         .status()
@@ -245,7 +246,7 @@ pub async fn run_captured(
     ui: UiHandle,
     host_role: ScriptHostRole,
 ) -> Result<ExitStatus> {
-    let mut command = command(frame_url, product_id, script, host_role)?;
+    let mut command = command(frame_url, product_id, script, host_role, false)?;
     terminal_ui::output_event(SystemEvent::ScriptStarted);
     command
         .stdout(Stdio::piped())
@@ -282,6 +283,7 @@ fn command(
     product_id: &str,
     script: &Path,
     host_role: ScriptHostRole,
+    trusted_script: bool,
 ) -> Result<Command> {
     let runner = runner_path();
     if !runner.exists() {
@@ -300,6 +302,9 @@ fn command(
         .env("TRUAPI_PRODUCT_ID", product_id)
         .env("TRUAPI_SCRIPT", &script)
         .env("TRUAPI_CLI_HOST_ROLE", host_role.as_env_value());
+    if trusted_script {
+        command.arg("--trusted-script");
+    }
     Ok(command)
 }
 
@@ -574,35 +579,38 @@ console.log('user id', result.value);
         let script = temporary.path().join("script.ts");
         fs::write(&script, "console.log('hello');\n")?;
 
-        let command = command(
-            "ws://127.0.0.1:1234",
-            "example.dot",
-            &script,
-            ScriptHostRole::SigningHost,
-        )?;
-        let command = command.as_std();
-        let arguments = command.get_args().collect::<Vec<_>>();
-
-        assert_eq!(command.get_program(), std::ffi::OsStr::new("bun"));
         let runner = runner_path().canonicalize()?;
-        assert_eq!(
-            arguments,
-            [
+        for trusted_script in [false, true] {
+            let command = command(
+                "ws://127.0.0.1:1234",
+                "example.dot",
+                &script,
+                ScriptHostRole::SigningHost,
+                trusted_script,
+            )?;
+            let command = command.as_std();
+            let arguments = command.get_args().collect::<Vec<_>>();
+            let mut expected = vec![
                 std::ffi::OsStr::new(EMPTY_BUN_CONFIG),
                 std::ffi::OsStr::new("--no-env-file"),
                 std::ffi::OsStr::new("--no-macros"),
                 std::ffi::OsStr::new("--no-install"),
                 std::ffi::OsStr::new("run"),
                 runner.as_os_str(),
-            ]
-        );
-        assert_eq!(command.get_current_dir(), runner.parent());
-        assert_eq!(
-            command
-                .get_envs()
-                .find_map(|(key, value)| { (key == "TRUAPI_CLI_HOST_ROLE").then_some(value) }),
-            Some(Some(std::ffi::OsStr::new("signing-host")))
-        );
+            ];
+            if trusted_script {
+                expected.push(std::ffi::OsStr::new("--trusted-script"));
+            }
+            assert_eq!(command.get_program(), std::ffi::OsStr::new("bun"));
+            assert_eq!(arguments, expected);
+            assert_eq!(command.get_current_dir(), runner.parent());
+            assert_eq!(
+                command
+                    .get_envs()
+                    .find_map(|(key, value)| { (key == "TRUAPI_CLI_HOST_ROLE").then_some(value) }),
+                Some(Some(std::ffi::OsStr::new("signing-host")))
+            );
+        }
         Ok(())
     }
 
