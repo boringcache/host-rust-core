@@ -1,0 +1,191 @@
+// Copyright 2026 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: MIT
+/**
+ * Tests for how a host is told to dial the wire debugger: the `debugger` option,
+ * the build-time default, the production gate, and the dial indicator. Lives
+ * beside the file it covers - these were in
+ * `worker-provider.test.ts`, where a reviewer looking for them reasonably
+ * concluded the precedence was untested.
+ */
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { Window } from "happy-dom";
+
+import {
+  productionReason,
+  renderDebuggerIndicator,
+  resolveDebuggerEnablement,
+} from "./create-worker-host-runtime.js";
+import { FakeWorker, readyRuntime } from "./worker-test-harness.js";
+
+describe("debugger enablement reporting", () => {
+  // Under `bun test` `import.meta.env.DEV` reads undefined, so the live path
+  // always takes its production branch - which is the one asserted here.
+  const capturingInfo = async (
+    run: () => Promise<unknown>,
+  ): Promise<string[]> => {
+    const logged: string[] = [];
+    const info = console.info;
+    console.info = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    };
+    try {
+      await run();
+    } finally {
+      console.info = info;
+    }
+    return logged;
+  };
+
+  // Nothing was asked for, so there is nothing to report and the line would be
+  // pure noise. `readyRuntime` passes no `debugger` option, and under `bun test`
+  // there is no build value either.
+  it("stays silent in a production build nobody asked to debug", async () => {
+    const worker = new FakeWorker();
+    const logged = await capturingInfo(() => readyRuntime(worker));
+    expect(logged.filter((l) => l.includes("wire debugger"))).toHaveLength(0);
+  });
+
+  // The counterpart, and the regression this pair exists for. Silence when a dial
+  // WAS configured is design doc §9's named failure: the easiest way to reach it
+  // is to copy the build command and drop `NODE_ENV=development`, and the result
+  // is an empty board with no console line and no error.
+  it("says so once when a dial was configured but the build compiled it out", async () => {
+    const worker = new FakeWorker();
+    const logged = await capturingInfo(() =>
+      readyRuntime(worker, { debugger: "ws://127.0.0.1:9231" }),
+    );
+    const line = logged.find((l) => l.includes("wire debugger"));
+    expect(line).toBeDefined();
+    // Must not assert a cause it cannot know: a production build and a bundler
+    // that never substituted the token both leave the condition false.
+    expect(line).toContain("did not resolve true");
+  });
+
+  // The tap is armed for the whole dev session, not only while a URL is set: the
+  // worker decides a core's `debugEmit` once, when the core is built, so a session
+  // that starts detached must still arm or a later attach() reaches nothing. In a
+  // production build it must stay false, or a core would carry a live sink.
+});
+
+// The dev-build branch, which the suite above cannot reach: it gates on
+// `import.meta.env.DEV`, a token a bundler substitutes and `bun test` leaves
+// undefined, so the live call always takes the production path here. The pure
+// seam is where the precedence can actually be asserted.
+describe("debugger switch precedence", () => {
+  const BUILD = "ws://127.0.0.1:9231";
+
+  it("dials the host's option over the build's value", () => {
+    expect(resolveDebuggerEnablement("ws://127.0.0.1:9300", BUILD)).toEqual({
+      url: "ws://127.0.0.1:9300",
+      reason: "enabled-from-option",
+    });
+  });
+
+  // Omitting the field is how a host says "whatever you were built with", which
+  // is what makes `make debugger` work with nothing to switch on.
+  it("falls back to the build's value when the host passes nothing", () => {
+    expect(resolveDebuggerEnablement(undefined, BUILD)).toEqual({
+      url: BUILD,
+      reason: "enabled-from-build",
+    });
+  });
+
+  // The case that is easy to fold in with "omitted". If null fell through to the
+  // build, a host compiled with a URL could not refuse the dial short of being
+  // rebuilt - so a host has no way to turn the tap off for its own users.
+  it("treats an explicit null or empty string as OFF, beating the build", () => {
+    expect(resolveDebuggerEnablement(null, BUILD)).toEqual({
+      url: null,
+      reason: "not-configured",
+    });
+    expect(resolveDebuggerEnablement("", BUILD)).toEqual({
+      url: null,
+      reason: "not-configured",
+    });
+  });
+
+  it("is off with neither switch set", () => {
+    expect(resolveDebuggerEnablement(undefined, null)).toEqual({
+      url: null,
+      reason: "not-configured",
+    });
+  });
+});
+
+describe("productionReason", () => {
+  const URL = "ws://127.0.0.1:9231";
+
+  it("is silent only when nothing asked for a dial", () => {
+    expect(productionReason(undefined, null)).toBe("production-build");
+    expect(productionReason(null, null)).toBe("production-build");
+    expect(productionReason("", null)).toBe("production-build");
+  });
+
+  // The reviewer's scenario, and the half a test can otherwise never reach: the
+  // env var IS substituted into a production bundle, so a build made with it but
+  // without `NODE_ENV=development` is readable here and must not go quiet.
+  it("reports a build-carried URL in a production build", () => {
+    expect(productionReason(undefined, URL)).toBe(
+      "production-build-configured",
+    );
+  });
+
+  it("reports a host that asked, whatever the build carries", () => {
+    expect(productionReason(URL, null)).toBe("production-build-configured");
+  });
+});
+
+describe("the dial indicator", () => {
+  // A real DOM, not a stand-in: the badge touches createElement/appendChild/
+  // getElementById/remove, and a hand-rolled fake would be asserting the fake.
+  const g = globalThis as unknown as { document?: unknown };
+  let had = false;
+  let previous: unknown;
+
+  beforeEach(() => {
+    had = Object.prototype.hasOwnProperty.call(g, "document");
+    previous = g.document;
+    g.document = new Window().document;
+  });
+  afterEach(() => {
+    if (had) g.document = previous;
+    else delete g.document;
+  });
+
+  const badge = (): { textContent: string | null } | null =>
+    (
+      globalThis.document as unknown as {
+        getElementById(id: string): { textContent: string | null } | null;
+      }
+    ).getElementById("truapi-debugger-indicator");
+
+  // PG's requirement: a host streaming frames must say so where you can see it,
+  // not only in a console line that scrolls away.
+  it("names the endpoint while a dial is live", () => {
+    renderDebuggerIndicator("ws://127.0.0.1:9231", undefined);
+    expect(badge()?.textContent).toContain("ws://127.0.0.1:9231");
+  });
+
+  // The null case is every production build, and any dev build nobody gave a
+  // dial: there is nothing to announce, so nothing may be painted.
+  it("paints nothing without a dial", () => {
+    renderDebuggerIndicator(null, undefined);
+    expect(badge()).toBeNull();
+  });
+
+  // Only for a host that renders its own signal - the guarantee is that a tap is
+  // never invisible, not that this particular badge is the one used.
+  it("can be suppressed by the host", () => {
+    renderDebuggerIndicator("ws://127.0.0.1:9231", false);
+    expect(badge()).toBeNull();
+  });
+
+  // Never a reason for a host to fail to start: `document` is absent in a worker
+  // and under plain Node.
+  it("is inert where there is no document", () => {
+    delete g.document;
+    expect(() =>
+      renderDebuggerIndicator("ws://127.0.0.1:9231", undefined),
+    ).not.toThrow();
+  });
+});

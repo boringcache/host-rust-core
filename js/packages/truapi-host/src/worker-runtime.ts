@@ -623,8 +623,10 @@ function buildCoreCallbacks(coreId: number) {
     },
   };
   if (!debuggerLink) return callbacks;
-  // Adding `debugEmit` is what makes the Rust host install its debug sink; when
-  // no debugger is configured it is absent and the tap stays inert.
+  // Adding `debugEmit` is what makes the Rust host install its debug sink. The
+  // link is created once, from `init`, and never replaced, so a core either has
+  // a tap for its whole life or never has one - there is no window in which this
+  // decision and the link disagree.
   return {
     ...callbacks,
     debugEmit(channelId: string, dir: string, frame: Uint8Array): void {
