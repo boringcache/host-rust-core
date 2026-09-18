@@ -275,13 +275,20 @@ SSO signing encode `with_signed_transaction` with the one-byte `OptionBool` code
 
 When a device finishes pairing, the signing host reports it to the embedder's
 [`DevicePairingObserver`](src/runtime/signing_host/sso_responder.rs), installed
-once through `SigningHostRuntime::set_device_pairing_observer`. It carries the
-`PairedSsoPeer` that pairing produced, which is also what `resume_pairing` and
-`disconnect_paired_host` take, and it fires only once the handshake answer has
-reached the Statement Store, so a host is never told about a session that did
-not open. Resuming a stored pairing reports nothing, because the device is not
-new. The core has no chat of its own, so announcing a new device to the user's
-existing contacts belongs to the embedder.
+once through `SigningHostRuntime::set_device_pairing_observer`, and on a native
+host to `HostCallbacks::device_paired`. It carries the `PairedSsoPeer` that
+pairing produced, which is also what `resume_pairing` and
+`disconnect_paired_host` take.
+
+The report fires once the handshake answer is on the Statement Store, which is
+the earliest point the peer could read it. It is not proof that the peer did:
+a pairing host races cancellation against the answer arriving and gives up
+after its own deadline, either of which leaves a reported device that never
+connects. The report is at least once per pairing, so a device that pairs
+again is reported again with the same value. Resuming a stored pairing reports
+nothing, so the host owns the record of which devices it has already seen; the
+core keeps no list to replay. The core has no chat of its own, so announcing a
+new device to the user's existing contacts belongs to the embedder.
 
 The `host_logic::sso::messages::v1::RemoteMessage` enum owns the SCALE wire
 contract. Its response variants wrap named result payloads in `Response<P>`,

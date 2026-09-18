@@ -141,8 +141,12 @@ pub struct PairedSsoPeer {
 /// Arrives on the thread answering the handshake, while the pairing call is
 /// still running, so hand the device off rather than announcing it inline.
 pub trait DevicePairingObserver: Send + Sync {
-    /// `device` paired: its handshake answer reached the Statement Store, so
-    /// the session is live.
+    /// `device` paired: its handshake answer is on the Statement Store.
+    ///
+    /// At least once per pairing, so a device that pairs again is reported
+    /// again with the same value. The answer reaching the store is not proof
+    /// the peer read it: one that cancelled or timed out waiting leaves a
+    /// device here that never connects.
     fn device_paired(&self, device: PairedSsoPeer);
 }
 
@@ -297,8 +301,7 @@ async fn establish_pairing_session(
     )
     .await?;
     debug!("answered pairing handshake");
-    // A host told before the submit lands would announce a device over a
-    // session that never opened.
+    // The submit is the earliest point the peer could read the answer.
     if let Some(observer) = services.device_pairing_observer() {
         observer.device_paired(peer);
     }
@@ -1455,18 +1458,14 @@ mod tests {
         }
     }
 
-    fn pairing_fixture(
-        submit_status: &'static str,
-    ) -> (Arc<RuntimeServices>, Arc<SigningHost>, Arc<StubPlatform>) {
-        let platform = Arc::new(StubPlatform {
+    fn pairing_fixture(submit_status: &'static str) -> (Arc<RuntimeServices>, Arc<SigningHost>) {
+        signing_fixture(Arc::new(StubPlatform {
             rpc_method_responses: vec![(
                 "statement_submit",
                 format!(r#"{{"status":"{submit_status}"}}"#),
             )],
             ..Default::default()
-        });
-        let (services, signing_host) = signing_fixture(platform.clone());
-        (services, signing_host, platform)
+        }))
     }
 
     /// Without this the host never learns a device paired, so no contact is
@@ -1477,7 +1476,7 @@ mod tests {
             statement_account_id: [0x31; 32],
             encryption_public_key: x25519_public_key([0x42; 32]),
         };
-        let (services, signing_host, _platform) = pairing_fixture("new");
+        let (services, signing_host) = pairing_fixture("new");
         let observer = Arc::new(RecordingPairingObserver::default());
         assert!(services.install_device_pairing_observer(observer.clone()));
 
@@ -1500,7 +1499,7 @@ mod tests {
             encryption_public_key: x25519_public_key([0x42; 32]),
         };
         // Neither "new" nor "known", so the submit is rejected.
-        let (services, signing_host, _platform) = pairing_fixture("ignored");
+        let (services, signing_host) = pairing_fixture("ignored");
         let observer = Arc::new(RecordingPairingObserver::default());
         assert!(services.install_device_pairing_observer(observer.clone()));
 
@@ -1526,7 +1525,7 @@ mod tests {
             statement_account_id: [0x31; 32],
             encryption_public_key: x25519_public_key([0x42; 32]),
         };
-        let (services, signing_host, _platform) = pairing_fixture("new");
+        let (services, signing_host) = pairing_fixture("new");
 
         futures::executor::block_on(establish_pairing(
             services,

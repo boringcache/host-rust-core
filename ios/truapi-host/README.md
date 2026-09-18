@@ -239,9 +239,11 @@ current tree of an open render stream.
 `devicePaired` on the runtime bridge reports a device that finished pairing
 with this signing host, carrying the `PairedSsoPeer` the pairing produced. The
 core has no chat of its own, so announcing the new device to the user's
-existing contacts is the host's to do. It arrives on the thread answering the
-handshake, so hand the device off rather than announcing it inline. Defaults
-to a no-op for a host that answers no pairing.
+existing contacts is the host's to do. It fires at least once per pairing, so
+a device that pairs again reports again; a resumed pairing reports nothing, so
+the host keeps its own record of which devices it has already seen. It arrives
+on the thread answering the handshake, so hand the device off rather than
+announcing it inline. Defaults to a no-op for a host that answers no pairing.
 
 ## Architecture
 

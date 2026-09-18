@@ -614,9 +614,14 @@ pub trait HostCallbacks: Send + Sync {
     /// A device finished pairing with this signing host.
     ///
     /// The core has no chat of its own, so announcing the new device to the
-    /// user's existing contacts is the host's to do. Arrives on the thread
-    /// answering the handshake, while the pairing call is still running: hand
-    /// the device off rather than announcing it inline.
+    /// user's existing contacts is the host's to do. At least once per
+    /// pairing, and the host keeps its own record of which devices it has
+    /// already seen: a resumed pairing reports nothing and the core has no
+    /// list to replay.
+    ///
+    /// Arrives on the thread answering the handshake, while the pairing call
+    /// is still running: hand the device off rather than announcing it
+    /// inline.
     fn device_paired(&self, device: PairedSsoPeer);
 
     /// Read a value from the host's scoped key-value store.
