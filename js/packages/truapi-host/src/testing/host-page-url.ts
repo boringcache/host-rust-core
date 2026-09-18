@@ -16,8 +16,15 @@ export interface HostPageConfig {
   mock?: MockHostConfig;
   /** Overrides merged into the host's runtime config. */
   runtimeConfig?: Record<string, unknown>;
-  /** Names of the accounts the host can sign as. */
-  accounts?: string[];
+  /**
+   * Accounts the host can sign as: a built-in name, or a name with the 32
+   * bytes of entropy its session activates from.
+   *
+   * Explicit entropy is how a test signs as an identity the built-ins cannot
+   * be -- one enrolled in a personhood ring, for instance, which allowance
+   * allocation requires and a fixed dev account never satisfies.
+   */
+  accounts?: (string | { name: string; entropy: Uint8Array })[];
   /** Whether the host starts signed in. */
   loginBehavior?: "auto" | "manual";
   /**
@@ -45,7 +52,19 @@ export function hostPageUrl(base: string, config: HostPageConfig): string {
     url.searchParams.set("runtimeConfig", JSON.stringify(config.runtimeConfig));
   }
   if (config.accounts) {
-    url.searchParams.set("accounts", config.accounts.join(","));
+    // `name` for a built-in, `name:<64 hex>` when the test supplies entropy.
+    url.searchParams.set(
+      "accounts",
+      config.accounts
+        .map((account) =>
+          typeof account === "string"
+            ? account
+            : `${account.name}:${[...account.entropy]
+                .map((byte) => byte.toString(16).padStart(2, "0"))
+                .join("")}`,
+        )
+        .join(","),
+    );
   }
   if (config.loginBehavior) url.searchParams.set("login", config.loginBehavior);
   if (config.topology) url.searchParams.set("topology", config.topology);

@@ -114,7 +114,7 @@ export interface TestHostFixtureOptions {
    * `uri` is rejected: a TrUAPI session activates from 32 bytes of entropy,
    * not a `//Alice`-style derivation path.
    */
-  accounts?: (string | { name: string; uri?: string })[];
+  accounts?: (string | { name: string; uri?: string; entropy?: Uint8Array })[];
   /** Whether the host starts signed in. Defaults to `"auto"`. */
   loginBehavior?: "auto" | "manual";
   /**
@@ -410,14 +410,24 @@ export function fromNetworks(networks: NetworkConfig[]): {
 
 /** Account names for the page URL, rejecting anything the host cannot honour. */
 function accountNames(
-  accounts: (string | { name: string; uri?: string })[],
-): string[] {
+  accounts: (string | { name: string; uri?: string; entropy?: Uint8Array })[],
+): (string | { name: string; entropy: Uint8Array })[] {
   return accounts.map((account) => {
     if (typeof account === "string") return account;
     if (account.uri !== undefined) {
       throw new Error(
         `testHost account "${account.name}": \`uri\` ${NO_DERIVATION_URI}`,
       );
+    }
+    // Entropy is carried through rather than reduced to a name: it is the only
+    // way to sign as an identity that is not one of the built-ins.
+    if (account.entropy !== undefined) {
+      if (account.entropy.length !== 32) {
+        throw new Error(
+          `testHost account "${account.name}": entropy must be 32 bytes, got ${account.entropy.length}`,
+        );
+      }
+      return { name: account.name, entropy: account.entropy };
     }
     return account.name;
   });

@@ -6,7 +6,7 @@
 
 import { startTestHost } from "./host-page.js";
 import type { MockHostConfig } from "../web/create-mock-host.js";
-import type { DevAccountName } from "./dev-accounts.js";
+import type { DevAccount, DevAccountName } from "./dev-accounts.js";
 
 const params = new URLSearchParams(window.location.search);
 const productUrl = params.get("product");
@@ -23,7 +23,19 @@ if (!container) {
   throw new Error("test host page is missing its #product-container element");
 }
 
-const accounts = params.get("accounts")?.split(",").filter(Boolean);
+// `name` for a built-in, `name:<64 hex>` when the test supplied entropy.
+const accounts = params
+  .get("accounts")
+  ?.split(",")
+  .filter(Boolean)
+  .map((entry) => {
+    const separator = entry.indexOf(":");
+    if (separator === -1) return entry;
+    const name = entry.slice(0, separator);
+    const hex = entry.slice(separator + 1);
+    const bytes = hex.match(/../g) ?? [];
+    return { name, entropy: Uint8Array.from(bytes.map((b) => parseInt(b, 16))) };
+  });
 const login = params.get("login");
 const productId = params.get("productId") ?? undefined;
 const rawRuntimeConfig = params.get("runtimeConfig");
@@ -40,7 +52,7 @@ void startTestHost({
       : {}),
     ...(productId ? { productId } : {}),
   },
-  accounts: accounts as DevAccountName[] | undefined,
+  accounts: accounts as (DevAccountName | DevAccount)[] | undefined,
   loginBehavior: login === "manual" ? "manual" : "auto",
   topology: topology === "main-thread" ? "main-thread" : "worker",
   logLevel,

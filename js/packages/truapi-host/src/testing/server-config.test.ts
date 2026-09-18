@@ -93,3 +93,39 @@ describe("diagnostic options reach the page", () => {
     await server.close();
   });
 });
+
+describe("signing as an identity that is not a built-in", () => {
+  const entropy = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
+
+  it("carries explicit entropy through the URL, hex-encoded", () => {
+    const url = new URL(
+      hostPageUrl("http://host.test/", {
+        productUrl: "http://localhost:5173",
+        accounts: ["alice", { name: "enrolled", entropy }],
+      }),
+    );
+    const value = url.searchParams.get("accounts") ?? "";
+    const [first, second] = value.split(",");
+    expect(first).toBe("alice");
+    // A built-in stays a bare name; entropy rides as `name:<64 hex>`, which is
+    // what lets a suite sign as a personhood-enrolled account.
+    expect(second).toBe(
+      `enrolled:${[...entropy].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+    );
+    expect(second?.split(":")[1]).toHaveLength(64);
+  });
+
+  it("round-trips the bytes, so the host activates the intended session", () => {
+    const url = new URL(
+      hostPageUrl("http://host.test/", {
+        productUrl: "http://localhost:5173",
+        accounts: [{ name: "enrolled", entropy }],
+      }),
+    );
+    const encoded = (url.searchParams.get("accounts") ?? "").split(":")[1] ?? "";
+    const decoded = Uint8Array.from(
+      (encoded.match(/../g) ?? []).map((b) => parseInt(b, 16)),
+    );
+    expect([...decoded]).toEqual([...entropy]);
+  });
+});
