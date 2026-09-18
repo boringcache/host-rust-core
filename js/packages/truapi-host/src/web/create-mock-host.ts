@@ -272,6 +272,16 @@ export interface MockHost {
   injectStatement(statement: Uint8Array | string): number;
   /** Statements injected so far, in order, as `0x` hex. */
   getInjectedStatements(): string[];
+  /**
+   * Statements the product submitted, as `0x` hex, read off the chain
+   * transport.
+   *
+   * The core sends `statement_submit` without consulting an allowance, so a
+   * product that signs its own statements is observable here. One that asks the
+   * host to sign first (`createProofAuthorized`) needs a statement allowance to
+   * get that far, and this stays empty until it has one.
+   */
+  getSubmittedStatements(): string[];
   /** Forget the injected statements. Delivered ones cannot be recalled. */
   clearStatements(): void;
   /** Raw JSON-RPC the core sent over the chain connection, in order. */
@@ -946,6 +956,21 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
       return delivered;
     },
     getInjectedStatements: () => [...injectedStatements],
+    getSubmittedStatements: () =>
+      sentRpc.flatMap((request) => {
+        try {
+          const frame = JSON.parse(request) as {
+            method?: string;
+            params?: unknown[];
+          };
+          if (frame.method !== "statement_submit") return [];
+          const [statement] = frame.params ?? [];
+          return typeof statement === "string" ? [statement] : [];
+        } catch {
+          // A frame that is not JSON is not a submission.
+          return [];
+        }
+      }),
     clearStatements: () => {
       injectedStatements.length = 0;
     },

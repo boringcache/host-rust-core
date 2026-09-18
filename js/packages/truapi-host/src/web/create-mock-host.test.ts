@@ -573,3 +573,55 @@ describe("statement injection through the chain connection", () => {
     expect(host.getInjectedStatements()).toEqual([]);
   });
 });
+
+describe("reading back submitted statements", () => {
+  it("returns the hex the core put on the wire, in order", async () => {
+    const original = globalThis.WebSocket;
+    (globalThis as { WebSocket: unknown }).WebSocket = class {
+      constructor(public url: string) {}
+      addEventListener() {}
+      send() {}
+      close() {}
+    };
+    const host = createMockHost({ chainProxies: [{ rpcUrl: "ws://chain.test" }] });
+    const conn = await host.callbacks.chain.connect(new Uint8Array(32));
+    (globalThis as { WebSocket: unknown }).WebSocket = original;
+
+    const submit = (hex: string, id: number) =>
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: `truapi:${id}`,
+        method: "statement_submit",
+        params: [hex],
+      });
+
+    conn.send(submit("0xaabb", 1));
+    // Other chain traffic must not be mistaken for a submission.
+    conn.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "truapi:2",
+        method: "statement_subscribeStatement",
+        params: [{ matchAll: [] }],
+      }),
+    );
+    // An unsubscribe carries a STRING first param, so it is what a filter that
+    // forgot to check the method would wrongly report as a submitted statement.
+    conn.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "truapi:3",
+        method: "statement_unsubscribeStatement",
+        params: ["z9VCGBlbLFl58Rp4"],
+      }),
+    );
+    conn.send(submit("0xccdd", 4));
+
+    expect(host.getSubmittedStatements()).toEqual(["0xaabb", "0xccdd"]);
+  });
+
+  it("is empty when the product has submitted nothing", async () => {
+    const host = createMockHost();
+    expect(host.getSubmittedStatements()).toEqual([]);
+  });
+});

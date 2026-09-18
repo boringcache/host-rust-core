@@ -1577,6 +1577,50 @@ success**. A suite that subscribes without serving the People chain therefore
 passes vacuously. host-playground's two subscribe specs are in exactly that
 shape; they serve People now, but they would not have failed if they did not.
 
+## 34. All three statement controls are served, and the last one needed a correction
+
+A peer session challenged the `getSubmittedStatements` refusal, reading
+`statement_store_rpc.rs:170`: `statement_submit` is sent unconditionally and a
+missing allowance comes back as `Ok(SubmitResult)` carrying
+`{"status":"rejected","reason":"noAllowance"}`. Their conclusion was that the
+refusal's premise -- nothing leaves without an allowance -- is backwards.
+
+They were right about the code, and the refusal was wrong. But the reconciliation
+is a third thing neither of us had stated.
+
+**Two different APIs.** `StatementStore::submit` (`statement_store.rs:104`)
+checks a remote permission, SCALE-encodes the statement the product already
+signed, and sends it. No allowance anywhere in it.
+`create_authorized_statement_proof` (`:354`) is the separate host-signs-for-you
+API, and the allowance key is what does the signing.
+
+So a product that signs its own statements is observable on the transport. One
+that asks the host to sign cannot get far enough to submit. host-playground's
+`statement-store-submit` spec is the second kind -- it calls
+`createProofAuthorized` and only then `submit` -- which is why probing it found
+131 RPC frames added and **zero** `statement_submit` among them.
+
+`getSubmittedStatements` is therefore served, as a filter over the chain
+transport the mock already records, and its doc says which products it will be
+empty for and why.
+
+### What the mutation caught
+
+The first test passed with the method check deleted. The other traffic in the
+fixture was a subscribe, whose first param is an object, so `typeof param ===
+"string"` filtered it out anyway and the method check was doing nothing. A real
+`statement_unsubscribeStatement` carries a string param -- a subscription id --
+and a filter that forgot the method would report it as a submitted statement.
+Adding that frame to the fixture made the check load-bearing.
+
+### Standing where it actually stands
+
+Unit-tested and mutation-proved; **not** observed end to end, because no product
+in reach submits a self-signed statement. That is weaker evidence than
+`injectStatement` has, where a real product reported receiving the injected
+statement, and the difference is worth keeping in mind: this one rests on a code
+path read plus a filter test, not on a product seeing the result.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is

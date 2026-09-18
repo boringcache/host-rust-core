@@ -221,7 +221,16 @@ export interface TestHost {
    * rejected inside the core before any RPC is emitted, so there is nothing
    * for the host to record -- not a host seam the mock declined to implement.
    */
-  getSubmittedStatements(): Promise<never>;
+  /**
+   * Statements the product submitted, as `0x` hex, read off the chain
+   * transport rather than a host-side log.
+   *
+   * Empty for a product that asks the host to sign
+   * (`createProofAuthorized`): that needs a statement allowance, and without
+   * one no statement is ever built to submit. A product that signs its own
+   * statements is observable here.
+   */
+  getSubmittedStatements(): Promise<string[]>;
   /**
    * Deliver a statement to the product as a chain notification, returning how
    * many live subscriptions it reached. Subscribe first: zero means nothing
@@ -277,22 +286,6 @@ export interface TestHost {
    */
   setLoginBehavior(behavior: "auto" | "manual"): Promise<never>;
 }
-
-/**
- * Why reading back what the product submitted cannot be served.
- *
- * Injection and clearing are served -- see `injectStatement` -- because the
- * chain connection is an inbound path the host owns. Reading submissions is
- * not: they would have to be observed leaving, and nothing leaves until the
- * product holds a statement allowance.
- */
-const NO_SUBMITTED_STATEMENTS =
-  "is not available in the TrUAPI test host: the statement store is owned by " +
-  "the core, so a submission can only be observed leaving over the chain, and " +
-  "nothing leaves until the product holds a statement allowance -- which needs " +
-  "personhood ring membership a dev account does not have. Use " +
-  "`injectStatement` for the inbound direction, which IS served, and read " +
-  "`getSentRpc` for whatever traffic the attempt does produce.";
 
 /**
  * Why the payment controls cannot be served.
@@ -631,9 +624,7 @@ export function createTestHostFixture(defaults: TestHostFixtureOptions) {
         getInjectedStatements: () => call("getInjectedStatements"),
         clearStatements: () => call("clearStatements"),
 
-        getSubmittedStatements: () => {
-          throw new Error(`testHost.getSubmittedStatements ${NO_SUBMITTED_STATEMENTS}`);
-        },
+        getSubmittedStatements: () => call("getSubmittedStatements"),
 
         // Playwright closes the page after the fixture yields, so there is
         // genuinely nothing to do -- not a silent stub standing in for work.
