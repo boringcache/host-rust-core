@@ -1347,6 +1347,71 @@ over from earlier in this work shadowed the properly installed one and made
 resolution look broken; removing them and reinstalling gave a single 0.17.0 copy.
 That trap has now cost time three times in this document -- install, do not copy.
 
+## 30. Testing the three remaining blockers locally
+
+All three are on-chain conditions rather than code, so the loop is the native
+CLI first (cheap, read-only, no browser) and the browser only once the CLI says
+the identity is good.
+
+### The CLI already carries the diagnostics
+
+`truapi-host` has `alloc-check`, `pgas-check`, `identity-check` and
+`register-name`. `alloc-check` and `pgas-check` both report ring membership, the
+revision's propagation to Asset Hub and the day's free slot, and both are
+**read-only unless `--submit`** is passed. They default to `--network
+paseo-next-v2`, which is the network host-playground's fixture points at.
+
+```
+cargo build -p truapi-host-cli
+./target/debug/truapi-host alloc-check --mnemonic "<phrase>"   # the 15
+./target/debug/truapi-host pgas-check  --mnemonic "<phrase>"   # browse's funder
+```
+
+Run these before touching a browser: they answer "is this identity enrolled"
+in seconds, where the suite takes twenty minutes to say the same thing less
+clearly.
+
+### The browser could not use an enrolled identity at all
+
+A gap this question exposed. The built-in accounts are fixed entropy
+(`0xa1` repeated for alice, and so on) and are not ring members, but the fixture
+had no way to pass any other identity: `accounts` reduced every entry to a
+name, and the page URL carried names only. An enrolled mnemonic could be proven
+on the CLI and then not used by the host under test.
+
+`accounts` now takes `{ name, entropy }` alongside a built-in name, and the URL
+carries it as `name:<64 hex>`. The host page already accepted explicit entropy
+through `resolveAccount`; only the wire between fixture and page dropped it.
+
+```ts
+createTestHostFixture({
+  productUrl: PRODUCT_URL,
+  accounts: [{ name: "enrolled", entropy: entropyFromMnemonic(PHRASE) }],
+  networks: [PASEO, PASEO_PEOPLE],
+});
+```
+
+The entropy is the mnemonic's 32 bytes -- the same bytes `alloc-check` proves
+membership for, so the CLI and the browser exercise one identity rather than
+two.
+
+### The order to work in
+
+1. `alloc-check` an identity. If it reports no ring membership, nothing
+   downstream can pass, and no browser run will say anything new.
+2. Once it reports membership, run host-playground's fifteen with that identity
+   as explicit entropy. This is the step that has never executed: everything
+   past the membership proof is unmeasured, so treat a green run as news and a
+   red one as the next finding rather than a regression.
+3. `pgas-check` for browse's funder is the same shape, against
+   `Pgas.claim_pgas`. Note browse fails on `@parity/host-api-test-sdk` too, so
+   it is not a migration blocker and can be sequenced separately.
+
+The statement refusals (`getSubmittedStatements`, `injectStatement`,
+`clearStatements`) are worth re-checking only after step 2 succeeds -- their
+mechanism has already shifted once under the allowance port, as section 27
+records.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is
