@@ -61,13 +61,19 @@ failing, which is the single most expensive failure mode in this migration.
 **5. No spec depends on a refused capability.** Grep first:
 
 ```bash
-grep -rEn "getPaymentLog|clearPaymentLog|setPaymentBalance|setPaymentTopUpBehavior|simulatePaymentStatus|injectChatAction|setLoginBehavior|getSubmittedStatements|injectStatement|clearStatements" e2e/
+grep -rEn "getPaymentLog|clearPaymentLog|setPaymentBalance|setPaymentTopUpBehavior|simulatePaymentStatus|setLoginBehavior" e2e/
 ```
 
 Any hit is a spec that needs rewriting or skipping, not porting — see section 4.
 `setLoginBehavior` is the sharpest: suites pass `"success"`/`"reject"` to drive
 an RFC-0009 login flow, and the fixture option only takes `"auto" | "manual"`,
 because this is a signing host and that flow belongs to a pairing host.
+
+The statement-store controls and `injectChatAction` are served, so they are not
+in this grep. `injectStatement` takes a SCALE-encoded signed statement rather
+than a structured one, and `injectChatAction` takes the core's
+`HostChatActionSubscribeItem` rather than `{roomId, peer, payload}`, so those
+call sites change shape even though they keep working.
 
 ## 1. Swap the import
 
@@ -120,14 +126,28 @@ like a permission-policy problem and is not one: the core scopes a product
 account to its identifier and refuses a request scoped to a different one. If
 signing fails but reads pass, set this before looking anywhere else.
 
-### Allowance specs need a personhood-enrolled account
+### Allowances are granted without being performed, by default
 
-`@parity/host-api-test-sdk` answered `Allocated` without proving anything,
-because it had no core behind it. This host runs the real path: a statement-store
-or bulletin allowance is granted against a proof of personhood ring membership.
-Dev accounts are derived from fixed entropy and are not enrolled in any ring on
-a live People chain, so the proof cannot be built and the outcome is
-`NotAvailable`:
+`allowances` defaults to `"granted"`: every allocation is answered as allocated
+without being carried out, and the statement store is served in-page for the
+People chain. A suite that allocates allowances, signs with the key it gets back
+and submits statements therefore passes with no on-chain identity.
+
+What that buys is narrower than it looks. Nothing is registered anywhere, so a
+green run says the product handles a grant, not that a host would have given
+one. A real statement store refuses what this one accepts.
+
+Set `allowances: "chain"` for the real path -- ring membership, slot selection,
+ring-VRF proof, extrinsic -- which is what a host actually does and what fails
+where a host would:
+
+```ts
+createTestHostFixture({ productUrl: PRODUCT_URL, allowances: "chain" });
+```
+
+That path needs an account enrolled in a personhood ring on the target People
+chain. A dev account is derived from fixed entropy and is enrolled in none, so
+every allocation stops with:
 
 ```
 WARN signing_host: direct resource allocation item failed
@@ -135,16 +155,22 @@ WARN signing_host: direct resource allocation item failed
    cannot grant statement-store allowance}
 ```
 
-Allowance specs that passed against the old package will therefore fail here on
-dev accounts alone. That is a real difference, not a regression -- the old green
-was unearned. Either supply an enrolled identity for the target chain, or treat
-those specs as out of scope for the migration and say so.
+Pass an enrolled identity as explicit entropy to get past that:
 
-### A suite that allocates allowances must serve the People chain
+```ts
+accounts: [{ name: "enrolled", entropy: entropyFromMnemonic(PHRASE) }]
+```
 
-Allowance registration reads personhood collections from the People chain, not
-the hub. Serving only the hub fails every allocation with an outcome the product
-renders as "resource is unavailable", and the core's log names the real cause:
+`truapi-host alloc-check --mnemonic "<phrase>"` reports whether an identity is a
+ring member, read-only and in seconds. Run it before a browser suite: it answers
+in one line what the suite takes twenty minutes to say less clearly.
+
+### A suite that allocates allowances on-chain must serve the People chain
+
+Only with `allowances: "chain"`. Allowance registration reads personhood
+collections from the People chain, not the hub. Serving only the hub fails every
+allocation with an outcome the product renders as "resource is unavailable",
+and the core's log names the real cause:
 
 ```
 WARN statement_allowance: could not resolve this collection
@@ -204,18 +230,20 @@ Skip it with the reason in the skip.
 
 ## 4. What refuses, and why
 
-These throw with an explanation rather than returning something plausible:
+Six of `TestHostAPI`'s members throw with an explanation rather than returning
+something plausible. The rest, including the statement-store controls and
+`injectChatAction`, are served.
 
-- payments (`getPaymentLog`, `setPaymentBalance`, `simulatePaymentStatus`, ...) --
-  the protocol declares them and no host implements them
-- the statement-store controls (`getSubmittedStatements`, `injectStatement`,
-  `clearStatements`) -- submission is rejected inside the core before any RPC,
-  so there is nothing to record
-- `injectChatAction` -- `ChatPlatform` has no inbound-action seam
-- `setLoginBehavior` -- fixed at boot; pass `loginBehavior` to the fixture
+- payments (`getPaymentLog`, `setPaymentBalance`, `simulatePaymentStatus`,
+  `setPaymentTopUpBehavior`, `clearPaymentLog`) -- the protocol declares them
+  and no host implements them. Every method of the core's payment capability
+  returns an error and ignores its arguments, so there is no behaviour to mock.
+  A suite with payment specs cannot migrate them; it can only drop or rewrite
+  them.
+- `setLoginBehavior` -- fixed at boot. Pass `loginBehavior: "auto" | "manual"`
+  to the fixture instead, which is where this host takes it.
 
-A test reaching one of these gets a reason, not `is not a function`. If a suite
-depends on one, it is testing something no TrUAPI host serves.
+A test reaching one of these gets a reason, not `is not a function`.
 
 ## 5. Verify
 
