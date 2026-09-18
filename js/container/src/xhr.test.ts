@@ -437,17 +437,72 @@ describe('XHR permission gating', () => {
     expect([xhr.timeout, sends()[0].timeout]).toEqual([80, 55]);
   });
 
-  it('rejects synchronous XHR explicitly and blocks non-network remote schemes', () => {
-    const { win, requests, sends } = gated();
+  it('rejects synchronous XHR and defers immediate send failures', () => {
+    const { win } = gated();
     const xhr = new win.XMLHttpRequest();
     for (const async of [false, undefined, null, 0]) {
       expect(() =>
         xhr.open('GET', 'https://api.example/data', async as any),
       ).toThrow('synchronous');
     }
-    xhr.open('GET', 'file:///secret');
-    xhr.send();
-    expect([requests.length, sends(), xhr.readyState]).toEqual([0, [], 4]);
+    for (const failure of [
+      'unsupported scheme',
+      'closed transport',
+      'transport error',
+    ]) {
+      const { win, calls, advance } = realm();
+      let requests = 0;
+      installXhrGate(win as any, (_url, decide) => {
+        requests++;
+        if (failure === 'transport error')
+          throw new Error('transport closed');
+        decide(false);
+        return () => {};
+      });
+      const url =
+        failure === 'unsupported scheme'
+          ? 'file:///secret'
+          : 'https://api.example/data';
+      const xhr = new win.XMLHttpRequest();
+      xhr.open('GET', url);
+      xhr.send();
+      const observed = events(xhr);
+      expect([xhr.readyState, observed]).toEqual([1, []]);
+      advance(0);
+      expect([xhr.readyState, observed]).toEqual([
+        4,
+        [
+          ['readystatechange', 4, 0],
+          ['error', 4, 0],
+          ['loadend', 4, 0],
+        ],
+      ]);
+      expect([requests, calls.filter((call) => call.kind === 'send')]).toEqual([
+        failure === 'unsupported scheme' ? 0 : 1,
+        [],
+      ]);
+
+      xhr.open('GET', url);
+      xhr.send();
+      observed.length = 0;
+      xhr.abort();
+      const aborted = [
+        ['readystatechange', 4, 0],
+        ['abort', 4, 0],
+        ['loadend', 4, 0],
+      ];
+      expect([xhr.readyState, observed]).toEqual([0, aborted]);
+      advance(0);
+      expect([xhr.readyState, observed]).toEqual([0, aborted]);
+
+      xhr.open('GET', url);
+      xhr.send();
+      xhr.open('GET', './asset');
+      xhr.send();
+      observed.length = 0;
+      advance(0);
+      expect([xhr.readyState, observed]).toEqual([1, []]);
+    }
   });
 });
 

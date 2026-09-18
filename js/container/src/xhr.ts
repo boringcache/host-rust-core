@@ -352,12 +352,17 @@ export function installXhrGate(
     state.body = payload !== null;
     state.startedAt = now();
     deadline(this, state);
+    let sending = true;
+    const failSend = (type: string) => {
+      if (sending) schedule(() => fail(this, state, type), 0);
+      else fail(this, state, type);
+    };
     const decided = (allowed: boolean) => {
       if (!current(this, state) || !state.pending) return;
-      if (allowed !== true) return fail(this, state, 'error');
+      if (allowed !== true) return failSend('error');
       state.waited = now() - state.startedAt;
       if (state.timeout && state.waited >= state.timeout)
-        return fail(this, state, 'timeout');
+        return failSend('timeout');
       cancel(state);
       state.nativeStarted = true;
       apply(timeout.set!, this, [
@@ -368,7 +373,7 @@ export function installXhrGate(
       } catch {
         state.pending = true;
         state.nativeStarted = false;
-        fail(this, state, 'error');
+        failSend('error');
       }
     };
     if (state.sameOrigin) decided(true);
@@ -379,9 +384,10 @@ export function installXhrGate(
         if (!state.pending) cancellation();
         else state.cancel = cancellation;
       } catch {
-        fail(this, state, 'error');
+        failSend('error');
       }
     }
+    sending = false;
   });
 
   freezeValue(prototype, 'abort', function (this: XMLHttpRequest) {
