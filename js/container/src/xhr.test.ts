@@ -486,7 +486,7 @@ describe('XHR permission gating', () => {
       xhr.send();
       observed.length = 0;
       xhr.abort();
-      const aborted = [
+      const aborted: typeof observed = [
         ['readystatechange', 4, 0],
         ['abort', 4, 0],
         ['loadend', 4, 0],
