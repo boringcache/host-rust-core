@@ -38,9 +38,8 @@ const authorizationResponse = scale.Result(
 );
 
 interface NetworkOperation {
-  url: string;
   active: boolean;
-  authorization?: Authorization;
+  authorizations: Map<string, Authorization>;
 }
 export function browserAssets(): Promise<BrowserAssets> {
   return (assetPromise ??= (async () => {
@@ -88,7 +87,7 @@ export async function runBrowserScript(
   const headers = [
     {
       name: "Content-Security-Policy",
-      value: `sandbox allow-scripts allow-same-origin; default-src 'none'; script-src 'self' 'unsafe-eval' 'nonce-${nonce}'; connect-src http: https:; img-src http: https: data:; style-src 'unsafe-inline'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`,
+      value: `sandbox allow-scripts allow-same-origin; default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'nonce-${nonce}'; connect-src http: https:; img-src http: https: data:; style-src 'unsafe-inline'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`,
     },
     { name: "X-DNS-Prefetch-Control", value: "off" },
     { name: "Cache-Control", value: "no-store" },
@@ -123,6 +122,7 @@ export async function runBrowserScript(
   let unsubscribeClose: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let done = false;
+  let failed = false;
   let resolveDone!: () => void;
   let rejectDone!: (error: Error) => void;
   const completion = new Promise<void>((resolve, reject) => {
@@ -153,7 +153,7 @@ export async function runBrowserScript(
       serviceWorkers: "block",
       acceptDownloads: false,
     });
-    await context.grantPermissions(["local-network-access"]);
+    await context.grantPermissions(["local-network-access"], { origin });
     const page = await context.newPage();
     context.on("page", (other) => {
       if (other !== page) void other.close();
@@ -171,7 +171,7 @@ export async function runBrowserScript(
       const request = networkRequest(event.requestId);
       const needsAuthorization = event.type === "Fetch" || event.type === "XHR";
       if (needsAuthorization && !operations.has(event.requestId)) {
-        const operation = { url: event.request.url, active: true };
+        const operation = { active: true, authorizations: new Map() };
         operations.set(event.requestId, operation);
         request.resolve(operation);
       } else if (
@@ -189,7 +189,8 @@ export async function runBrowserScript(
       const operation = operations.get(requestId);
       if (operation) {
         operation.active = false;
-        operation.authorization?.cancel();
+        for (const authorization of operation.authorizations.values())
+          authorization.cancel();
         operations.delete(requestId);
       }
       networkRequests.get(requestId)?.resolve();
@@ -225,10 +226,13 @@ export async function runBrowserScript(
           if (["http:", "https:"].includes(url.protocol) && event.networkId) {
             operation = await networkRequest(event.networkId).ready;
             if (operation?.active) {
-              operation.authorization ??= authorizeNetworkRequest(
-                operation.url,
-              );
-              const allowed = await operation.authorization.result;
+              const host = url.hostname.replace(/\.$/, "");
+              let authorization = operation.authorizations.get(host);
+              if (!authorization) {
+                authorization = authorizeNetworkRequest(url.href);
+                operation.authorizations.set(host, authorization);
+              }
+              const allowed = await authorization.result;
               if (!operation.active) return;
               if (allowed) {
                 await session.send("Fetch.continueRequest", {
@@ -400,6 +404,9 @@ export async function runBrowserScript(
       .addScriptTag({ type: "module", url: `${origin}/bootstrap.js` })
       .catch(fail);
     await completion;
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
     done = true;
     if (timer) clearTimeout(timer);
@@ -411,7 +418,11 @@ export async function runBrowserScript(
     for (const request of networkRequests.values()) request.resolve();
     operations.clear();
     networkRequests.clear();
-    await browser.close();
+    try {
+      await browser.close();
+    } catch (error) {
+      if (!failed) throw error;
+    }
   }
 
   function networkRequest(requestId: string) {

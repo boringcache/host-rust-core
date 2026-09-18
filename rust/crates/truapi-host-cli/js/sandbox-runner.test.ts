@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { chromium } from "playwright-core";
 import {
   decodeWireMessage,
   encodeWireMessage,
@@ -66,6 +67,11 @@ test("runs a product with CLI helpers but no host runtime capabilities", async (
       for (const name of ['process', 'Bun', 'require', 'Worker', 'SharedWorker', 'WebTransport', 'RTCPeerConnection']) {
         assert(typeof globalThis[name] === 'undefined', name + ' must be unavailable');
       }
+      for (const evaluate of [() => eval('1'), () => new Function('return 1')()]) {
+        try { evaluate(); throw new Error('dynamic code execution was allowed'); }
+        catch (error) { assert(error instanceof EvalError); }
+      }
+      assert((await WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]))) instanceof WebAssembly.Module);
       document.body.innerHTML = '<iframe></iframe>';
       const child = document.querySelector('iframe').contentWindow;
       for (const name of ['Worker', 'SharedWorker', 'RTCPeerConnection']) {
@@ -167,7 +173,7 @@ for (const api of ["fetch", "XHR"] as const) {
   }, 20_000);
 }
 
-test("native fetch follows cross-host redirects using the initial authorization", async () => {
+test("cross-host redirects require their own authorization", async () => {
   const hits: string[] = [];
   const authorizations: string[] = [];
   const target = Bun.serve({
@@ -197,21 +203,35 @@ test("native fetch follows cross-host redirects using the initial authorization"
     },
   });
   try {
-    await runBrowserScript({
-      source: `
-      const endpoint = ${JSON.stringify(redirect.url.href)};
-      assert(await (await fetch(endpoint)).text() === 'authorized');
-    `,
-      productId: "sandbox.testnet",
-      provider,
-      authorize: async (url) => {
-        authorizations.push(url);
-        return new URL(url).hostname === "127.0.0.1";
-      },
-      timeoutMs: 10_000,
-    });
-    expect(hits).toEqual(["allowed", "destination"]);
-    expect(authorizations).toEqual([redirect.url.href]);
+    for (const api of ["fetch", "XHR"] as const) {
+      for (const allowDestination of [false, true]) {
+        hits.length = 0;
+        authorizations.length = 0;
+        await runBrowserScript({
+          source: `
+            ${requestScript(api)}
+            const endpoint = ${JSON.stringify(redirect.url.href)};
+            if (${allowDestination}) {
+              assert(await (await request(endpoint)).text() === 'authorized');
+            } else {
+              try { await request(endpoint); throw new Error('redirect destination escaped authorization'); }
+              catch (error) { assert(error instanceof TypeError); }
+            }
+          `,
+          productId: "sandbox.testnet",
+          provider,
+          authorize: async (url) => {
+            authorizations.push(url);
+            return new URL(url).hostname === "127.0.0.1" || allowDestination;
+          },
+          timeoutMs: 10_000,
+        });
+        expect({ hits, authorizations }).toEqual({
+          hits: allowDestination ? ["allowed", "destination"] : ["allowed"],
+          authorizations: [redirect.url.href, destination.href],
+        });
+      }
+    }
   } finally {
     redirect.stop(true);
     target.stop(true);
@@ -286,16 +306,30 @@ test("XHR preserves request headers and body and native binary response metadata
   }
 }, 20_000);
 
-test("script rejection is reported to the CLI", async () => {
-  await expect(
-    runBrowserScript({
-      source: "throw new Error('product failure');",
-      productId: "sandbox.testnet",
-      provider,
-      authorize: async () => false,
-      timeoutMs: 10_000,
-    }),
-  ).rejects.toThrow("product failure");
+test("script rejection is reported even if browser cleanup fails", async () => {
+  const launch = chromium.launch.bind(chromium);
+  const mocked = spyOn(chromium, "launch").mockImplementation(async (options) => {
+    const browser = await launch(options);
+    const close = browser.close.bind(browser);
+    browser.close = async () => {
+      await close();
+      throw new Error("browser cleanup failed");
+    };
+    return browser;
+  });
+  try {
+    await expect(
+      runBrowserScript({
+        source: "throw new Error('product failure');",
+        productId: "sandbox.testnet",
+        provider,
+        authorize: async () => false,
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow("product failure");
+  } finally {
+    mocked.mockRestore();
+  }
 }, 20_000);
 
 test("a stalled product reports a timeout", async () => {
