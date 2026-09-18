@@ -277,15 +277,17 @@ export interface TestHost {
  *
  * Stated once so every one of them says the same thing, and says which half is
  * missing: the transport works -- a proxied people chain connects and
- * `statement_subscribeStatement` is visible in `getSentRpc` -- but submission
- * never reaches it.
+ * `statement_subscribeStatement` is visible in `getSentRpc` -- but no statement
+ * submission reaches it.
  */
 const NO_STATEMENT_SEAM =
   "is not available in the TrUAPI test host: the statement store is owned by " +
   "the core, not the host, so there is no seam to record or inject through. " +
-  "Submission is rejected inside the core before any RPC is emitted (it needs " +
-  "a statement allowance), so it cannot be observed on the chain transport " +
-  "either. Subscription traffic IS visible via the proxied chain.";
+  "A submission is rejected inside the core, which needs a statement allowance " +
+  "it cannot obtain without personhood ring membership, so no statement RPC " +
+  "reaches the chain and the submission cannot be observed on the transport " +
+  "either. Expect the failed allowance attempt itself to show up there as " +
+  "storage reads. Subscription traffic IS visible via the proxied chain.";
 
 /**
  * Why the payment controls cannot be served.

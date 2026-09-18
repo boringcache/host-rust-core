@@ -1242,6 +1242,34 @@ All of these are single runs against a live testnet, and `signing-extended`
 shows the suite is not deterministic on it. The fifteen are dependable -- they
 fail for one understood reason -- but read the pass count as plus or minus one.
 
+## 27. What the allowance port changed about the statement-store refusal
+
+The refusal behind `getSubmittedStatements`, `injectStatement` and
+`clearStatements` said submission "is rejected inside the core before any RPC is
+emitted". That was written when the allowance allocator was a wasm stub
+returning `NativeOnly` immediately. Re-checked against the ported build by
+running host-playground's statement specs and reading `getSentRpc`:
+
+| claim | verdict |
+| --- | --- |
+| `statement_subscribeStatement` is visible | holds -- subscribe and unsubscribe both appear, the spec passes |
+| rejected *before any RPC is emitted* | **false now** -- a submission emits 141 calls |
+| submission unobservable on the transport | holds -- none of the 141 is a statement method |
+
+The 141 are `state_getStorage` x134, `state_call` x3, `chain_getBlockHash`,
+`state_getRuntimeVersion` and `chain_getFinalizedHead` x2: the allowance attempt
+doing real chain work before it stops at ring membership.
+
+So the refusal's conclusion survives and its stated mechanism did not. The text
+now says no *statement* RPC reaches the chain, and warns that the failed
+allowance attempt does show up as storage reads -- otherwise a reader debugging
+a submission would be told to expect nothing in `getSentRpc` and find 141
+entries.
+
+The general point is worth keeping: an explanation that names a mechanism ages
+with the mechanism. This one was accurate when written and became wrong without
+anything editing it.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is
