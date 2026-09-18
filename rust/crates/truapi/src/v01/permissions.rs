@@ -59,14 +59,10 @@ pub enum RemotePermission {
     Remote {
         /// Domain patterns requested by the product. Each is an exact host, a
         /// wildcard covering every descendant (`*.example.com`), or `*` for any host.
+        /// Wildcard suffixes must be domain names with at least two labels.
         domains: Vec<String>,
     },
     /// WebRTC access.
-    ///
-    /// The container authorizes each peer connection through Rust before its
-    /// first network method. Later methods on that connection share the same
-    /// decision, so a one-use grant permits one connection. New connections
-    /// check current permissions without requiring a page reload.
     ///
     /// Camera and microphone capture is gated by the OS permission prompts and
     /// [`HostDevicePermissionRequest`], not by this permission.

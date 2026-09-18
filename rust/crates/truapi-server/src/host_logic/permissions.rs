@@ -48,8 +48,8 @@ use truapi::latest::{
 use truapi_platform::{
     BLESSED_REMOTE_DOMAINS, CoreStorage, CoreStorageKey, DevicePermissionStatus,
     PermissionAuthorizationRequest, PermissionAuthorizationStatus, PermissionDecision,
-    PermissionStatusHost, Permissions, has_trusted_remote_permissions, normalize_remote_domain,
-    remote_domain_candidates,
+    PermissionStatusHost, Permissions, has_trusted_remote_permissions,
+    is_valid_remote_domain_pattern, normalize_remote_domain, remote_domain_candidates,
 };
 
 /// Persisted answer for a single permission request. Keep `Authorized` at
@@ -118,15 +118,31 @@ impl TemporaryPermissions {
     }
 
     fn authorize(&self, key: &CoreStorageKey, consume: bool) -> bool {
+        self.authorize_all(core::slice::from_ref(key), consume)
+    }
+
+    fn authorize_all(&self, keys: &[CoreStorageKey], consume: bool) -> bool {
+        let keys: Vec<_> = keys.iter().map(Encode::encode).collect();
         let mut grants = self
             .grants
             .lock()
             .expect("temporary permissions mutex poisoned");
-        if consume {
-            grants.remove(&key.encode())
-        } else {
-            grants.contains(&key.encode())
+        if !keys.iter().all(|key| grants.contains(key)) {
+            return false;
         }
+        if consume {
+            for key in keys {
+                grants.remove(&key);
+            }
+        }
+        true
+    }
+
+    fn revoke(&self, key: &CoreStorageKey) {
+        self.grants
+            .lock()
+            .expect("temporary permissions mutex poisoned")
+            .remove(&key.encode());
     }
 
     fn grant(&self, key: CoreStorageKey) {
@@ -226,12 +242,7 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
             let key = CoreStorageKey::remote_permission_authorization(self.product_id, request);
             return self.cached_remote_authorization(&key, false).await;
         };
-        // An empty bundle grants access to nothing. Reporting it as authorized
-        // would let a malformed request read as a grant, so fail closed.
-        if domains.is_empty() {
-            return Ok(PermissionAuthorizationStatus::Denied);
-        }
-        match self.resolve_domains(domains, false).await? {
+        match self.resolve_domains(domains).await?.0 {
             BundleResolution::Authorized => Ok(PermissionAuthorizationStatus::Authorized),
             BundleResolution::Denied => Ok(PermissionAuthorizationStatus::Denied),
             // Nothing per-domain covers the rest, so the remaining question is
@@ -246,20 +257,33 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
     async fn resolve_domains(
         &self,
         domains: &[String],
-        consume: bool,
-    ) -> Result<BundleResolution, GenericError> {
+    ) -> Result<(BundleResolution, Vec<CoreStorageKey>), GenericError> {
+        if domains.is_empty()
+            || domains
+                .iter()
+                .any(|domain| !is_valid_remote_domain_pattern(domain))
+        {
+            return Ok((BundleResolution::Denied, Vec::new()));
+        }
         let mut undecided = Vec::new();
+        let mut temporary_keys = Vec::new();
         for domain in domains {
-            match self.effective_domain_status(domain, consume).await? {
-                PermissionAuthorizationStatus::Denied => return Ok(BundleResolution::Denied),
+            let (status, temporary_key) = self.effective_domain_status(domain).await?;
+            match status {
+                PermissionAuthorizationStatus::Denied => {
+                    return Ok((BundleResolution::Denied, Vec::new()));
+                }
                 PermissionAuthorizationStatus::NotDetermined => undecided.push(domain.clone()),
                 PermissionAuthorizationStatus::Authorized => {}
             }
+            if let Some(key) = temporary_key {
+                temporary_keys.push(key);
+            }
         }
         if undecided.is_empty() {
-            Ok(BundleResolution::Authorized)
+            Ok((BundleResolution::Authorized, temporary_keys))
         } else {
-            Ok(BundleResolution::Undecided(undecided))
+            Ok((BundleResolution::Undecided(undecided), temporary_keys))
         }
     }
 
@@ -281,8 +305,7 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
     async fn effective_domain_status(
         &self,
         domain: &str,
-        consume: bool,
-    ) -> Result<PermissionAuthorizationStatus, GenericError> {
+    ) -> Result<(PermissionAuthorizationStatus, Option<CoreStorageKey>), GenericError> {
         let blessed = BLESSED_REMOTE_DOMAINS.contains(&normalize_remote_domain(domain).as_str());
         let mut temporary_keys = Vec::new();
         let mut fallback = if blessed {
@@ -299,14 +322,14 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
             temporary_keys.push(key);
         }
         if blessed && fallback == PermissionAuthorizationStatus::Authorized {
-            return Ok(PermissionAuthorizationStatus::Authorized);
+            return Ok((PermissionAuthorizationStatus::Authorized, None));
         }
         for key in temporary_keys {
-            if self.temporary_permissions.authorize(&key, consume) {
-                return Ok(PermissionAuthorizationStatus::Authorized);
+            if self.temporary_permissions.authorize(&key, false) {
+                return Ok((PermissionAuthorizationStatus::Authorized, Some(key)));
             }
         }
-        Ok(fallback)
+        Ok((fallback, None))
     }
 
     async fn cached_authorization(
@@ -409,7 +432,7 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
                     for domain in domains {
                         let key =
                             CoreStorageKey::remote_domain_authorization(self.product_id, domain);
-                        self.temporary_permissions.authorize(&key, true);
+                        self.temporary_permissions.revoke(&key);
                         set_authorization_status(self.storage, key, status).await?;
                     }
                     if domains.len() > 1 {
@@ -427,7 +450,7 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
                 CoreStorageKey::account_access_authorization(self.product_id, target_product_id)
             }
         };
-        self.temporary_permissions.authorize(&key, true);
+        self.temporary_permissions.revoke(&key);
         set_authorization_status(self.storage, key, status).await
     }
 
@@ -525,19 +548,29 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
             return self.record_decision(key, authorization, consume).await;
         };
 
-        if domains.is_empty() {
-            return Ok(PermissionAuthorizationStatus::Denied);
-        }
-
-        let undecided = match self.resolve_domains(&domains, consume).await? {
-            BundleResolution::Authorized => return Ok(PermissionAuthorizationStatus::Authorized),
+        let (resolution, temporary_keys) = self.resolve_domains(&domains).await?;
+        let authorize = || {
+            if self
+                .temporary_permissions
+                .authorize_all(&temporary_keys, consume)
+            {
+                PermissionAuthorizationStatus::Authorized
+            } else {
+                PermissionAuthorizationStatus::NotDetermined
+            }
+        };
+        let undecided = match resolution {
+            BundleResolution::Authorized => return Ok(authorize()),
             BundleResolution::Denied => return Ok(PermissionAuthorizationStatus::Denied),
             BundleResolution::Undecided(undecided) => undecided,
         };
         // A refusal of this exact set is already an answer to this exact prompt.
         let bundle_key = self.bundle_key(&undecided);
         if let Some(cached) = peek_stored(self.storage, bundle_key.clone()).await? {
-            return Ok(cached.into());
+            return Ok(match cached {
+                StoredAuthorizationStatus::Authorized => authorize(),
+                StoredAuthorizationStatus::Denied => PermissionAuthorizationStatus::Denied,
+            });
         }
 
         let authorization = match self
@@ -560,7 +593,7 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
                     )
                     .await?;
                 }
-                Ok(PermissionAuthorizationStatus::Authorized)
+                Ok(authorize())
             }
             // A denial answers only the question that was asked.
             PermissionDecision::Deny => {
@@ -731,6 +764,52 @@ mod tests {
                     2,
                 ),
             );
+        });
+    }
+
+    #[test]
+    fn a_denied_bundle_preserves_one_use_grants_for_a_later_operation() {
+        futures::executor::block_on(async {
+            for prompt_denial in [false, true] {
+                let storage = MemStorage::default();
+                let prompt = ScriptedPrompt::decisions(
+                    vec![],
+                    vec![PermissionDecision::Deny, PermissionDecision::AllowOnce],
+                );
+                let service = PermissionsService::new(&storage, &prompt, "product.dot");
+                let granted = remote_domains(&["api.example.com"]);
+                service
+                    .check_or_prompt_remote(granted.clone())
+                    .await
+                    .unwrap();
+                if !prompt_denial {
+                    service
+                        .set_authorization_status(
+                            &PermissionAuthorizationRequest::Remote(remote_domains(&[
+                                "blocked.com",
+                            ])),
+                            PermissionAuthorizationStatus::Denied,
+                        )
+                        .await
+                        .unwrap();
+                }
+                let denied = service
+                    .authorize_remote(remote_domains(&["api.example.com", "blocked.com"]))
+                    .await
+                    .unwrap();
+                let next = service
+                    .authorize_remote(remote_domains(&["api.example.com", "API.EXAMPLE.COM."]))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    (denied, next, service.peek_remote(&granted).await.unwrap()),
+                    (
+                        PermissionAuthorizationStatus::Denied,
+                        PermissionAuthorizationStatus::Authorized,
+                        PermissionAuthorizationStatus::NotDetermined,
+                    ),
+                );
+            }
         });
     }
 
@@ -1323,29 +1402,27 @@ mod tests {
     }
 
     #[test]
-    fn a_tld_wildcard_grant_does_not_cover_concrete_hosts() {
+    fn unsupported_wildcards_are_rejected_without_prompting_or_storing() {
         let storage = MemStorage::default();
-        let prompt = ScriptedPrompt::new(vec![], vec![false, true]);
+        let prompt = ScriptedPrompt::new(vec![], vec![]);
         let service = PermissionsService::new(&storage, &prompt, "product.dot");
 
-        futures::executor::block_on(service.check_or_prompt_remote(remote_domains(&["*.com"])))
-            .unwrap();
-
-        for domain in ["example.com", "api.example.com", "deep.api.example.com"] {
+        for domain in ["*.com", "*.dot", "*.127.0.0.1", "*.[::1]"] {
             assert_eq!(
-                futures::executor::block_on(service.peek_remote(&remote_domains(&[domain])))
-                    .unwrap(),
-                PermissionAuthorizationStatus::NotDetermined
+                futures::executor::block_on(
+                    service.check_or_prompt_remote(remote_domains(&[domain]))
+                )
+                .unwrap(),
+                PermissionAuthorizationStatus::Denied,
             );
         }
         assert_eq!(
-            futures::executor::block_on(
-                service.check_or_prompt_remote(remote_domains(&["example.com"]))
-            )
-            .unwrap(),
-            PermissionAuthorizationStatus::Denied
+            (
+                prompt.remote_calls.load(Ordering::SeqCst),
+                futures::executor::block_on(storage.inner.lock()).len()
+            ),
+            (0, 0),
         );
-        assert_eq!(prompt.remote_calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

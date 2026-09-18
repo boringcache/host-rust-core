@@ -1590,12 +1590,35 @@ pub fn normalize_remote_domain(domain: &str) -> String {
     format!("{wildcard}{normalized}")
 }
 
+/// Accepts exact hosts, `*`, and domain wildcards with at least two suffix labels.
+/// IP addresses cannot be wildcard suffixes.
+pub fn is_valid_remote_domain_pattern(domain: &str) -> bool {
+    let normalized = normalize_remote_domain(domain);
+    if normalized == "*" {
+        return true;
+    }
+    let wildcard = normalized.starts_with("*.");
+    let host = normalized.strip_prefix("*.").unwrap_or(&normalized);
+    match Host::parse(host) {
+        Ok(Host::Domain(domain)) => {
+            !domain.contains('*')
+                && domain.split('.').all(|label| !label.is_empty())
+                && (!wildcard || domain.contains('.'))
+        }
+        Ok(_) => !wildcard,
+        Err(_) => false,
+    }
+}
+
 /// Matching domain patterns, ordered for most-specific permission decisions.
 /// Wildcards cover descendants at every depth, excluding one-label parents
 /// such as `*.com`. Bare parents are omitted so a grant for `example.com`
 /// never grants access to its subdomains.
 pub fn remote_domain_candidates(host: &str) -> Vec<String> {
     let normalized = normalize_remote_domain(host);
+    if matches!(Host::parse(&normalized), Ok(Host::Ipv4(_) | Host::Ipv6(_))) {
+        return vec![normalized, "*".to_string()];
+    }
     let mut candidates = vec![normalized.clone()];
     let mut descendant = normalized.as_str();
     while let Some((_label, parent)) = descendant.split_once('.') {
@@ -2597,10 +2620,7 @@ mod tests {
             remote_domain_candidates("example.co.uk"),
             ["example.co.uk", "*.co.uk", "*"]
         );
-        assert_eq!(
-            remote_domain_candidates("127.0.0.1"),
-            ["127.0.0.1", "*.0.0.1", "*.0.1", "*"]
-        );
+        assert_eq!(remote_domain_candidates("127.0.0.1"), ["127.0.0.1", "*"]);
         assert_eq!(remote_domain_candidates("[::1]"), ["[::1]", "*"]);
         assert_eq!(
             remote_domain_candidates("DEEP.API.Bücher.Example."),
@@ -2611,6 +2631,26 @@ mod tests {
                 "*",
             ]
         );
+        for (pattern, valid) in [
+            ("example.com", true),
+            ("localhost", true),
+            ("127.0.0.1", true),
+            ("[::1]", true),
+            ("*", true),
+            ("*.example.com", true),
+            ("*.co.uk", true),
+            ("*.Bücher.example.", true),
+            ("*.com", false),
+            ("*.dot", false),
+            ("*.127.0.0.1", false),
+            ("*.0.1", false),
+            ("*.[::1]", false),
+            ("*..com", false),
+            ("api.*.com", false),
+            ("", false),
+        ] {
+            assert_eq!(is_valid_remote_domain_pattern(pattern), valid, "{pattern}");
+        }
     }
 
     #[test]
