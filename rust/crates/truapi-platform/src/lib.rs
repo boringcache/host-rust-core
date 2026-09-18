@@ -3130,8 +3130,10 @@ pub trait PermissionStatusHost: Send + Sync {
 }
 
 /// Host-owned tunnel to the backends this host is registered for. Optional: a
-/// host that registers none leaves backend requests answered `Unsupported`.
-/// See [`OptionalPlatform`].
+/// host that installs no adapter leaves backend requests answered
+/// `Unsupported`. See [`OptionalPlatform`]. A native host installs one for
+/// every execution, so it answers [`HostBackendError::UnknownBackend`] rather
+/// than `Unsupported` when it serves no backends.
 ///
 /// The host alone resolves `backend` to a base URL and holds the credential
 /// that authenticates the call. It resolves per call, not at install time, so a

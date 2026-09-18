@@ -7,6 +7,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
+
+use futures::StreamExt;
 
 use reqwest::Url;
 use reqwest::redirect::Policy;
@@ -20,6 +23,9 @@ use truapi_platform::{BackendHost, ProductContext, async_trait};
 
 /// Largest response body this host reads.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// How long one backend call may take.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Header naming the calling product to the backend.
 const PRODUCT_HEADER: &str = "X-Polkadot-Product";
@@ -96,10 +102,13 @@ impl CliBackendHost {
 
         Arc::new(Self {
             registry,
+            // Not `unwrap_or_default`: the default client follows redirects,
+            // so a silent fallback would drop an obligation this host owes.
             client: reqwest::Client::builder()
                 .redirect(Policy::none())
+                .timeout(REQUEST_TIMEOUT)
                 .build()
-                .unwrap_or_default(),
+                .expect("backend HTTP client builds"),
         })
     }
 
@@ -181,15 +190,30 @@ impl BackendHost for CliBackendHost {
             })
             .collect();
 
-        let body = response.bytes().await.map_err(transport)?;
-        if body.len() > MAX_RESPONSE_BYTES {
+        // A declared length over the cap is refused before a byte is read, and
+        // the streamed accumulation bounds an undeclared one, so the cap holds
+        // whether or not the backend is honest about its size.
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+        {
             return Err(HostBackendError::ResponseTooLarge);
+        }
+
+        let mut body = Vec::new();
+        let mut chunks = response.bytes_stream();
+        while let Some(chunk) = chunks.next().await {
+            let chunk = chunk.map_err(transport)?;
+            if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                return Err(HostBackendError::ResponseTooLarge);
+            }
+            body.extend_from_slice(&chunk);
         }
 
         Ok(HostBackendResponse {
             status,
             headers,
-            body: body.to_vec(),
+            body,
         })
     }
 }

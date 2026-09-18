@@ -124,9 +124,13 @@ fn screen_path(path: &str) -> Result<(), HostBackendError> {
             _ => {}
         }
     }
-    // Skip the empty segment the leading `/` opens. This refuses a `//` prefix
-    // and `/a//b` alike.
-    for segment in path.split('/').skip(1) {
+    if path.starts_with("//") {
+        return Err(invalid("path must not start with '//'"));
+    }
+    // The leading `/` opens an empty segment and a single trailing `/` closes
+    // one; neither is a real segment, and `/` and `/a/` are both ordinary
+    // paths. An empty segment anywhere between them is not.
+    for segment in path.strip_suffix('/').unwrap_or(path).split('/').skip(1) {
         if segment.is_empty() {
             return Err(invalid("path must not contain empty segments"));
         }
@@ -259,6 +263,8 @@ mod tests {
             "/a#fragment",
             "/a\\b",
             "/a//b",
+            "//",
+            "/a//",
         ] {
             let error =
                 screen_request(&request("fiat-onramp", path)).expect_err("should be refused");
@@ -285,6 +291,13 @@ mod tests {
                 "path must not contain '%'",
                 "path {path}"
             );
+        }
+    }
+
+    #[test]
+    fn the_root_and_a_trailing_slash_are_ordinary_paths() {
+        for path in ["/", "/a/", "/a/b/"] {
+            assert_eq!(screen_request(&request("x", path)), Ok(()), "path {path}");
         }
     }
 

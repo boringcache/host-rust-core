@@ -11,8 +11,9 @@ use crate::{wire, wire_trait};
 /// core carries the request between them. The product never learns the origin it
 /// reached or the credential that authenticated the call.
 ///
-/// Which backends exist is host configuration, not protocol: a host that
-/// registers none answers `Unsupported`.
+/// Which backends exist is host configuration, not protocol. A host with no
+/// tunnel at all answers `Unsupported`; one that has a tunnel but does not
+/// serve the named backend answers `UnknownBackend`.
 #[wire_trait(id = 19)]
 #[crate::async_trait]
 pub trait Backend: Send + Sync {
