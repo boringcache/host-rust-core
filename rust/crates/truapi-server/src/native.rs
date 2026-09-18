@@ -29,7 +29,6 @@ use truapi_platform::{
     UserConfirmationReview, async_trait, normalize_product_identifier,
 };
 
-use crate::SigningHostRuntime;
 use crate::host_logic::dotns;
 pub use crate::host_logic::dotns::{NavigateDecision, PocketDeeplinkAction};
 use crate::host_logic::sso::messages::{
@@ -44,6 +43,7 @@ use crate::runtime::sso_remote::sso_message_id;
 use crate::subscription::Spawner;
 #[cfg(feature = "ws-bridge")]
 use crate::ws_bridge::{BridgeLogger, SharedWsBridge, WsBridgeEndpoint, WsBridgeStartError};
+use crate::{PairedSsoPeer, SigningHostRuntime};
 
 /// Host-thrown storage failure wrapping the canonical error payload, so its
 /// variants remain defined once in `truapi`.
@@ -611,6 +611,14 @@ pub trait HostCallbacks: Send + Sync {
     /// on another thread from inside it.
     fn worker_demand_changed(&self, product_id: String, transition: WorkerTransition);
 
+    /// A device finished pairing with this signing host.
+    ///
+    /// The core has no chat of its own, so announcing the new device to the
+    /// user's existing contacts is the host's to do. Arrives on the thread
+    /// answering the handshake, while the pairing call is still running: hand
+    /// the device off rather than announcing it inline.
+    fn device_paired(&self, device: PairedSsoPeer);
+
     /// Read a value from the host's scoped key-value store.
     fn local_storage_read(&self, key: String) -> Result<Option<Vec<u8>>, HostStorageError>;
     /// Write a value to the host's scoped key-value store.
@@ -736,8 +744,14 @@ impl NativeTrUApiHostRuntime {
             spawner.clone(),
         ));
         assert!(
-            runtime.worker_ledger().install_demand_observer(platform),
+            runtime
+                .worker_ledger()
+                .install_demand_observer(platform.clone()),
             "a freshly built runtime installs its worker demand observer once"
+        );
+        assert!(
+            runtime.set_device_pairing_observer(platform),
+            "a freshly built runtime installs its device pairing observer once"
         );
         if let Some(secret) = runtime_config.local_session_secret {
             futures::executor::block_on(runtime.activate_local_session_with_identity(
@@ -1542,6 +1556,12 @@ impl crate::host_logic::worker::WorkerDemandObserver for CallbackPlatform {
     fn worker_demand_changed(&self, product_id: &str, transition: WorkerTransition) {
         self.callbacks
             .worker_demand_changed(product_id.to_string(), transition);
+    }
+}
+
+impl crate::DevicePairingObserver for CallbackPlatform {
+    fn device_paired(&self, device: PairedSsoPeer) {
+        self.callbacks.device_paired(device);
     }
 }
 
@@ -2577,6 +2597,8 @@ mod tests {
         chain_closes: Mutex<Vec<u32>>,
         /// Worker demand transitions, in arrival order.
         worker_demand: Mutex<Vec<(String, WorkerTransition)>>,
+        /// Devices reported as paired, in arrival order.
+        paired_devices: Mutex<Vec<PairedSsoPeer>>,
         /// Capability this host reports as refused by the OS, if any.
         os_refused: Option<v01::HostDevicePermissionRequest>,
     }
@@ -2616,6 +2638,7 @@ mod tests {
                 chain_sends: Mutex::new(Vec::new()),
                 chain_closes: Mutex::new(Vec::new()),
                 worker_demand: Mutex::new(Vec::new()),
+                paired_devices: Mutex::new(Vec::new()),
                 os_refused: None,
             }
         }
@@ -2631,6 +2654,13 @@ mod tests {
                 .lock()
                 .expect("worker demand mutex poisoned")
                 .push((product_id, transition));
+        }
+
+        fn device_paired(&self, device: PairedSsoPeer) {
+            self.paired_devices
+                .lock()
+                .expect("paired device mutex poisoned")
+                .push(device);
         }
         async fn navigate_to(&self, _url: String) -> Result<(), HostNavigateRejection> {
             Ok(())
@@ -3035,6 +3065,45 @@ mod tests {
             native_execution_config(product_id, ProductExecutionKind::App),
         )
         .expect("product execution config should be valid")
+    }
+
+    /// Without this a paired device stops at the core and the host never hears
+    /// of it, so no contact is told a new device joined.
+    #[test]
+    fn a_paired_device_reaches_the_host_callbacks() {
+        let (callbacks, _events, platform) = event_platform();
+        let device = PairedSsoPeer {
+            statement_account_id: [0x31; 32],
+            encryption_public_key: [0x42; 32],
+        };
+
+        crate::DevicePairingObserver::device_paired(&platform, device);
+
+        assert_eq!(
+            *callbacks
+                .paired_devices
+                .lock()
+                .expect("paired device mutex poisoned"),
+            vec![device]
+        );
+    }
+
+    /// The runtime installs its own observer, so a host cannot be left with a
+    /// pairing nobody forwards.
+    #[test]
+    fn the_native_runtime_installs_the_pairing_observer() {
+        struct Inert;
+        impl crate::DevicePairingObserver for Inert {
+            fn device_paired(&self, _device: PairedSsoPeer) {}
+        }
+
+        let host = NativeTrUApiHostRuntime::with_runtime_config(
+            Arc::new(EventCallbacks::new()),
+            native_host_runtime_config(),
+        )
+        .expect("host runtime config should be valid");
+
+        assert!(!host.runtime.set_device_pairing_observer(Arc::new(Inert)));
     }
 
     #[test]
@@ -4120,6 +4189,7 @@ mod tests {
         impl HostCallbacks for Noop {
             fn on_core_log(&self, _marker: String, _detail: String) {}
             fn worker_demand_changed(&self, _product_id: String, _transition: WorkerTransition) {}
+            fn device_paired(&self, _device: PairedSsoPeer) {}
             async fn navigate_to(&self, _url: String) -> Result<(), HostNavigateRejection> {
                 Ok(())
             }
@@ -4280,6 +4350,7 @@ mod tests {
         impl HostCallbacks for GatedPermissionCallbacks {
             fn on_core_log(&self, _marker: String, _detail: String) {}
             fn worker_demand_changed(&self, _product_id: String, _transition: WorkerTransition) {}
+            fn device_paired(&self, _device: PairedSsoPeer) {}
             async fn navigate_to(&self, _url: String) -> Result<(), HostNavigateRejection> {
                 Ok(())
             }

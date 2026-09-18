@@ -375,6 +375,15 @@ public protocol HostBridge: AnyObject, Sendable {
     /// succeeds, so a retry after an ambiguous failure is safe.
     func endOperation(productId: String, id: UInt32) async throws
 
+    /// A device finished pairing with this signing host.
+    ///
+    /// The core has no chat of its own, so announcing the new device to the
+    /// user's existing contacts is the host's to do. Arrives on the thread
+    /// answering the handshake, while the pairing call is still running: hand
+    /// the device off rather than announcing it inline. Defaults to a no-op
+    /// for a host that answers no pairing.
+    func devicePaired(device: PairedSsoPeer)
+
     /// Scoped key-value storage for the Rust core.
     var storage: HostStorageBackend { get }
 
@@ -465,6 +474,7 @@ public extension HostBridge {
     }
     func supportedChains() throws -> HostChainSet { HostChainSet(network: "", chains: []) }
     func workerDemandChanged(productId: String, transition: WorkerTransition) {}
+    func devicePaired(device: PairedSsoPeer) {}
     func devicePermissionStatus(request: HostDevicePermissionRequest) async throws
         -> NativeDevicePermissionStatus { .notApplicable }
     /// Defaults opt out of worker keep-alive; override to run background work
@@ -592,6 +602,10 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
 
     func workerDemandChanged(productId: String, transition: WorkerTransition) {
         bridge.workerDemandChanged(productId: productId, transition: transition)
+    }
+
+    func devicePaired(device: PairedSsoPeer) {
+        bridge.devicePaired(device: device)
     }
 
     func navigateTo(url: String) async throws {

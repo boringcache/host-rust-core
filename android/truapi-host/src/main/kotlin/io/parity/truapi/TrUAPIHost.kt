@@ -66,6 +66,7 @@ import uniffi.truapi_server.NativeRendererObserver
 import uniffi.truapi_server.NativeDevicePermissionStatus
 import uniffi.truapi_server.NativeProductExecution
 import uniffi.truapi_server.NativeTrUApiHostRuntime
+import uniffi.truapi_server.PairedSsoPeer
 import uniffi.truapi_server.ProductRuntimeException
 import uniffi.truapi_server.HostNavigateRejection
 import uniffi.truapi_server.HostRejection
@@ -415,6 +416,16 @@ interface HostBridge {
     @Throws(HostRejection::class)
     suspend fun endOperation(productId: String, id: UInt) {}
 
+    /**
+     * A device finished pairing with this signing host.
+     *
+     * The core has no chat of its own, so announcing the new device to the
+     * user's existing contacts is the host's to do. Arrives on the thread
+     * answering the handshake, while the pairing call is still running:
+     * marshal the work off rather than announcing it inline.
+     */
+    fun devicePaired(device: PairedSsoPeer) {}
+
     /** Product-scoped key-value storage for the Rust core. */
     val storage: HostStorage
 
@@ -512,6 +523,11 @@ private class HostCallbackAdapter(private val bridge: HostBridge) : HostCallback
     // Infallible across the FFI for the same reason `onCoreLog` is.
     override fun workerDemandChanged(productId: String, transition: WorkerTransition) {
         runCatching { bridge.workerDemandChanged(productId, transition) }
+    }
+
+    // Infallible across the FFI for the same reason `onCoreLog` is.
+    override fun devicePaired(device: PairedSsoPeer) {
+        runCatching { bridge.devicePaired(device) }
     }
 
     override suspend fun navigateTo(url: String) =

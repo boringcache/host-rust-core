@@ -125,6 +125,7 @@ pub enum ResponderExit {
 
 /// Public key material identifying one pairing host's resumable SSO session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Record))]
 pub struct PairedSsoPeer {
     /// Pairing host's statement-store account id.
     pub statement_account_id: [u8; 32],
