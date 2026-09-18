@@ -234,6 +234,21 @@ make e2e-chat-cli                   # chat content screening against a chat sign
 make e2e-pocket-cli                 # Pocket protocol check against a Pocket signing-host
 ```
 
+The NFT purses (`truapi.nftPurse`) are the host-held `pallet-scarcity` purses
+on Asset Hub: one purse of host-derived keys per product plus the wallet's own,
+one NFT per key. A product lists its own purse, asks for a fresh empty key to
+receive an NFT into, and asks the host to move an item it holds; the host
+derives, reads, prompts, signs and watches, and products never see a purse
+secret. A signing host serves them from its root entropy; a pairing host
+relays each call to its paired signing host. The CLI's
+`js/scripts/nft-purse-smoke.ts` exercises every method a product can call
+without holding an NFT:
+
+```bash
+truapi-host signing-host --auto-accept --product-id truapi-playground.dot \
+  --script rust/crates/truapi-host-cli/js/scripts/nft-purse-smoke.ts
+```
+
 The Pocket phase runs its product as a Worker execution, the only execution
 Pocket is served to. It seeds the CLI's in-memory Pocket host from
 `TRUAPI_POCKET_CARDS` (`loyalty,humanity:privileged`), which is what makes one

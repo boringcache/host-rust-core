@@ -246,6 +246,26 @@ role-specific lifecycle, so no method exists on a role that can't mean it:
   the `RuntimeServices`-owned per-chain cache rather than re-reading it per
   call.
 
+The **NFT purses** (`runtime/nft_purse`, the `NftPurse` service) follow the
+same split. A signing host keeps one `pallet-scarcity` purse per product plus
+the wallet's own (`nfts.dot`), each a set of keys hard-derived at
+`//pps//nft//<product_id>//<index>` holding one NFT apiece. The chain is the
+authority on what a purse holds: the engine scans `NftsByOwner` on Asset Hub,
+hands out never-reused receive keys, and moves items with a V4 signed extrinsic
+from the purse key under the pallet's `AsScarcity` extension, mortal over eight
+blocks so a failed move expires before the pallet's failure lock lifts. It
+remembers only what it allocated (`CoreStorageKey::NftPurses`) and what it
+broadcast (`NftPurseTransferLog`), so a wallet restored from seed rebuilds its
+purses by listing them. Listing is granted once per product; a move to another
+product's purse is granted once per caller and target; every transfer shows a
+sheet on the host holding the keys. A pairing host cannot derive even a purse
+public key, so it relays each purse operation whole over SSO (v1 message
+indices 24..=29) and keeps no purse state; its transfer answer arrives after
+inclusion, so products on it see `Landed` or `Failed` with no intermediate
+progress. Everything purse-specific, including its mortal-era encoding and
+hasher-aware storage keys, lives under `nft_purse` rather than in the shared
+metadata layer.
+
 `host_logic` stays pure: the orchestrators above call into it for codecs,
 session/SSO crypto, key derivation, and permission policy, while all I/O
 (statement-store RPC, storage, prompts, chain RPC) stays in the layers above.
