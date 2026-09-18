@@ -260,6 +260,20 @@ export interface MockHost {
   getNavigationLog(): string[];
   /** Notifications the core asked the host to show, in order. */
   getNotificationLog(): NotificationLogEntry[];
+  /**
+   * Deliver a SCALE-encoded signed statement to the product as a chain
+   * notification, returning how many live subscriptions it reached. Zero means
+   * the product is not subscribed yet: subscribe first, then inject.
+   *
+   * The bytes are the wire form, not a structured statement. The core decodes
+   * what the chain would have sent it, so anything else is dropped during
+   * decode with no error a suite can see.
+   */
+  injectStatement(statement: Uint8Array | string): number;
+  /** Statements injected so far, in order, as `0x` hex. */
+  getInjectedStatements(): string[];
+  /** Forget the injected statements. Delivered ones cannot be recalled. */
+  clearStatements(): void;
   /** Raw JSON-RPC the core sent over the chain connection, in order. */
   sentRpc(): string[];
   /** Auth-state transitions the core emitted, in order. */
@@ -426,11 +440,19 @@ function normalizeHash(hash: string | Uint8Array): string {
 function connectToChain(
   proxy: ChainProxy,
   sentRpc: string[],
+  statementSubscriptions?: Set<string>,
+  // Injectors are held beside the connection rather than on it: the connection
+  // type is generated from the protocol and must not grow test-only members.
+  injectors?: Set<(frame: string) => void>,
 ): JsonRpcConnection {
   const socket = new WebSocket(proxy.rpcUrl);
   const queued: string[] = [];
   const waiting: ((value: IteratorResult<string>) => void)[] = [];
   let closed = false;
+  // Ids of `statement_subscribeStatement` requests, so the chain's reply to one
+  // can be recognised and its subscription id recorded. Injection needs that
+  // id: a notification carrying any other one is dropped by the core.
+  const pendingStatementRequests = new Set<string>();
 
   const open = new Promise<void>((resolve, reject) => {
     socket.addEventListener("open", () => resolve(), { once: true });
@@ -441,15 +463,46 @@ function connectToChain(
     );
   });
 
-  socket.addEventListener("message", (event: MessageEvent) => {
-    const text = typeof event.data === "string" ? event.data : "";
-    if (!text) return;
+  const deliver = (text: string) => {
     const next = waiting.shift();
     if (next) next({ value: text, done: false });
     else queued.push(text);
+  };
+
+  socket.addEventListener("message", (event: MessageEvent) => {
+    const text = typeof event.data === "string" ? event.data : "";
+    if (!text) return;
+    if (statementSubscriptions) recordStatementSubscription(text);
+    deliver(text);
   });
+
+  /** Record the subscription id the chain assigned to a statement subscribe. */
+  const recordStatementSubscription = (text: string) => {
+    try {
+      const frame = JSON.parse(text) as {
+        id?: string;
+        result?: unknown;
+      };
+      if (
+        typeof frame.id === "string" &&
+        pendingStatementRequests.delete(frame.id) &&
+        typeof frame.result === "string"
+      ) {
+        statementSubscriptions?.add(frame.result);
+      }
+    } catch {
+      // A frame that is not JSON is not a subscribe reply; the core still gets
+      // it, because parsing here must never drop chain traffic.
+    }
+  };
+  const inject = (frame: string) => {
+    if (!closed) deliver(frame);
+  };
+  injectors?.add(inject);
+
   const finish = () => {
     closed = true;
+    injectors?.delete(inject);
     // Release every reader, so a stream ends instead of hanging on a drop.
     while (waiting.length > 0) waiting.shift()?.({ value: undefined, done: true });
   };
@@ -458,6 +511,19 @@ function connectToChain(
   return {
     send(request) {
       sentRpc.push(request);
+      if (statementSubscriptions) {
+        try {
+          const frame = JSON.parse(request) as { id?: string; method?: string };
+          if (
+            frame.method === "statement_subscribeStatement" &&
+            typeof frame.id === "string"
+          ) {
+            pendingStatementRequests.add(frame.id);
+          }
+        } catch {
+          // Not JSON: nothing to track, and the send still goes out.
+        }
+      }
       // Sends before the socket is up are queued by the promise, not dropped.
       void open.then(() => {
         if (!closed) socket.send(request);
@@ -539,6 +605,11 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   const preimages = new Map<string, Uint8Array>();
   const navigations: string[] = [];
   const pushedNotifications: NotificationLogEntry[] = [];
+  // Subscription ids the chain assigned to statement subscribes, and the live
+  // chain connections a synthesized notification can be delivered through.
+  const statementSubscriptions = new Set<string>();
+  const chainInjectors = new Set<(frame: string) => void>();
+  const injectedStatements: string[] = [];
   const sentRpc: string[] = [];
   const authStates: AuthState[] = [];
   const reviews: UserConfirmationReview[] = [];
@@ -720,7 +791,9 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
               candidate.genesisHash !== undefined &&
               normalizeHash(candidate.genesisHash) === normalizeHash(genesisHash),
           ) ?? chainProxies.find((candidate) => candidate.genesisHash === undefined);
-        if (proxy) return connectToChain(proxy, sentRpc);
+        if (proxy) {
+          return connectToChain(proxy, sentRpc, statementSubscriptions, chainInjectors);
+        }
         return {
           send(request) {
             sentRpc.push(request);
@@ -844,6 +917,38 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     callbacks,
     getNavigationLog: () => [...navigations],
     getNotificationLog: () => pushedNotifications.map((n) => ({ ...n })),
+    injectStatement: (statement) => {
+      const encoded =
+        typeof statement === "string"
+          ? statement.startsWith("0x")
+            ? statement
+            : `0x${statement}`
+          : `0x${hex(statement)}`;
+      injectedStatements.push(encoded);
+      let delivered = 0;
+      for (const subscription of statementSubscriptions) {
+        // The envelope the chain sends, not the bare statement: the core reads
+        // `result.data.statements`, so a bare value decodes to nothing.
+        const frame = JSON.stringify({
+          jsonrpc: "2.0",
+          method: "statement_subscribeStatement",
+          params: {
+            subscription,
+            result: {
+              event: "newStatements",
+              data: { statements: [encoded], remaining: 0 },
+            },
+          },
+        });
+        for (const injector of chainInjectors) injector(frame);
+        delivered += 1;
+      }
+      return delivered;
+    },
+    getInjectedStatements: () => [...injectedStatements],
+    clearStatements: () => {
+      injectedStatements.length = 0;
+    },
     sentRpc: () => [...sentRpc],
     authStates: () => [...authStates],
     reviews: () => [...reviews],

@@ -222,10 +222,16 @@ export interface TestHost {
    * for the host to record -- not a host seam the mock declined to implement.
    */
   getSubmittedStatements(): Promise<never>;
-  /** Deliver a statement to the product. Always throws; see above. */
-  injectStatement(statement: unknown): Promise<never>;
-  /** Drop the recorded statements. Always throws; see above. */
-  clearStatements(): Promise<never>;
+  /**
+   * Deliver a statement to the product as a chain notification, returning how
+   * many live subscriptions it reached. Subscribe first: zero means nothing
+   * was listening.
+   */
+  injectStatement(statement: Uint8Array | string): Promise<number>;
+  /** Statements injected so far, in order. */
+  getInjectedStatements(): Promise<string[]>;
+  /** Forget the injected statements. */
+  clearStatements(): Promise<void>;
 
   /**
    * Release the host.
@@ -273,21 +279,20 @@ export interface TestHost {
 }
 
 /**
- * Why the statement-store controls cannot be served.
+ * Why reading back what the product submitted cannot be served.
  *
- * Stated once so every one of them says the same thing, and says which half is
- * missing: the transport works -- a proxied people chain connects and
- * `statement_subscribeStatement` is visible in `getSentRpc` -- but no statement
- * submission reaches it.
+ * Injection and clearing are served -- see `injectStatement` -- because the
+ * chain connection is an inbound path the host owns. Reading submissions is
+ * not: they would have to be observed leaving, and nothing leaves until the
+ * product holds a statement allowance.
  */
-const NO_STATEMENT_SEAM =
+const NO_SUBMITTED_STATEMENTS =
   "is not available in the TrUAPI test host: the statement store is owned by " +
-  "the core, not the host, so there is no seam to record or inject through. " +
-  "A submission is rejected inside the core, which needs a statement allowance " +
-  "it cannot obtain without personhood ring membership, so no statement RPC " +
-  "reaches the chain and the submission cannot be observed on the transport " +
-  "either. Expect the failed allowance attempt itself to show up there as " +
-  "storage reads. Subscription traffic IS visible via the proxied chain.";
+  "the core, so a submission can only be observed leaving over the chain, and " +
+  "nothing leaves until the product holds a statement allowance -- which needs " +
+  "personhood ring membership a dev account does not have. Use " +
+  "`injectStatement` for the inbound direction, which IS served, and read " +
+  "`getSentRpc` for whatever traffic the attempt does produce.";
 
 /**
  * Why the payment controls cannot be served.
@@ -615,14 +620,19 @@ export function createTestHostFixture(defaults: TestHostFixtureOptions) {
         signOut: () => call("signOut"),
         reset: () => call("reset"),
 
+        // Sent as hex, not bytes: `page.evaluate` serialises a Uint8Array as a
+        // plain index object, which would inject a statement of nothing.
+        injectStatement: (statement) =>
+          page.evaluate((value) => {
+            const host = window.__TRUAPI_TEST_HOST__;
+            if (!host) throw new Error("test host is not running on this page");
+            return host.injectStatement(value);
+          }, typeof statement === "string" ? statement : `0x${Array.from(statement, (b) => b.toString(16).padStart(2, "0")).join("")}`),
+        getInjectedStatements: () => call("getInjectedStatements"),
+        clearStatements: () => call("clearStatements"),
+
         getSubmittedStatements: () => {
-          throw new Error(`testHost.getSubmittedStatements ${NO_STATEMENT_SEAM}`);
-        },
-        injectStatement: () => {
-          throw new Error(`testHost.injectStatement ${NO_STATEMENT_SEAM}`);
-        },
-        clearStatements: () => {
-          throw new Error(`testHost.clearStatements ${NO_STATEMENT_SEAM}`);
+          throw new Error(`testHost.getSubmittedStatements ${NO_SUBMITTED_STATEMENTS}`);
         },
 
         // Playwright closes the page after the fixture yields, so there is

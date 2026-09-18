@@ -1525,6 +1525,58 @@ extrinsic submission, none of which had ever executed there. The wasm allowance
 port is exercised end to end, and `badProof` from a real chain is a far better
 place to stand than `NativeOnly` from a stub.
 
+## 33. Two of the three statement controls are now served
+
+Of the ten refusals, only the statement trio was ever affected by the allowance
+port -- payments are dead in the core on every target, `ChatPlatform` has no
+inbound method, and `setLoginBehavior` is a role boundary. Two of that trio are
+now implemented and one still refuses, for a reason that is now specific.
+
+### Injection goes through the chain, because that is the only inbound path
+
+The statement store is core-owned, so there is no host-side seam. The chain
+connection is the seam, and the mock owns it. `injectStatement` takes a
+SCALE-encoded signed statement, wraps it in the frame the chain would have sent,
+and delivers it to every live subscription:
+
+```json
+{"jsonrpc":"2.0","method":"statement_subscribeStatement",
+ "params":{"subscription":"<id>",
+           "result":{"event":"newStatements",
+                     "data":{"statements":["0x..."],"remaining":0}}}}
+```
+
+That envelope is not a guess -- it is the shape `new_statements_frame` in
+`test_support.rs:546` builds for the core's own tests. The first attempt put the
+statement in `result` directly and was silently ignored, which is what a wrong
+envelope looks like from outside.
+
+To address a notification the mock has to know the subscription id, so the proxy
+now records the id from the chain's reply to a `statement_subscribeStatement`
+request. `injectStatement` returns how many subscriptions it reached: zero means
+the product has not subscribed, which is the ordinary mistake.
+
+Verified end to end against host-playground: injecting during its five-second
+subscribe window turned `Received 0 statements` into `Received 1 statements`,
+with the decoded proof matching what was injected.
+
+### `getSubmittedStatements` still refuses, and the reason narrowed
+
+Reading back what the product submitted means observing it leave over the chain,
+and nothing leaves until the product holds a statement allowance. That is the
+personhood blocker, not a seam problem, so the refusal now says so and points at
+`injectStatement` for the inbound direction.
+
+### A trap worth knowing: statement RPC is People-chain only
+
+The first end-to-end attempt delivered nothing because the fixture served only
+the hub. Asset Hub answers `statement_subscribeStatement` with
+`{"code":-32601,"message":"Method not found"}`, the subscription is never
+established, and **the product reports "Received 0 statements in 5s" as a
+success**. A suite that subscribes without serving the People chain therefore
+passes vacuously. host-playground's two subscribe specs are in exactly that
+shape; they serve People now, but they would not have failed if they did not.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is

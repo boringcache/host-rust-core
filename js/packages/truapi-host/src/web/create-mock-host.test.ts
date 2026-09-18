@@ -486,3 +486,90 @@ describe("the notification log", () => {
     expect(host.getNotificationLog()[0]!.cancelled).toBe(false);
   });
 });
+
+describe("statement injection through the chain connection", () => {
+  // A minimal socket the proxy can drive, so the test exercises the real
+  // subscribe-reply parsing rather than a stand-in for it.
+  class FakeSocket {
+    static instances: FakeSocket[] = [];
+    listeners: Record<string, ((e: unknown) => void)[]> = {};
+    sent: string[] = [];
+    constructor(public url: string) {
+      FakeSocket.instances.push(this);
+      queueMicrotask(() => this.emit("open", {}));
+    }
+    addEventListener(type: string, fn: (e: unknown) => void) {
+      (this.listeners[type] ??= []).push(fn);
+    }
+    emit(type: string, event: unknown) {
+      for (const fn of this.listeners[type] ?? []) fn(event);
+    }
+    send(data: string) {
+      this.sent.push(data);
+    }
+    close() {
+      this.emit("close", {});
+    }
+  }
+
+  async function connected() {
+    const original = globalThis.WebSocket;
+    FakeSocket.instances = [];
+    (globalThis as { WebSocket: unknown }).WebSocket = FakeSocket;
+    const host = createMockHost({ chainProxies: [{ rpcUrl: "ws://chain.test" }] });
+    const conn = await host.callbacks.chain.connect(new Uint8Array(32));
+    (globalThis as { WebSocket: unknown }).WebSocket = original;
+    return { host, conn, socket: FakeSocket.instances[0]! };
+  }
+
+  it("delivers an injected statement to a live subscription", async () => {
+    const { host, conn, socket } = await connected();
+    const reader = conn.responses()[Symbol.asyncIterator]();
+
+    conn.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "truapi:1",
+        method: "statement_subscribeStatement",
+        params: [{ matchAll: [] }],
+      }),
+    );
+    // The chain answers with the subscription id; that reply is what makes
+    // injection addressable.
+    socket.emit("message", {
+      data: JSON.stringify({ jsonrpc: "2.0", id: "truapi:1", result: "sub-1" }),
+    });
+    await reader.next();
+
+    expect(host.injectStatement(new Uint8Array([1, 2, 3]))).toBe(1);
+
+    const frame = JSON.parse((await reader.next()).value as string) as {
+      method: string;
+      params: {
+        subscription: string;
+        result: { event: string; data: { statements: string[] } };
+      };
+    };
+    expect(frame.method).toBe("statement_subscribeStatement");
+    expect(frame.params.subscription).toBe("sub-1");
+    // The envelope the core reads: `result.data.statements`, hex-encoded.
+    expect(frame.params.result.event).toBe("newStatements");
+    expect(frame.params.result.data.statements).toEqual(["0x010203"]);
+  });
+
+  it("reaches nothing before the product subscribes", async () => {
+    const { host } = await connected();
+    // No subscribe reply seen, so there is no id to address: reporting a
+    // delivery here would let a suite think the product got something.
+    expect(host.injectStatement("0xab")).toBe(0);
+  });
+
+  it("records what was injected and clears it", async () => {
+    const { host } = await connected();
+    host.injectStatement(new Uint8Array([0xaa]));
+    host.injectStatement("0xbb");
+    expect(host.getInjectedStatements()).toEqual(["0xaa", "0xbb"]);
+    host.clearStatements();
+    expect(host.getInjectedStatements()).toEqual([]);
+  });
+});
