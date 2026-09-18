@@ -1763,7 +1763,7 @@ fn push_notification_consumes_allow_once_before_scheduling() {
                 )),
                 Err(CallError::Domain(HostPushNotificationError::V1(
                     v01::HostPushNotificationError::Unknown {
-                        reason: "Notifications permission denied".to_string(),
+                        reason: PERMISSION_DENIED_REASON.to_string(),
                     },
                 ))),
                 vec![notification],
@@ -1799,7 +1799,7 @@ fn push_notification_denial_never_reaches_scheduler() {
         (
             Err(CallError::Domain(HostPushNotificationError::V1(
                 v01::HostPushNotificationError::Unknown {
-                    reason: "Notifications permission denied".to_string(),
+                    reason: PERMISSION_DENIED_REASON.to_string(),
                 },
             ))),
             vec![],
@@ -2743,7 +2743,7 @@ fn preimage_submit_requires_remote_permission_before_backend_call() {
     match err {
         CallError::Domain(RemotePreimageSubmitError::V1(v01::PreimageSubmitError::Unknown {
             reason,
-        })) => assert_eq!(reason, REMOTE_PERMISSION_DENIED_REASON),
+        })) => assert_eq!(reason, PERMISSION_DENIED_REASON),
         other => panic!("expected preimage permission denial, got {other:?}"),
     }
     assert!(
@@ -2777,7 +2777,7 @@ fn chain_broadcast_requires_remote_permission_before_backend_call() {
     match err {
         CallError::Domain(RemoteChainTransactionBroadcastError::V1(v01::GenericError {
             reason,
-        })) => assert_eq!(reason, REMOTE_PERMISSION_DENIED_REASON),
+        })) => assert_eq!(reason, PERMISSION_DENIED_REASON),
         other => panic!("expected chain broadcast permission denial, got {other:?}"),
     }
     assert!(platform.sent_rpc.lock().unwrap().is_empty());

@@ -59,6 +59,7 @@ pub enum RemotePermission {
     Remote {
         /// Domain patterns requested by the product. Each is an exact host, a
         /// wildcard covering every descendant (`*.example.com`), or `*` for any host.
+        /// Wildcard suffixes must be domain names with at least two labels.
         domains: Vec<String>,
     },
     /// WebRTC access.

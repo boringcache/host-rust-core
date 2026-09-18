@@ -79,9 +79,10 @@ class RustProductExecutionBridge: HostBridge, @unchecked Sendable {
             case .denied: .denied
             case .notDetermined: .notDetermined
             }
+        case .location:
+            .notDetermined
         case .bluetooth,
              .nfc,
-             .location,
              .clipboard,
              .openUrl,
              .biometrics:

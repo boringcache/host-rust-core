@@ -36,7 +36,7 @@ use truapi_platform::PermissionAuthorizationStatus;
 use crate::host_logic::dotns::{NavigateDecision, parse_navigate};
 use crate::host_logic::features::feature_supported;
 use crate::host_logic::product_manifest::Granted;
-use crate::runtime::ProductRuntimeHost;
+use crate::runtime::{PERMISSION_DENIED_REASON, ProductRuntimeHost};
 
 #[truapi::async_trait]
 impl System for ProductRuntimeHost {
@@ -355,7 +355,7 @@ impl Notifications for ProductRuntimeHost {
         if status != PermissionAuthorizationStatus::Authorized {
             return Err(CallError::Domain(HostPushNotificationError::V1(
                 v01::HostPushNotificationError::Unknown {
-                    reason: "Notifications permission denied".to_string(),
+                    reason: PERMISSION_DENIED_REASON.to_string(),
                 },
             )));
         }
