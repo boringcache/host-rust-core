@@ -159,12 +159,22 @@ struct RustRuntimeBridgeTests {
         }
     }
 
-    @Test(arguments: [HostDevicePermissionRequest.openUrl, .bluetooth, .nfc, .location, .clipboard, .biometrics])
-    func devicePermissionStatusHasNoUnimplementedOSGate(request: HostDevicePermissionRequest) async throws {
+    @Test(arguments: [
+        (HostDevicePermissionRequest.openUrl, NativeDevicePermissionStatus.notApplicable),
+        (.bluetooth, .notApplicable),
+        (.nfc, .notApplicable),
+        (.location, .notDetermined),
+        (.clipboard, .notApplicable),
+        (.biometrics, .notApplicable),
+    ])
+    func devicePermissionStatusWithoutOSQuery(
+        request: HostDevicePermissionRequest,
+        expected: NativeDevicePermissionStatus
+    ) async throws {
         let osAsker = MockOSPermissionAsker()
         let bridge = makeBridge(osPermissionAsker: osAsker)
 
-        #expect(try await bridge.devicePermissionStatus(request: request) == .notApplicable)
+        #expect(try await bridge.devicePermissionStatus(request: request) == expected)
         #expect(osAsker.checkedCapabilities.isEmpty)
         #expect(osAsker.requestedCapabilities.isEmpty)
     }
