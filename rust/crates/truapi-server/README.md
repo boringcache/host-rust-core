@@ -280,6 +280,15 @@ host to `HostCallbacks::device_paired`. It carries the `PairedSsoPeer` that
 pairing produced, which is also what `resume_pairing` and
 `disconnect_paired_host` take.
 
+A native host reaches the responder through
+`NativeTrUApiHostRuntime`: `notify_pairing_allowance_allocation` and
+`notify_pairing_failed` for the two notices a peer gets before the answer,
+`establish_pairing` for the answer itself, `resume_pairing` to serve the
+session, and `disconnect_paired_host` to end it. Answering and serving are
+separate calls rather than one `respond_to_pairing`, because the host persists
+the peer between them and it is the host's stored record that `resume_pairing`
+is called with afterwards.
+
 The report fires once the handshake answer is on the Statement Store, which is
 the earliest point the peer could read it. It is not proof that the peer did:
 a pairing host races cancellation against the answer arriving and gives up

@@ -6,8 +6,10 @@
 //! [`truapi_platform::Platform`] trait to a corresponding callback. The
 //! resulting platform is fed into [`SigningHostRuntime`] so the rest of the
 //! dispatcher pipeline behaves identically to the WS-bridge and wasm flavors.
-//! A native host therefore owns the signer: there is no pairing flow here, and
-//! the pairing-host-only entry points are inert.
+//! A native host therefore owns the signer, so it never pairs itself with a
+//! wallet and the pairing-host entry points are inert. It does answer other
+//! devices pairing with it: the signing host's responder side is exposed here,
+//! from the handshake answer through serving and ending the session.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,11 +41,12 @@ use crate::host_logic::worker::WorkerTransition;
 #[cfg(feature = "ws-bridge")]
 use crate::native_renderer::observe_renderer;
 use crate::native_renderer::{NativeRendererObserver, NativeRendererSubscription};
+use crate::runtime::AnnouncedPairing;
 use crate::runtime::sso_remote::sso_message_id;
 use crate::subscription::Spawner;
 #[cfg(feature = "ws-bridge")]
 use crate::ws_bridge::{BridgeLogger, SharedWsBridge, WsBridgeEndpoint, WsBridgeStartError};
-use crate::{PairedSsoPeer, SigningHostRuntime};
+use crate::{DevicePairingObserver, PairedSsoPeer, ResponderExit, SigningHostRuntime};
 
 /// Host-thrown storage failure wrapping the canonical error payload, so its
 /// variants remain defined once in `truapi`.
@@ -872,6 +875,38 @@ pub enum NativeStatementRenewalTarget {
     },
 }
 
+/// A refused pairing call on the signing host's responder side.
+#[derive(Debug, Clone, thiserror::Error, uniffi::Error)]
+pub enum NativePairingError {
+    /// The core refused the call.
+    #[error("{reason}")]
+    Rejected {
+        /// Human-readable rejection reason.
+        reason: String,
+    },
+}
+
+impl From<v01::GenericError> for NativePairingError {
+    fn from(error: v01::GenericError) -> Self {
+        Self::Rejected {
+            reason: error.reason,
+        }
+    }
+}
+
+/// Handle to a pairing this host has told the peer it is working on, taken
+/// back by [`NativeTrUApiHostRuntime::notify_pairing_failed`].
+///
+/// Opaque on purpose. The value carries the responder statement secret the
+/// first notice was signed with, so that the second is signed by the same
+/// account even if this host's signer rotates in between. Exposing it as a
+/// record would put that secret on the FFI surface for no caller that needs
+/// to read it.
+#[derive(uniffi::Object)]
+pub struct NativeAnnouncedPairing {
+    inner: AnnouncedPairing,
+}
+
 /// A refused renewal-ledger call: tracking, untracking or reading it back.
 #[derive(Debug, Clone, thiserror::Error, uniffi::Error)]
 pub enum NativeRenewalTargetError {
@@ -1009,6 +1044,81 @@ impl NativeTrUApiHostRuntime {
     /// releasing with none held is a no-op.
     pub fn release_worker(&self, product_id: String) {
         self.runtime.worker_ledger().release(&product_id);
+    }
+
+    /// Tell the pairing host behind `deeplink` that allowance allocation is
+    /// under way, so it leaves its QR screen while the allocation runs.
+    ///
+    /// Answering at all needs this host's own statement-store allowance, so
+    /// register the `WalletSso` renewal target first. The returned handle is
+    /// owed a [`Self::notify_pairing_failed`] if the pairing then fails: the
+    /// peer has dropped its QR and waits without a deadline of its own.
+    pub async fn notify_pairing_allowance_allocation(
+        &self,
+        deeplink: String,
+    ) -> Result<Arc<NativeAnnouncedPairing>, NativePairingError> {
+        self.runtime
+            .notify_pairing_allowance_allocation(&deeplink)
+            .await
+            .map(|inner| Arc::new(NativeAnnouncedPairing { inner }))
+            .map_err(NativePairingError::from)
+    }
+
+    /// Tell a pairing host that already dropped its QR why pairing stopped.
+    ///
+    /// Takes the handle from [`Self::notify_pairing_allowance_allocation`], so
+    /// the notice is signed by the account that already reached that peer even
+    /// if this host's signer has rotated since.
+    pub async fn notify_pairing_failed(
+        &self,
+        announced: Arc<NativeAnnouncedPairing>,
+        reason: String,
+    ) -> Result<(), NativePairingError> {
+        self.runtime
+            .notify_pairing_failed(&announced.inner, reason)
+            .await
+            .map_err(NativePairingError::from)
+    }
+
+    /// Answer a pairing host's handshake deeplink, without serving the session
+    /// it opens.
+    ///
+    /// A device that pairs here is reported to
+    /// [`HostCallbacks::device_paired`]. Serving the session is
+    /// [`Self::resume_pairing`], which the host calls with the peer it
+    /// persisted.
+    pub async fn establish_pairing(&self, deeplink: String) -> Result<(), NativePairingError> {
+        self.runtime
+            .establish_pairing(&deeplink)
+            .await
+            .map_err(NativePairingError::from)
+    }
+
+    /// Serve a paired host's SSO session until it ends.
+    ///
+    /// Runs for the life of the session, so call it off the host's main
+    /// thread. Only [`ResponderExit::PeerDisconnected`] authorizes dropping
+    /// the stored pairing; after [`ResponderExit::SubscriptionEnded`] or an
+    /// error the peer is still paired and the call can be made again.
+    pub async fn resume_pairing(
+        &self,
+        peer: PairedSsoPeer,
+    ) -> Result<ResponderExit, NativePairingError> {
+        self.runtime
+            .resume_pairing(peer)
+            .await
+            .map_err(NativePairingError::from)
+    }
+
+    /// Tell a paired host this signing host is ending their SSO session.
+    pub async fn disconnect_paired_host(
+        &self,
+        peer: PairedSsoPeer,
+    ) -> Result<(), NativePairingError> {
+        self.runtime
+            .disconnect_paired_host(peer)
+            .await
+            .map_err(NativePairingError::from)
     }
 
     /// Core-owned logout for the process-wide authentication session.
@@ -1564,7 +1674,7 @@ impl crate::host_logic::worker::WorkerDemandObserver for CallbackPlatform {
     }
 }
 
-impl crate::DevicePairingObserver for CallbackPlatform {
+impl DevicePairingObserver for CallbackPlatform {
     fn device_paired(&self, device: PairedSsoPeer) {
         self.callbacks.device_paired(device);
     }
@@ -3070,6 +3180,23 @@ mod tests {
             native_execution_config(product_id, ProductExecutionKind::App),
         )
         .expect("product execution config should be valid")
+    }
+
+    /// The entry point has to reach the core's own deeplink decoder. A method
+    /// wired to nothing would answer the same way for every input.
+    #[test]
+    fn establish_pairing_rejects_a_deeplink_it_cannot_decode() {
+        let host = native_host_runtime_no_session();
+
+        let failure =
+            futures::executor::block_on(host.establish_pairing("not-a-deeplink".to_string()))
+                .expect_err("an undecodable deeplink cannot be answered");
+
+        let NativePairingError::Rejected { reason } = failure;
+        assert!(
+            reason.contains("deeplink"),
+            "the core's decode failure did not reach the host: {reason}"
+        );
     }
 
     /// Without this a paired device stops at the core and the host never hears

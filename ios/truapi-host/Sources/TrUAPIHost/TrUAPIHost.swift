@@ -867,6 +867,57 @@ public final class TrUAPIHostRuntime: @unchecked Sendable {
         inner.releaseWorker(productId: productId)
     }
 
+    /// Tell the pairing host behind `deeplink` that allowance allocation is
+    /// under way, so it leaves its QR screen while the allocation runs.
+    ///
+    /// Answering needs this host's own statement-store allowance, so register
+    /// the `WalletSso` renewal target first. The returned handle is owed a
+    /// ``notifyPairingFailed(announced:reason:)`` if pairing then fails: the
+    /// peer has dropped its QR and waits without a deadline of its own.
+    public func notifyPairingAllowanceAllocation(
+        deeplink: String
+    ) async throws -> NativeAnnouncedPairing {
+        try await inner.notifyPairingAllowanceAllocation(deeplink: deeplink)
+    }
+
+    /// Tell a pairing host that already dropped its QR why pairing stopped.
+    ///
+    /// Takes the handle from
+    /// ``notifyPairingAllowanceAllocation(deeplink:)``, so the notice is
+    /// signed by the account that already reached that peer even if this
+    /// host's signer has rotated since.
+    public func notifyPairingFailed(
+        announced: NativeAnnouncedPairing,
+        reason: String
+    ) async throws {
+        try await inner.notifyPairingFailed(announced: announced, reason: reason)
+    }
+
+    /// Answer a pairing host's handshake deeplink, without serving the session
+    /// it opens.
+    ///
+    /// A device that pairs here reaches ``HostBridge/devicePaired(device:)``.
+    /// Serving the session is ``resumePairing(peer:)``, called with the peer
+    /// this host persisted.
+    public func establishPairing(deeplink: String) async throws {
+        try await inner.establishPairing(deeplink: deeplink)
+    }
+
+    /// Serve a paired host's SSO session until it ends.
+    ///
+    /// Runs for the life of the session, so give it its own task. Only
+    /// `.peerDisconnected` authorises dropping the stored pairing; after
+    /// `.subscriptionEnded` or a thrown error the peer is still paired and
+    /// this can be called again.
+    public func resumePairing(peer: PairedSsoPeer) async throws -> ResponderExit {
+        try await inner.resumePairing(peer: peer)
+    }
+
+    /// Tell a paired host this signing host is ending their SSO session.
+    public func disconnectPairedHost(peer: PairedSsoPeer) async throws {
+        try await inner.disconnectPairedHost(peer: peer)
+    }
+
     public func activateLocalSession(secret: Data, liteUsername: String? = nil) throws {
         try inner.activateLocalSession(secret: secret, liteUsername: liteUsername)
     }

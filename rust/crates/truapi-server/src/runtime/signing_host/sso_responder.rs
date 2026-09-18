@@ -116,6 +116,7 @@ impl DecodeFailureRequestIds {
 
 /// Terminal outcome of one responder serve loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Enum))]
 pub enum ResponderExit {
     /// The pairing host announced `Disconnected`; its durable pairing may be removed.
     PeerDisconnected,

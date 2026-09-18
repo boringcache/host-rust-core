@@ -236,6 +236,16 @@ cannot check are the host's to keep: send a render context only for a surface
 the product's manifest `includes`, and publish a renderer action only from the
 current tree of an open render stream.
 
+The runtime answers other devices pairing with it:
+`notifyPairingAllowanceAllocation(deeplink:)` and
+`notifyPairingFailed(announced:reason:)` are the two notices a peer gets before
+the answer, `establishPairing(deeplink:)` is the answer,
+`resumePairing(peer:)` serves the session for its whole life and belongs in its
+own task, and `disconnectPairedHost(peer:)` ends it. Only
+`.peerDisconnected` from `resumePairing` authorises dropping the stored
+pairing. The host persists the peer between answering and serving, which is why
+those are separate calls.
+
 `devicePaired` on the runtime bridge reports a device that finished pairing
 with this signing host, carrying the `PairedSsoPeer` the pairing produced. The
 core has no chat of its own, so announcing the new device to the user's

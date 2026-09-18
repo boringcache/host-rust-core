@@ -66,7 +66,9 @@ import uniffi.truapi_server.NativeRendererObserver
 import uniffi.truapi_server.NativeDevicePermissionStatus
 import uniffi.truapi_server.NativeProductExecution
 import uniffi.truapi_server.NativeTrUApiHostRuntime
+import uniffi.truapi_server.NativeAnnouncedPairing
 import uniffi.truapi_server.PairedSsoPeer
+import uniffi.truapi_server.ResponderExit
 import uniffi.truapi_server.ProductRuntimeException
 import uniffi.truapi_server.HostNavigateRejection
 import uniffi.truapi_server.HostRejection
@@ -911,6 +913,55 @@ class TrUAPIHostRuntime private constructor(
      */
     fun releaseWorker(productId: String) {
         inner.releaseWorker(productId)
+    }
+
+    /**
+     * Tell the pairing host behind [deeplink] that allowance allocation is
+     * under way, so it leaves its QR screen while the allocation runs.
+     *
+     * Answering needs this host's own statement-store allowance, so register
+     * the `WalletSso` renewal target first. The returned handle is owed a
+     * [notifyPairingFailed] if pairing then fails: the peer has dropped its QR
+     * and waits without a deadline of its own.
+     */
+    suspend fun notifyPairingAllowanceAllocation(deeplink: String): NativeAnnouncedPairing =
+        inner.notifyPairingAllowanceAllocation(deeplink)
+
+    /**
+     * Tell a pairing host that already dropped its QR why pairing stopped.
+     *
+     * Takes the handle from [notifyPairingAllowanceAllocation], so the notice
+     * is signed by the account that already reached that peer even if this
+     * host's signer has rotated since.
+     */
+    suspend fun notifyPairingFailed(announced: NativeAnnouncedPairing, reason: String) {
+        inner.notifyPairingFailed(announced, reason)
+    }
+
+    /**
+     * Answer a pairing host's handshake deeplink, without serving the session
+     * it opens.
+     *
+     * A device that pairs here reaches [HostBridge.devicePaired]. Serving the
+     * session is [resumePairing], called with the peer this host persisted.
+     */
+    suspend fun establishPairing(deeplink: String) {
+        inner.establishPairing(deeplink)
+    }
+
+    /**
+     * Serve a paired host's SSO session until it ends.
+     *
+     * Runs for the life of the session, so give it its own coroutine. Only
+     * [ResponderExit.PEER_DISCONNECTED] authorises dropping the stored
+     * pairing; after [ResponderExit.SUBSCRIPTION_ENDED] or a thrown error the
+     * peer is still paired and this can be called again.
+     */
+    suspend fun resumePairing(peer: PairedSsoPeer): ResponderExit = inner.resumePairing(peer)
+
+    /** Tell a paired host this signing host is ending their SSO session. */
+    suspend fun disconnectPairedHost(peer: PairedSsoPeer) {
+        inner.disconnectPairedHost(peer)
     }
 
     /** Core-owned logout for the process-wide authentication session. */
