@@ -1025,13 +1025,13 @@ stood in, that tree resolves a single `@parity/truapi` 0.17.0 -- codec 2, from
 npm. The prerequisite in section 19 is still the right prerequisite; the claim
 that nothing meets it is out of date.
 
-### A product account is stable across a host account switch
+### A product account follows the host account (corrected in section 28)
 
-The refusal text for `productAccounts` told the reader to "expect switching the
-host account to change the product account". The probe behind section 21 showed
-the opposite: `getActiveAccount` moved alice -> charlie while the product
-address held. The message now says the derived address is stable across a host
-account switch rather than following the active account.
+This section previously claimed the opposite, on the strength of a probe that
+could not have detected a change: it read the oldest log row rather than the
+newest, so it compared the first result against itself. The refusal text's
+original wording was right -- a switch does change the product account, on the
+next call. Section 28 has the measurement and the three traps behind the error.
 
 ## 23. Three gaps host-playground closed, and the one it cannot
 
@@ -1287,34 +1287,41 @@ One near-miss worth recording: `ChatPlatform`'s fourth method is declared `fn`,
 not `async fn`, so a grep for `async fn` reports three and makes the refusal look
 one method too generous. It is not.
 
-### The product-account claim was wrong, and this document wrote it
+### The product-account claim: wrong twice, and the probe was the reason
 
-Section 21 replaced the original "expect switching the host account to change
-the product account" with "it is stable across a host account switch", on the
-strength of a probe. Both the claim and the probe were unsound.
+The product account follows the host account. `switchAccount("charlie")` moves
+`get_user_id` to charlie and the product's account from `0x2c981dbb...` to
+`0xb44b7a93...` on the very next call -- no reconnect, no reload. That matches
+`product_keypair_with_owner`, which derives from `root_entropy()`, the product
+id and the derivation index against live shared state.
 
-The code is unambiguous: `product_keypair_with_owner` derives from
-`root_entropy()`, the product id and the derivation index, so a different host
-account derives a different product account. "Stable across a switch" also
-contradicted the sentence before it in the same message, which says the account
-is derived from the session root.
+So the original wording -- expect a switch to change it, that is the real
+behaviour -- was correct. This document replaced it twice and was wrong both
+times: first with "stable across a host account switch", then, on finding that
+unsupportable, by removing the claim entirely.
 
-But the observation is reproducible: after `switchAccount("charlie")`,
-`getActiveAccount` reports charlie while the product still reads the account it
-had. Two probe attempts failed to resolve which is happening, and both failed in
-instructive ways:
+The cause was one bug in the probe, not in the host. The app **prepends** log
+entries (`use-logs.ts`: `setLogs((prev) => [entry, ...prev])`), so the newest
+row is `.first()`. Every probe read `.last()` -- the oldest row -- and therefore
+compared the first result against itself. It reported "unchanged" no matter what
+the host did, which is the worst kind of wrong: a measurement that cannot fail.
 
-- reloading the page to re-read re-boots the host, which re-activates the first
-  roster entry and silently undoes the switch -- the earlier probe's error, and
-  the reason it "saw" stability;
-- reloading only the product iframe does not re-establish the connection, so the
-  product never comes back ready.
+Two further traps sat on top of it, each producing its own false reading:
 
-What is unresolved is when the product's view of its account refreshes, not what
-the derivation is. The message now states the derivation and says not to assume
-an account survives `switchAccount`, and asserts nothing about what a switch
-does to a product already holding one. That is the honest shape: a refusal
-should not carry a behavioural claim its author could not demonstrate.
+- `getActiveAccount` is `() => active?.name`, a variable on the host page. It
+  reports what the page believes, not what the core did, so it cannot confirm a
+  switch landed. `get_user_id` can, because the core answers it from the session.
+- reloading the page to force a re-read re-boots the host, which re-activates the
+  first roster entry and silently undoes the switch.
+
+Worth carrying forward: when a probe reports "no change", check that it is
+capable of reporting a change at all. Two of these three traps would have been
+caught by asserting the before-value differs from a known-different control.
+
+Note for anyone reading host-playground's helpers: its `runTest` also takes
+`.last()`. That is safe there only because each test gets a fresh page and runs
+one action, so the oldest row is the only row. A spec that calls it twice would
+silently read the first result both times.
 
 ## Working notes
 

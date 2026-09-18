@@ -333,8 +333,9 @@ const NO_PINNED_PRODUCT_ACCOUNT =
   "from (session root, product id), so it cannot be mapped to a chosen dev " +
   "account. `@parity/host-api-test-sdk` could pin one because it reimplements " +
   "the protocol with no core behind it. Read the address back from the host " +
-  "instead of pinning it. Note that a different host account derives a " +
-  "different product account, so do not assume one survives `switchAccount`.";
+  "instead of pinning it, and expect `switchAccount` to change it: the next " +
+  "call derives from the new session root, with no reconnect needed. That is " +
+  "the real behaviour, not a test-host limitation.";
 
 /** Why a derivation URI cannot name an account. */
 const NO_DERIVATION_URI =
