@@ -59,12 +59,14 @@ describe("debugger enablement reporting", () => {
     // Must not assert a cause it cannot know: a production build and a bundler
     // that never substituted the token both leave the condition false.
     expect(line).toContain("did not resolve true");
-  });
 
-  // The tap is armed for the whole dev session, not only while a URL is set: the
-  // worker decides a core's `debugEmit` once, when the core is built, so a session
-  // that starts detached must still arm or a later attach() reaches nothing. In a
-  // production build it must stay false, or a core would carry a live sink.
+    // The log line alone would pass while the worker still got a URL. `init`
+    // carrying null is what actually keeps a core from building a tap, and a
+    // configured dial is the only input that can tell the two apart: with no
+    // option and no build value, a broken gate looks identical to a working one.
+    const init = worker.messages.find((m) => m.kind === "init");
+    expect(init).toMatchObject({ debuggerUrl: null });
+  });
 });
 
 // The dev-build branch, which the suite above cannot reach: it gates on
@@ -109,6 +111,28 @@ describe("debugger switch precedence", () => {
       url: null,
       reason: "not-configured",
     });
+  });
+
+  // §6: the tap forwards frames verbatim, payloads included, so a target off this
+  // machine is refused rather than dialled. The worker already builds an inert
+  // link for one, which is exactly why resolving it as enabled is the dangerous
+  // half: the host would log and badge an endpoint that never carries a frame.
+  it("refuses a target that is not loopback ws://, from either switch", () => {
+    for (const hostile of [
+      "ws://evil.example.com:9231",
+      "wss://127.0.0.1:9231",
+      "ws://127.0.0.1.evil.com:9231",
+      "http://127.0.0.1:9231",
+    ]) {
+      expect(resolveDebuggerEnablement(hostile, null)).toEqual({
+        url: null,
+        reason: "refused-not-loopback",
+      });
+      expect(resolveDebuggerEnablement(undefined, hostile)).toEqual({
+        url: null,
+        reason: "refused-not-loopback",
+      });
+    }
   });
 });
 

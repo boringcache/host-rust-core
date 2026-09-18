@@ -16,6 +16,7 @@ import { expect } from "bun:test";
 import { makeHostCallbacks } from "../test-support.js";
 import type { ProductRuntimeConfig } from "../runtime.js";
 import { createWebWorkerPairingHostRuntime } from "./index.js";
+import type { CreateWebWorkerPairingHostRuntimeOptions } from "./index.js";
 
 export type WorkerMessage = Record<string, unknown>;
 

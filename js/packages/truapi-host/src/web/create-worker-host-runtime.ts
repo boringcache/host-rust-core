@@ -25,6 +25,7 @@ import {
 import { PermissionAuthorizationRequest as PermissionAuthorizationRequestCodec } from "../generated/host-callbacks.js";
 import { createWasmRawCallbacks } from "../generated/host-callbacks-adapter.js";
 import type { RawCallbacks } from "../generated/host-callbacks-adapter.js";
+import { isLoopbackWsUrl } from "../worker-protocol.js";
 import type {
   CallbackName,
   MainToWorker,
@@ -257,6 +258,7 @@ type DebuggerEnablement = {
     | "enabled-from-build"
     | "production-build"
     | "production-build-configured"
+    | "refused-not-loopback"
     | "not-configured";
 };
 
@@ -374,6 +376,11 @@ function readDebuggerEnablement(
  * The explicit-off case is the one that is easy to get wrong: folding `null` in
  * with "omitted" falls through to the build, and an embedder that compiled a URL
  * in then has no way to refuse the dial short of rebuilding.
+ *
+ * A resolved URL is loopback `ws://` or it is refused (§6). The worker builds an
+ * inert link for anything else, so resolving one as enabled would report a dial
+ * that never carries a frame - the silent-tap failure §9 exists to prevent, with
+ * the host's own log and badge naming an endpoint nothing streams to.
  */
 export function resolveDebuggerEnablement(
   fromOption: string | null | undefined,
@@ -382,10 +389,20 @@ export function resolveDebuggerEnablement(
   if (fromOption === null || fromOption === "")
     return { url: null, reason: "not-configured" };
   if (typeof fromOption === "string")
-    return { url: fromOption, reason: "enabled-from-option" };
+    return refuseUnlessLoopback(fromOption, "enabled-from-option");
   if (fromBuild !== null)
-    return { url: fromBuild, reason: "enabled-from-build" };
+    return refuseUnlessLoopback(fromBuild, "enabled-from-build");
   return { url: null, reason: "not-configured" };
+}
+
+/** Let `url` through under `reason`, or refuse it for not being loopback `ws://`. */
+function refuseUnlessLoopback(
+  url: string,
+  reason: "enabled-from-option" | "enabled-from-build",
+): DebuggerEnablement {
+  if (!isLoopbackWsUrl(url))
+    return { url: null, reason: "refused-not-loopback" };
+  return { url, reason };
 }
 
 /**
@@ -423,6 +440,14 @@ function reportDebuggerEnablement(e: DebuggerEnablement): void {
   if (e.reason === "enabled-from-build") {
     console.info(
       `[truapi] wire debugger: dialling ${e.url} from the build (origin ${origin})`,
+    );
+    return;
+  }
+  if (e.reason === "refused-not-loopback") {
+    console.warn(
+      "[truapi] wire debugger: off (the configured dial is not a `ws://` URL on a " +
+        "loopback host, so it was refused. The tap forwards frames verbatim, " +
+        `payloads included, and never leaves this machine.) on origin ${origin}`,
     );
     return;
   }

@@ -3,9 +3,9 @@ import { describe, expect, test } from "bun:test";
 import {
   coreWireSchemaHash,
   createDebuggerLink,
-  isLoopbackWsUrl,
   type DebuggerSocket,
 } from "./worker-runtime.js";
+import { isLoopbackWsUrl } from "./worker-protocol.js";
 
 /**
  * The gate mirrors the native sink's (`native_debug.rs`) three cases — loopback
