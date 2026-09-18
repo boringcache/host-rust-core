@@ -12,6 +12,9 @@
 //! bandersnatch ring-VRF aliases and membership proofs, and product-scoped
 //! Statement Store and Bulletin allowance keys (native only).
 
+// Allocation uses `track`; the renewal loop around it is driven by native
+// entry points only, so on wasm the rest of the module is not reached yet.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod allowance_renewal;
 mod local_activation;
 pub(super) mod ring_vrf;
@@ -26,7 +29,9 @@ use truapi::latest::{
     HostAccountRegisterRingVrfKeyRequest, HostAccountRingVrfSignRequest,
 };
 
-pub use allowance_renewal::{StatementRenewalTarget, TrackedStatementRenewalTarget};
+pub use allowance_renewal::StatementRenewalTarget;
+#[cfg(not(target_arch = "wasm32"))]
+pub use allowance_renewal::TrackedStatementRenewalTarget;
 pub(crate) use local_activation::LocalActivation;
 pub use sso_responder::{PairedSsoPeer, ResponderExit};
 pub(crate) use sso_responder::{

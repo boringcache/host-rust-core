@@ -60,7 +60,11 @@ pub(crate) use signing_host::{
     establish_pairing, respond_to_pairing, resume_pairing,
 };
 pub use signing_host::{PairedSsoPeer, ResponderExit};
-pub use signing_host::{StatementRenewalTarget, TrackedStatementRenewalTarget};
+// `TrackedStatementRenewalTarget` is only read back by the native renewal
+// reporting, so re-exporting it on wasm leaves an unused import.
+pub use signing_host::StatementRenewalTarget;
+#[cfg(not(target_arch = "wasm32"))]
+pub use signing_host::TrackedStatementRenewalTarget;
 use tracing::{instrument, warn};
 use truapi::api::{Chat, Pocket, Renderer};
 use truapi::versioned::account::{HostAccountGetError, HostAccountSignVrfError};
