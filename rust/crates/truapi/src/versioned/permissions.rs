@@ -3,15 +3,6 @@
 use crate::v01;
 
 truapi_macros::versioned_type! {
-    pub enum AuthorizeNetworkAccessRequest { V1 => v01::AuthorizeNetworkAccessRequest }
-    pub enum AuthorizeNetworkAccessResponse { V1 => v01::AuthorizeNetworkAccessResponse }
-    pub enum AuthorizeNetworkAccessError { V1 => v01::GenericError }
-    pub enum AuthorizeWebRtcRequest { V1 }
-    pub enum AuthorizeWebRtcResponse { V1 => v01::AuthorizeNetworkAccessResponse }
-    pub enum AuthorizeWebRtcError { V1 => v01::GenericError }
-    pub enum AuthorizeMediaCaptureRequest { V1 => v01::AuthorizeMediaCaptureRequest }
-    pub enum AuthorizeMediaCaptureResponse { V1 => v01::AuthorizeNetworkAccessResponse }
-    pub enum AuthorizeMediaCaptureError { V1 => v01::GenericError }
     #[derive(derive_more::Display)]
     #[display("{_0}")]
     pub enum HostDevicePermissionRequest { V1 => v01::HostDevicePermissionRequest }
