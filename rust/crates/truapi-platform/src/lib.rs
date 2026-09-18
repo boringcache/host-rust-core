@@ -32,18 +32,18 @@ use truapi::Bytes32;
 use truapi::latest::{
     AllocatableResource, ChainIdentifier, ChatAction, ChatActions, ChatCustomMessage, ChatFile,
     ChatMedia, ChatMessageContent, ChatReaction, ChatRichText, GenericError, HostBackendError,
-    HostBackendRequest, HostBackendResponse, HostChatCreateRoomError, HostChatCreateRoomRequest,
-    HostChatCreateRoomResponse, HostChatListSubscribeItem, HostChatPostMessageError,
-    HostChatPostMessageRequest, HostChatPostMessageResponse, HostChatRegisterBotError,
-    HostChatRegisterBotRequest, HostChatRegisterBotResponse, HostDevicePermissionRequest,
-    HostDevicePermissionResponse, HostFeatureSupportedRequest, HostFeatureSupportedResponse,
-    HostLocaleSubscribeItem, HostNavigateToError, HostPlatform, HostPocketListSubscribeItem,
-    HostPocketRemoveCardError, HostPocketRemoveCardRequest, HostPushNotificationRequest,
-    HostPushNotificationResponse, HostSignPayloadRequest, HostSignPayloadWithLegacyAccountRequest,
-    HostSignRawRequest, HostSignRawWithLegacyAccountRequest, HostThemeSubscribeItem,
-    LegacyAccountTxPayload, NotificationId, ProductAccountId, ProductAccountTxPayload,
-    ProductProofContext, RemotePermission, RemotePermissionRequest, RemotePermissionResponse,
-    RingLocation,
+    HostBackendListResponse, HostBackendRequest, HostBackendResponse, HostChatCreateRoomError,
+    HostChatCreateRoomRequest, HostChatCreateRoomResponse, HostChatListSubscribeItem,
+    HostChatPostMessageError, HostChatPostMessageRequest, HostChatPostMessageResponse,
+    HostChatRegisterBotError, HostChatRegisterBotRequest, HostChatRegisterBotResponse,
+    HostDevicePermissionRequest, HostDevicePermissionResponse, HostFeatureSupportedRequest,
+    HostFeatureSupportedResponse, HostLocaleSubscribeItem, HostNavigateToError, HostPlatform,
+    HostPocketListSubscribeItem, HostPocketRemoveCardError, HostPocketRemoveCardRequest,
+    HostPushNotificationRequest, HostPushNotificationResponse, HostSignPayloadRequest,
+    HostSignPayloadWithLegacyAccountRequest, HostSignRawRequest,
+    HostSignRawWithLegacyAccountRequest, HostThemeSubscribeItem, LegacyAccountTxPayload,
+    NotificationId, ProductAccountId, ProductAccountTxPayload, ProductProofContext,
+    RemotePermission, RemotePermissionRequest, RemotePermissionResponse, RingLocation,
 };
 use truapi::v01::HostAccountSignVrfRequest;
 use url::{Host, Url};
@@ -3168,6 +3168,16 @@ pub trait BackendHost: Send + Sync {
         product: &ProductContext,
         request: HostBackendRequest,
     ) -> Result<HostBackendResponse, HostBackendError>;
+
+    /// Identifiers [`Self::backend_request`] accepts for this product.
+    ///
+    /// Report only what this product may reach, so a registry that pins its
+    /// entries to product ids answers each product with its own set. Identifiers
+    /// only: where a backend lives stays host-side.
+    async fn backends(
+        &self,
+        product: &ProductContext,
+    ) -> Result<HostBackendListResponse, GenericError>;
 }
 
 /// Combined platform interface. A host must provide every capability trait

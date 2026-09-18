@@ -16,8 +16,8 @@ use reqwest::redirect::Policy;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use truapi::latest::{
-    BackendBody, BackendHeader, BackendHttpMethod, HostBackendError, HostBackendRequest,
-    HostBackendResponse,
+    BackendBody, BackendHeader, BackendHttpMethod, HostBackendError, HostBackendListResponse,
+    HostBackendRequest, HostBackendResponse,
 };
 use truapi_platform::{BackendHost, ProductContext, async_trait};
 
@@ -214,6 +214,15 @@ impl BackendHost for CliBackendHost {
             status,
             headers,
             body,
+        })
+    }
+
+    async fn backends(
+        &self,
+        _product: &ProductContext,
+    ) -> Result<HostBackendListResponse, truapi::latest::GenericError> {
+        Ok(HostBackendListResponse {
+            backends: self.registry.keys().cloned().collect(),
         })
     }
 }

@@ -1,6 +1,9 @@
 //! Unified [`Backend`] trait.
 
-use crate::versioned::backend::{HostBackendError, HostBackendRequest, HostBackendResponse};
+use crate::versioned::backend::{
+    HostBackendError, HostBackendListError, HostBackendListRequest, HostBackendListResponse,
+    HostBackendRequest, HostBackendResponse,
+};
 use crate::{CallContext, CallError};
 use crate::{wire, wire_trait};
 
@@ -40,6 +43,27 @@ pub trait Backend: Send + Sync {
         _cx: &CallContext,
         _request: HostBackendRequest,
     ) -> Result<HostBackendResponse, CallError<HostBackendError>> {
+        Err(CallError::unavailable())
+    }
+
+    /// Backends this host serves the calling product.
+    ///
+    /// The identifiers are what [`Self::request`] accepts; a host reports only
+    /// what that product may reach, so an empty list means this host serves the
+    /// product no backends rather than that it has none. It carries no origins:
+    /// where a backend lives stays host-side.
+    ///
+    /// ```ts
+    /// const result = await truapi.backend.list();
+    /// assert(result.isOk(), "backend list failed:", result);
+    /// console.log("backends available:", result.value.backends);
+    /// ```
+    #[wire(id = 1)]
+    async fn list(
+        &self,
+        _cx: &CallContext,
+        _request: HostBackendListRequest,
+    ) -> Result<HostBackendListResponse, CallError<HostBackendListError>> {
         Err(CallError::unavailable())
     }
 }

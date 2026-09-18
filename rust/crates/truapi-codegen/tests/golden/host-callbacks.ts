@@ -26,6 +26,7 @@ import {
 
 import type {
   GenericError,
+  HostBackendListResponse,
   HostBackendRequest,
   HostBackendResponse,
   HostChatCreateRoomRequest,
@@ -988,6 +989,15 @@ export interface BackendHost {
     product: ProductContext,
     request: HostBackendRequest,
   ): Promise<HostBackendResponse>;
+
+  /**
+   * Identifiers `Self::backend_request` accepts for this product.
+   *
+   * Report only what this product may reach, so a registry that pins its
+   * entries to product ids answers each product with its own set. Identifiers
+   * only: where a backend lives stays host-side.
+   */
+  backends(product: ProductContext): Promise<HostBackendListResponse>;
 }
 
 /**

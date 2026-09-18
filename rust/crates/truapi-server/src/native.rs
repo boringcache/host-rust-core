@@ -554,6 +554,9 @@ pub trait HostCallbacks: Send + Sync {
         request: v01::HostBackendRequest,
     ) -> Result<v01::HostBackendResponse, HostBackendRejection>;
 
+    /// Identifiers `backend_request` accepts for `product_id`.
+    async fn backend_list(&self, product_id: String) -> Result<Vec<String>, HostBackendRejection>;
+
     /// Prompt the user for a remote (product-scoped) permission.
     async fn remote_permission(
         &self,
@@ -1789,6 +1792,19 @@ impl truapi_platform::BackendHost for CallbackPlatform {
             .await
             .map_err(v01::HostBackendError::from)
     }
+
+    async fn backends(
+        &self,
+        product: &truapi_platform::ProductContext,
+    ) -> Result<v01::HostBackendListResponse, v01::GenericError> {
+        self.callbacks
+            .backend_list(product.product_id.clone())
+            .await
+            .map(|backends| v01::HostBackendListResponse { backends })
+            .map_err(|error| v01::GenericError {
+                reason: error.to_string(),
+            })
+    }
 }
 
 #[async_trait]
@@ -2596,6 +2612,12 @@ mod tests {
             _request: v01::HostBackendRequest,
         ) -> Result<v01::HostBackendResponse, HostBackendRejection> {
             Err(HostBackendRejection::UnknownBackend)
+        }
+        async fn backend_list(
+            &self,
+            _product_id: String,
+        ) -> Result<Vec<String>, HostBackendRejection> {
+            Ok(Vec::new())
         }
         fn core_storage_read(&self, _key: Vec<u8>) -> Result<Option<Vec<u8>>, HostRejection> {
             Ok(None)
@@ -3914,6 +3936,12 @@ mod tests {
             ) -> Result<v01::HostBackendResponse, HostBackendRejection> {
                 Err(HostBackendRejection::UnknownBackend)
             }
+            async fn backend_list(
+                &self,
+                _product_id: String,
+            ) -> Result<Vec<String>, HostBackendRejection> {
+                Ok(Vec::new())
+            }
 
             async fn device_permission(
                 &self,
@@ -4067,6 +4095,12 @@ mod tests {
                 _request: v01::HostBackendRequest,
             ) -> Result<v01::HostBackendResponse, HostBackendRejection> {
                 Err(HostBackendRejection::UnknownBackend)
+            }
+            async fn backend_list(
+                &self,
+                _product_id: String,
+            ) -> Result<Vec<String>, HostBackendRejection> {
+                Ok(Vec::new())
             }
 
             async fn device_permission(

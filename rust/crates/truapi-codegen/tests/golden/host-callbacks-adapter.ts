@@ -6,6 +6,7 @@
 // primitives and byte blobs pass through unchanged.
 
 import {
+  HostBackendListResponse,
   HostBackendRequest,
   HostBackendResponse,
   HostChatCreateRoomRequest,
@@ -53,6 +54,7 @@ export interface RawCallbacks {
     product: Uint8Array,
     request: Uint8Array,
   ): Promise<Uint8Array>;
+  backends?(product: Uint8Array): Promise<Uint8Array>;
   chainConnect: ChainConnect;
   createChatRoom?(
     product: Uint8Array,
@@ -126,6 +128,10 @@ export function createWasmRawCallbacks(
                 ProductContext.dec(product),
                 HostBackendRequest.dec(request),
               ),
+            ),
+          backends: async (product) =>
+            HostBackendListResponse.enc(
+              await backend.backends(ProductContext.dec(product)),
             ),
         }
       : {}),

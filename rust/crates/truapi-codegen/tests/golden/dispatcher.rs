@@ -406,7 +406,7 @@ where
     P: Backend + Send + Sync + 'static,
 {
     {
-        let host = host;
+        let host = host.clone();
         dispatcher.on_request(wire_table::BACKEND_REQUEST, move |request_id: String, bytes: Vec<u8>| {
             let host = host.clone();
             Box::pin(async move {
@@ -424,6 +424,34 @@ where
                 let result: Result<versioned::backend::HostBackendResponse, truapi::CallError<versioned::backend::HostBackendError>> =
                     match host.request(&cx, request).await {
                         Ok(response) => Ok(<versioned::backend::HostBackendResponse as truapi::versioned::FromLatest>::from_latest(
+                            truapi::versioned::IntoLatest::into_latest(response),
+                            target_version,
+                        )),
+                        Err(err) => Err(downgrade_call_error(err, target_version)),
+                    };
+                result.encode()
+            })
+        });
+    }
+    {
+        let host = host;
+        dispatcher.on_request(wire_table::BACKEND_LIST, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let request: versioned::backend::HostBackendListRequest = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<versioned::backend::HostBackendListError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        let result: Result<versioned::backend::HostBackendListResponse, truapi::CallError<versioned::backend::HostBackendListError>> = Err(error);
+                        return result.encode();
+                    }
+                };
+                let target_version = request.version();
+                let cx = CallContext::with_request_id(request_id);
+                let result: Result<versioned::backend::HostBackendListResponse, truapi::CallError<versioned::backend::HostBackendListError>> =
+                    match host.list(&cx, request).await {
+                        Ok(response) => Ok(<versioned::backend::HostBackendListResponse as truapi::versioned::FromLatest>::from_latest(
                             truapi::versioned::IntoLatest::into_latest(response),
                             target_version,
                         )),

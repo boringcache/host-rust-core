@@ -106,6 +106,15 @@ pub struct HostBackendResponse {
     pub body: Vec<u8>,
 }
 
+/// Backends this host serves for the calling product.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct HostBackendListResponse {
+    /// Identifiers accepted by [`HostBackendRequest::backend`], in the order
+    /// the host reports them.
+    pub backends: Vec<String>,
+}
+
 /// Backend request failure.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

@@ -4515,6 +4515,15 @@ impl truapi_platform::BackendHost for StubBackendHost {
             body: b"{}".to_vec(),
         })
     }
+
+    async fn backends(
+        &self,
+        _product: &ProductContext,
+    ) -> Result<v01::HostBackendListResponse, v01::GenericError> {
+        Ok(v01::HostBackendListResponse {
+            backends: vec!["fiat-onramp".to_string()],
+        })
+    }
 }
 
 fn backend_request(path: &str) -> truapi::versioned::backend::HostBackendRequest {
@@ -4574,6 +4583,32 @@ fn a_backend_request_reaches_the_host_naming_the_calling_product() {
         }],
         "a host that passes back a header outside the allowlist is filtered by the core"
     );
+}
+
+#[test]
+fn a_backend_list_is_unsupported_without_a_host_and_names_the_backends_with_one() {
+    let host = ProductRuntimeHost::new_compat(stub_platform(), test_spawner());
+    let error = futures::executor::block_on(truapi::api::Backend::list(
+        &host,
+        &CallContext::default(),
+        truapi::versioned::backend::HostBackendListRequest::V1,
+    ))
+    .expect_err("a host with no tunnel cannot serve this");
+    assert!(
+        matches!(error, CallError::Unsupported),
+        "expected Unsupported, got {error:?}"
+    );
+
+    let host = ProductRuntimeHost::new_compat(stub_platform(), test_spawner())
+        .with_backend_host(Arc::new(StubBackendHost::default()));
+    let truapi::versioned::backend::HostBackendListResponse::V1(listed) =
+        futures::executor::block_on(truapi::api::Backend::list(
+            &host,
+            &CallContext::default(),
+            truapi::versioned::backend::HostBackendListRequest::V1,
+        ))
+        .expect("the tunnel serves the list");
+    assert_eq!(listed.backends, vec!["fiat-onramp".to_string()]);
 }
 
 #[test]

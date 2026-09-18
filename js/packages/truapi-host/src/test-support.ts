@@ -121,6 +121,7 @@ export function makeHostCallbacks(
               headers: [],
               body: new Uint8Array(),
             }),
+            backendList: async () => [],
             ...overrides.backend,
           },
         }

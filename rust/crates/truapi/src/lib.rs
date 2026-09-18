@@ -86,6 +86,8 @@ pub mod latest {
     pub type HostBackendResponse = LatestOf<versioned::backend::HostBackendResponse>;
     /// Backend request failure.
     pub type HostBackendError = LatestOf<versioned::backend::HostBackendError>;
+    /// Backends a host serves for the calling product.
+    pub type HostBackendListResponse = LatestOf<versioned::backend::HostBackendListResponse>;
     /// Chat action delivered from the native host to a product worker.
     pub type HostChatActionSubscribeItem = LatestOf<versioned::chat::HostChatActionSubscribeItem>;
     /// Native chat room creation request.

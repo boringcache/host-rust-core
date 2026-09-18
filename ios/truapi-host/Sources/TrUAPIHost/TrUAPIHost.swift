@@ -310,6 +310,9 @@ public protocol HostBridge: AnyObject, Sendable {
     func backendRequest(productId: String, request: HostBackendRequest) async throws
         -> HostBackendResponse
 
+    /// Identifiers `backendRequest` accepts for `productId`. Defaults to none.
+    func backendList(productId: String) async throws -> [String]
+
     /// Prompt for a remote (product-scoped) permission bundle. Invoked on a
     /// blocking-pool thread; present the prompt on the main thread and block
     /// the calling thread until the user decides. Blocking here does not
@@ -471,6 +474,7 @@ public extension HostBridge {
         -> NativeDevicePermissionStatus { .notApplicable }
     func backendRequest(productId _: String, request _: HostBackendRequest) async throws
         -> HostBackendResponse { throw HostBackendRejection.UnknownBackend }
+    func backendList(productId _: String) async throws -> [String] { [] }
 }
 
 /// Adapter that bridges the public `ChatHostBridge` to the generated UniFFI
@@ -606,6 +610,16 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
     {
         do {
             return try await bridge.backendRequest(productId: productId, request: request)
+        } catch let error as HostBackendRejection {
+            throw error
+        } catch {
+            throw HostBackendRejection.Unknown(reason: hostRejectionReason(error))
+        }
+    }
+
+    func backendList(productId: String) async throws -> [String] {
+        do {
+            return try await bridge.backendList(productId: productId)
         } catch let error as HostBackendRejection {
             throw error
         } catch {

@@ -35,6 +35,8 @@ The product supplies an opaque identifier and a request relative to it. It never
 
 The identifier resolves per call rather than at startup, so a host can add a backend or refresh a credential without the core knowing. An identifier a host does not serve is an error, not a missing capability.
 
+`Backend::list` answers which identifiers a host serves the calling product, so a product can check before it depends on one rather than discovering the gap from a failed call. It is product-scoped: a registry that pins its entries to product ids answers each product with its own set, and an empty list means this host serves *this product* nothing, not that it has no backends. It carries identifiers only — where a backend lives stays host-side, which is the whole point of naming one by id.
+
 A URL in the product's hands would be a deployment detail in every product's source and every debugger frame, and a value the product could vary. An identifier is neither.
 
 ### What the core screens
@@ -88,7 +90,7 @@ The host forwards the connection's product id as `X-Polkadot-Product`, overwriti
 - **Outbound HTTP now exists in the protocol**, which [RFC-0002](0002-permission-model.md) assigned to the sandbox. The screening rules pay for that, and the scope is narrow: one method, no streaming, no multipart, no cookies, 1 MiB each way.
 - **No `Link`-header pagination and no auth challenges are reachable.** Both follow from the header allowlist.
 - **On a browser host every host-side failure collapses to one variant**, since a JS host can only reject with a string. Native hosts and the CLI return them typed.
-- **Adding a backend needs a host release.** That is the cost of the registry being the trust boundary.
+- **Adding a backend needs a host release.** That is the cost of the registry being the trust boundary. `Backend::list` is what keeps that from being invisible to a product shipped against an id the host in front of it does not serve.
 - **Rejected: a caller identity the host attaches to the product's own request.** It answers "which user" when the deployer asks "which host", it needs the host to intercept an outbound request — which Android's `shouldInterceptRequest` cannot do for a body and dotli cannot do at all — and it leaves the product's own network stack carrying the call, with CORS and interception differing per platform.
 - **Rejected: a core-side rate limit.** The backend holds the quota and is the only party that knows its own limits.
 
@@ -96,4 +98,5 @@ The host forwards the connection's product id as `X-Polkadot-Product`, overwriti
 
 1. **Is the response-header allowlist the right set?** It is the smallest one that lets a product parse an answer and back off, but widening it later is a wire change.
 2. **How is a registry provisioned and rotated across hosts?** Today each host ships its own, so a credential rotation is a release per host.
-3. **Should pinning allowed product ids be protocol rather than host configuration?** Protocol would let the core enforce it; host-side keeps the core free of a policy it cannot verify.
+3. **Should the base-URL join be a shared helper rather than prose?** "Set the path on the parsed base, refuse a base carrying a query" is an obligation every host reimplements and the core cannot check. A `truapi_platform` function would make it mechanical.
+4. **Should pinning allowed product ids be protocol rather than host configuration?** Protocol would let the core enforce it; host-side keeps the core free of a policy it cannot verify.

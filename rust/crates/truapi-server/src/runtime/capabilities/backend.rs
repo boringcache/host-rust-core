@@ -2,7 +2,10 @@
 
 use tracing::instrument;
 use truapi::api::Backend;
-use truapi::versioned::backend::{HostBackendError, HostBackendRequest, HostBackendResponse};
+use truapi::versioned::backend::{
+    HostBackendError, HostBackendListError, HostBackendListRequest, HostBackendListResponse,
+    HostBackendRequest, HostBackendResponse,
+};
 use truapi::{CallContext, CallError};
 
 use crate::host_logic::backend::{screen_request, screen_response};
@@ -28,6 +31,19 @@ impl Backend for ProductRuntimeHost {
         // The host owes the allowlist and the cap; this catches one that skips them.
         screen_response(&mut response).map_err(domain)?;
         Ok(HostBackendResponse::V1(response))
+    }
+
+    #[instrument(skip_all, fields(runtime.method = "backend.list"))]
+    async fn list(
+        &self,
+        _cx: &CallContext,
+        _request: HostBackendListRequest,
+    ) -> Result<HostBackendListResponse, CallError<HostBackendListError>> {
+        let host = self.backend_host()?;
+        host.backends(&self.product)
+            .await
+            .map(HostBackendListResponse::V1)
+            .map_err(|error| CallError::Domain(HostBackendListError::V1(error)))
     }
 }
 

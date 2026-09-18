@@ -13,6 +13,7 @@ import type { ChainConnect } from "../runtime.js";
 export const CALLBACK_NAMES = [
   "authStateChanged",
   "backendRequest",
+  "backends",
   "createChatRoom",
   "registerChatBot",
   "postChatMessage",
@@ -159,13 +160,17 @@ function subscriptionRawCallbacks(
 
 function backendRawCallbacks(
   bridge: WorkerCallbackBridge,
-): Required<Pick<RawCallbacks, "backendRequest">> {
+): Required<Pick<RawCallbacks, "backendRequest" | "backends">> {
   return {
     backendRequest: (product, request) =>
       bridge.callbackRequest("backendRequest", [
         product,
         request,
       ]) as ReturnType<Required<RawCallbacks>["backendRequest"]>,
+    backends: (product) =>
+      bridge.callbackRequest("backends", [product]) as ReturnType<
+        Required<RawCallbacks>["backends"]
+      >,
   };
 }
 
