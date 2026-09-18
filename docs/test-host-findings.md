@@ -1232,6 +1232,16 @@ allocation stops at the membership proof, so nothing past that point has ever
 run in the browser. Treat "enrol an identity and they pass" as the next
 hypothesis to check, not as a result.
 
+Re-measured after rebasing onto `origin/main` and rebuilding the wasm bundle:
+**37 passed, 15 failed, 1 flaky**. The fifteen are the same specs; the drop from
+38 is `signing-extended`, which flaked and passed on retry. Main's subscription
+state-lock refactor and its extension of AutoSigning to the product signing APIs
+and statement proofs moved nothing here, which was the change most likely to.
+
+All of these are single runs against a live testnet, and `signing-extended`
+shows the suite is not deterministic on it. The fifteen are dependable -- they
+fail for one understood reason -- but read the pass count as plus or minus one.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is
