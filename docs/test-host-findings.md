@@ -1621,6 +1621,61 @@ in reach submits a self-signed statement. That is weaker evidence than
 statement, and the difference is worth keeping in mind: this one rests on a code
 path read plus a filter test, not on a product seeing the result.
 
+## 35. The Chat action stream, and what is left refused
+
+`injectChatAction` was refused on the grounds that `ChatPlatform` is
+create-room, register-bot, post-message and subscribe-rooms only, so a peer
+activating an action has no way into the core. The trait reading was right and
+the conclusion was wrong, in the same way the statement-submit refusal was
+wrong: it reasoned about the host callbacks when the inbound path is on the
+product provider.
+
+`publishChatAction` is fully plumbed already -- `wasm-module.ts:20` on the core,
+`worker-runtime.ts:901` in the worker protocol, `create-worker-host-runtime.ts:1512`
+on the provider. The only thing stopping the test host using it was
+`host-page.ts`, which declared `createProvider` as returning
+`{postMessage, subscribe, dispose}` and narrowed the method away.
+
+It is served now on both topologies: the worker provider takes the value and
+encodes it, the direct core takes SCALE bytes, and injecting with no product
+connected refuses rather than publishing into nothing.
+
+### The evidence is weaker than for the other two
+
+There is no end-to-end proof. host-playground has no Chat tests at all, so no
+product in reach subscribes to the action stream.
+
+The first attempt at guarding it made that worse rather than better. Three
+source-level assertions were written and only one of them could fail: the other
+two grepped for call sites that survive the mutation they were meant to catch,
+because the same identifier appears elsewhere in the file. They have been
+deleted. What remains pins the narrowing that caused the bug, and says in the
+test body that the wiring itself is uncovered.
+
+That is the weakest tier of anything shipped in this work, and it is worth
+naming plainly:
+
+| control | evidence |
+| --- | --- |
+| `injectStatement` | a real product reported receiving the injected statement |
+| `getSubmittedStatements` | filter unit-tested and mutation-proved; no product submits a self-signed statement, so unobserved |
+| `injectChatAction` | type-checked and the narrowing pinned; no product subscribes, so unobserved |
+
+### What is refused, and why none of it can be served
+
+Six members, and they fall into two kinds:
+
+- **Payments (5).** `runtime/capabilities/payment.rs` has no target gating, 13
+  methods, every one returning an error and ignoring its arguments. There is no
+  truapi payment behaviour to mock because no host implements payments. A
+  product's payment specs exercise a flow that does not exist in production;
+  they can be dropped or rewritten, not migrated.
+- **`setLoginBehavior` (1).** Served, but at construction: the fixture takes
+  `loginBehavior: "auto" | "manual"`. The refusal exists to point at that
+  option rather than to deny the capability.
+
+That is 46 of 52 served.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is

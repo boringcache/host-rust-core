@@ -272,11 +272,15 @@ export interface TestHost {
    * so a peer activating an action has no way into the core. `ChatAction`
    * exists as message *content* a product posts, not as an inbound event.
    */
-  injectChatAction(action: {
-    roomId: string;
-    peer: string;
-    payload: unknown;
-  }): Promise<never>;
+  /**
+   * Deliver a host-authored Chat action to the product -- the path a posted
+   * message or a tapped `Actions` button takes back to it.
+   *
+   * Takes the `HostChatActionSubscribeItem` the core publishes, not
+   * `@parity/host-api-test-sdk`'s `{roomId, peer, payload}`: this goes through
+   * the core's own action stream, so it carries the core's value.
+   */
+  injectChatAction(action: unknown): Promise<void>;
 
   /**
    * Change the login behaviour after boot.
@@ -299,14 +303,6 @@ const NO_PAYMENT_SEAM =
   "but no host implements them -- every method in the core's payment " +
   "capability returns an error and ignores its arguments, so there is nothing " +
   "to record or simulate. See docs/rfcs/0006-payments.md.";
-
-/** Why a chat action cannot be injected. */
-const NO_CHAT_ACTION_SEAM =
-  "is not available in the TrUAPI test host: `ChatPlatform` is create-room, " +
-  "register-bot, post-message and subscribe-rooms only, so a peer activating " +
-  "an action has no way into the core. Actions exist as message content a " +
-  "product posts, not as an inbound event. The calls the core makes ARE " +
-  "recorded -- see getChatRooms, getChatBots and getChatMessageLog.";
 
 /** Why login behaviour is fixed once the host page has booted. */
 const LOGIN_BEHAVIOR_IS_CONSTRUCTION_TIME =
@@ -645,9 +641,12 @@ export function createTestHostFixture(defaults: TestHostFixtureOptions) {
         simulatePaymentStatus: () => {
           throw new Error(`testHost.simulatePaymentStatus ${NO_PAYMENT_SEAM}`);
         },
-        injectChatAction: () => {
-          throw new Error(`testHost.injectChatAction ${NO_CHAT_ACTION_SEAM}`);
-        },
+        injectChatAction: (action) =>
+          page.evaluate((value) => {
+            const host = window.__TRUAPI_TEST_HOST__;
+            if (!host) throw new Error("test host is not running on this page");
+            return host.injectChatAction(value);
+          }, action as never),
         setLoginBehavior: () => {
           throw new Error(
             `testHost.setLoginBehavior ${LOGIN_BEHAVIOR_IS_CONSTRUCTION_TIME}`,

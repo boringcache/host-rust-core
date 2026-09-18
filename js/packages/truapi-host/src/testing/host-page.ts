@@ -110,6 +110,13 @@ export interface AccountControl {
   getAccounts(): string[];
   /** The account the current session is activated from, if any. */
   getActiveAccount(): string | undefined;
+  /**
+   * Deliver a host-authored Chat action to the product, the way a posted
+   * message or a tapped `Actions` button reaches it.
+   *
+   * Rejects when no product is connected: there is no stream to publish into.
+   */
+  injectChatAction(action: unknown): Promise<void>;
   /** Re-activate the session as `name`. */
   switchAccount(name: string): Promise<void>;
   /** Replace the roster, activating the first entry. */
@@ -256,6 +263,8 @@ export async function startTestHost(
   // wire provider, the main thread hands back a product core -- so each is
   // normalised to the same "pipe this port" step.
   let detach: (() => void) | undefined;
+  // Set when the product connects, by whichever topology is running.
+  let publishChatAction: ((action: unknown) => Promise<void>) | undefined;
   const iframeHost = createIframeHost({
     iframeUrl: options.productUrl,
     container: options.container,
@@ -270,8 +279,12 @@ export async function startTestHost(
             const frame = event.data;
             if (frame instanceof Uint8Array) provider.postMessage(frame);
           };
+          publishChatAction = provider.publishChatAction
+            ? (action) => provider.publishChatAction!(action)
+            : undefined;
           detach = () => {
             unsubscribe();
+            publishChatAction = undefined;
             provider.dispose();
           };
         } else {
@@ -287,7 +300,22 @@ export async function startTestHost(
             const frame = event.data;
             if (frame instanceof Uint8Array) void core.receiveFrame(frame);
           };
-          detach = () => core.dispose();
+          // The direct core takes bytes, so the value is encoded here rather
+          // than inside the provider.
+          publishChatAction = core.publishChatAction
+            ? async (action) => {
+                const { HostChatActionSubscribeItem } = await import(
+                  "@parity/truapi"
+                );
+                core.publishChatAction!(
+                  HostChatActionSubscribeItem.enc(action as never),
+                );
+              }
+            : undefined;
+          detach = () => {
+            publishChatAction = undefined;
+            core.dispose();
+          };
         }
         port.start();
       })();
@@ -297,6 +325,15 @@ export async function startTestHost(
   const control: TestHostControl = Object.assign(host, {
     getAccounts: () => roster.map((account) => account.name),
     getActiveAccount: () => active?.name,
+    injectChatAction: async (action: unknown) => {
+      if (!publishChatAction) {
+        throw new Error(
+          "no product is connected, so there is no Chat action stream to " +
+            "publish into; wait for the product frame before injecting",
+        );
+      }
+      await publishChatAction(action);
+    },
     async switchAccount(name: string) {
       const account = roster.find((entry) => entry.name === name);
       if (!account) {
@@ -365,6 +402,10 @@ interface WorkerSigningRuntime {
     postMessage(frame: Uint8Array): void;
     subscribe(listener: (frame: Uint8Array) => void): () => void;
     dispose(): void;
+    // The core's inbound Chat path. Narrowing it away here is what made
+    // `injectChatAction` look unservable: `ChatPlatform` has no inbound method,
+    // but the product provider does.
+    publishChatAction?(action: unknown): Promise<void>;
   }>;
 }
 
@@ -372,4 +413,6 @@ interface WorkerSigningRuntime {
 interface ProductCore {
   receiveFrame(frame: Uint8Array): Promise<void>;
   dispose(): void;
+  /** Takes the SCALE-encoded item, where the worker provider takes the value. */
+  publishChatAction?(action: Uint8Array): void;
 }

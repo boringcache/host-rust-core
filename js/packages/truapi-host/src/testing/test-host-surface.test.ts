@@ -121,3 +121,22 @@ describe("the host page publishes the compatibility global", () => {
     ]);
   });
 });
+
+describe("the inbound Chat action path", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("./host-page.ts", import.meta.url)),
+    "utf8",
+  );
+
+  it("does not narrow publishChatAction off the provider type", () => {
+    // Narrowing it away is exactly what made `injectChatAction` look
+    // unservable, so this is the regression worth pinning. The wiring itself
+    // is not covered here: no product in reach subscribes to Chat actions, and
+    // a source grep for the call site passes whether or not it is reached.
+    const declaration = source.slice(
+      source.indexOf("interface WorkerSigningRuntime"),
+      source.indexOf("interface ProductCore"),
+    );
+    expect(declaration).toMatch(/publishChatAction/);
+  });
+});
