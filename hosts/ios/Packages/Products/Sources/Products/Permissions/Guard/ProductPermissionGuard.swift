@@ -132,33 +132,15 @@ public final class ProductPermissionGuard: ProductPermissionGuarding, @unchecked
         permissions: [ProductPermission]
     ) async throws -> PermissionDecision {
         var undecided: [ProductPermission] = []
-        var oneTime: [ProductPermission] = []
         for permission in permissions.removingDuplicates() {
             let state = try await repository.getPermissionState(productId: productId, permission: permission)
-            if state == .allowedOnce {
-                oneTime.append(permission)
-            } else if !(try await check(productId: productId, permission: permission)) {
-                undecided.append(permission)
+            if state != .allowedOnce, try await check(productId: productId, permission: permission) {
+                continue
             }
+            undecided.append(permission)
         }
-        let decision = if undecided.isEmpty {
-            PermissionDecision.allowAlways
-        } else {
-            await requester.promptBatched(productId: productId, permissions: undecided)
-        }
-        guard decision != .deny else { return .deny }
-
-        for permission in oneTime {
-            guard repository.consumeOneTimeGrant(productId: productId, permission: permission) else {
-                throw PermissionDecisionError.alreadyConsumed
-            }
-        }
-        if decision == .allowAlways, !oneTime.isEmpty {
-            for permission in undecided {
-                try await repository.grant(productId: productId, permission: permission)
-            }
-        }
-        return oneTime.isEmpty ? decision : .allowOnce
+        guard !undecided.isEmpty else { return .allowAlways }
+        return await requester.promptBatched(productId: productId, permissions: undecided)
     }
 
     public func consumePermission(

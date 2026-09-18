@@ -73,23 +73,17 @@ public final class DeviceCapabilityPermissionHandler: Sendable {
         let state = try await repository.getPermissionState(productId: productId, permission: permission)
         let decision: PermissionDecision
         switch state {
-        case .allowedOnce:
-            decision = .allowOnce
         case .allowedAlways:
             decision = .allowAlways
         case .denied:
             decision = .deny
-        case .notDetermined:
+        case .allowedOnce,
+             .notDetermined:
             decision = await requester.prompt(productId: productId, permission: permission)
         }
         guard decision != .deny else { return .deny }
         guard try await promptOsPermissionIfNeeded(currentStatus: osPermission, capability: capability) else {
             throw DevicePermissionRequestError.osDenied
-        }
-        if state == .allowedOnce {
-            guard repository.consumeOneTimeGrant(productId: productId, permission: permission) else {
-                throw PermissionDecisionError.alreadyConsumed
-            }
         }
         return decision
     }
