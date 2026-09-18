@@ -1270,6 +1270,52 @@ The general point is worth keeping: an explanation that names a mechanism ages
 with the mechanism. This one was accurate when written and became wrong without
 anything editing it.
 
+## 28. Auditing the rest of the refusals
+
+Having found one refusal stale, the other five were checked the same way --
+against the code they describe, and by probe where a probe could settle it.
+
+| refusal | claim | verdict |
+| --- | --- | --- |
+| `NO_PAYMENT_SEAM` | every method in the core's payment capability errors and ignores its arguments | holds: all 13 return `Err` or `Subscription::interrupted`, every argument underscore-prefixed |
+| `NO_CHAT_ACTION_SEAM` | `ChatPlatform` is create-room, register-bot, post-message and subscribe-rooms only | holds: exactly those four |
+| `NO_DERIVATION_URI` | a session activates from 32 bytes of entropy; names are alice, bob, charlie, dave | holds: `entropyFor` fills 32 bytes, and those four are the roster |
+| `LOGIN_BEHAVIOR_IS_CONSTRUCTION_TIME` | the host page reads it once at start | holds: `options.loginBehavior` is read at exactly one site, during boot |
+| `NO_PINNED_PRODUCT_ACCOUNT` | see below | half wrong, in the half this document put there |
+
+One near-miss worth recording: `ChatPlatform`'s fourth method is declared `fn`,
+not `async fn`, so a grep for `async fn` reports three and makes the refusal look
+one method too generous. It is not.
+
+### The product-account claim was wrong, and this document wrote it
+
+Section 21 replaced the original "expect switching the host account to change
+the product account" with "it is stable across a host account switch", on the
+strength of a probe. Both the claim and the probe were unsound.
+
+The code is unambiguous: `product_keypair_with_owner` derives from
+`root_entropy()`, the product id and the derivation index, so a different host
+account derives a different product account. "Stable across a switch" also
+contradicted the sentence before it in the same message, which says the account
+is derived from the session root.
+
+But the observation is reproducible: after `switchAccount("charlie")`,
+`getActiveAccount` reports charlie while the product still reads the account it
+had. Two probe attempts failed to resolve which is happening, and both failed in
+instructive ways:
+
+- reloading the page to re-read re-boots the host, which re-activates the first
+  roster entry and silently undoes the switch -- the earlier probe's error, and
+  the reason it "saw" stability;
+- reloading only the product iframe does not re-establish the connection, so the
+  product never comes back ready.
+
+What is unresolved is when the product's view of its account refreshes, not what
+the derivation is. The message now states the derivation and says not to assume
+an account survives `switchAccount`, and asserts nothing about what a switch
+does to a product already holding one. That is the honest shape: a refusal
+should not carry a behavioural claim its author could not demonstrate.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is
