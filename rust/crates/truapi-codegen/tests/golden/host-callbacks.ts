@@ -203,7 +203,20 @@ export type CoreStorageKey =
    * core honours it for a bounded lifetime, which is what makes a revoked
    * trust grant eventually take effect.
    */
-  | { tag: "ProductManifest"; value: { productId: string } };
+  | { tag: "ProductManifest"; value: { productId: string } }
+  /**
+   * The NFT purses' durable records for one wallet: every purse's index
+   * counter and its reserved receive keys.
+   *
+   * One slot so a write is atomic; the value is a versioned snapshot owned
+   * by the core and holds no secret material.
+   */
+  | { tag: "NftPurses"; value: { rootPublicKey: Uint8Array } }
+  /**
+   * The NFT purses' write-ahead log of in-flight transfers for one wallet,
+   * written before broadcast and drained by the recovery sweep.
+   */
+  | { tag: "NftPurseTransferLog"; value: { rootPublicKey: Uint8Array } };
 
 /**
  * Review shown before a product creates a ring-VRF proof (RFC 0004).
@@ -305,6 +318,75 @@ export interface IdentityDisclosureReview {
 export type LoginFailureKind = "NoFreeAllowanceSlots" | "Other";
 
 /**
+ * Review shown before a product may list its own NFT purse and allocate
+ * receive keys in it.
+ */
+export interface NftPurseAccessReview {
+  /**
+   * Product asking to see its purse.
+   */
+  productId: string;
+
+  /**
+   * Collections the first request named, for the sheet's wording only; the
+   * grant covers the product's whole purse.
+   */
+  collections?: Array<number>;
+}
+
+/**
+ * Review shown before a product may allocate NFT receive keys in another
+ * product's purse, placing items into that product's collectibles.
+ */
+export interface NftPurseReceiveForReview {
+  /**
+   * Product asking to place items.
+   */
+  productId: string;
+
+  /**
+   * Product whose purse will receive them.
+   */
+  targetProductId: string;
+}
+
+/**
+ * Review shown before the host moves one purse NFT for a product.
+ */
+export interface NftPurseTransferReview {
+  /**
+   * Product asking for the move.
+   */
+  productId: string;
+
+  /**
+   * Instance to move.
+   */
+  instance: bigint;
+
+  /**
+   * Collection the instance belongs to.
+   */
+  collection: number;
+
+  /**
+   * Item definition within the collection.
+   */
+  item: number;
+
+  /**
+   * Destination purse key.
+   */
+  to: Uint8Array;
+
+  /**
+   * Product whose purse `to` belongs to, when the host derived it; a host
+   * names the product on the sheet instead of the raw key.
+   */
+  toProductId?: string;
+}
+
+/**
  * Permission request whose authorization status can be inspected or updated
  * by host administration UI.
  */
@@ -324,7 +406,18 @@ export type PermissionAuthorizationRequest =
   /**
    * Product-scoped permission to access another product's account context.
    */
-  | { tag: "AccountAccess"; value: { targetProductId: string } };
+  | { tag: "AccountAccess"; value: { targetProductId: string } }
+  /**
+   * Product-scoped permission to list its own NFT purse and allocate
+   * receive keys in it.
+   */
+  | { tag: "NftPurseAccess"; value?: undefined }
+  /**
+   * Product-scoped permission to allocate NFT receive keys in another
+   * product's purse, so it can mint or send items into that product's
+   * collectibles.
+   */
+  | { tag: "NftPurseReceiveFor"; value: { targetProductId: string } };
 
 /**
  * Authorization status for a permission request.
@@ -575,7 +668,19 @@ export type UserConfirmationReview =
   /**
    * Resolve a product's own account subtree over SSO.
    */
-  | { tag: "ProductSubtree"; value: ProductSubtreeReview };
+  | { tag: "ProductSubtree"; value: ProductSubtreeReview }
+  /**
+   * Allow a product to list the NFTs in its purse.
+   */
+  | { tag: "NftPurseAccess"; value: NftPurseAccessReview }
+  /**
+   * Move one purse NFT on a product's behalf.
+   */
+  | { tag: "NftPurseTransfer"; value: NftPurseTransferReview }
+  /**
+   * Allow a product to place NFTs into another product's purse.
+   */
+  | { tag: "NftPurseReceiveFor"; value: NftPurseReceiveForReview };
 
 /**
  * Review shown before a product asks to access another product account.
@@ -667,6 +772,12 @@ export const CoreStorageKey: S.Codec<CoreStorageKey> = S.lazy(
       ProductManifest: S.Struct({ productId: S.str }) as S.Codec<{
         productId: string;
       }>,
+      NftPurses: S.Struct({ rootPublicKey: S.Bytes(32) }) as S.Codec<{
+        rootPublicKey: Uint8Array;
+      }>,
+      NftPurseTransferLog: S.Struct({ rootPublicKey: S.Bytes(32) }) as S.Codec<{
+        rootPublicKey: Uint8Array;
+      }>,
     }),
 );
 
@@ -748,6 +859,46 @@ export const LoginFailureKind: S.Codec<LoginFailureKind> = S.lazy(
 );
 
 /**
+ * Review shown before a product may list its own NFT purse and allocate
+ * receive keys in it.
+ */
+export const NftPurseAccessReview: S.Codec<NftPurseAccessReview> = S.lazy(
+  (): S.Codec<NftPurseAccessReview> =>
+    S.Struct({
+      productId: S.str,
+      collections: S.Option(S.Vector(S.u32)),
+    }) as S.Codec<NftPurseAccessReview>,
+);
+
+/**
+ * Review shown before a product may allocate NFT receive keys in another
+ * product's purse, placing items into that product's collectibles.
+ */
+export const NftPurseReceiveForReview: S.Codec<NftPurseReceiveForReview> =
+  S.lazy(
+    (): S.Codec<NftPurseReceiveForReview> =>
+      S.Struct({
+        productId: S.str,
+        targetProductId: S.str,
+      }) as S.Codec<NftPurseReceiveForReview>,
+  );
+
+/**
+ * Review shown before the host moves one purse NFT for a product.
+ */
+export const NftPurseTransferReview: S.Codec<NftPurseTransferReview> = S.lazy(
+  (): S.Codec<NftPurseTransferReview> =>
+    S.Struct({
+      productId: S.str,
+      instance: S.u64,
+      collection: S.u32,
+      item: S.u32,
+      to: S.Bytes(32),
+      toProductId: S.Option(S.str),
+    }) as S.Codec<NftPurseTransferReview>,
+);
+
+/**
  * Permission request whose authorization status can be inspected or updated
  * by host administration UI.
  */
@@ -759,6 +910,10 @@ export const PermissionAuthorizationRequest: S.Codec<PermissionAuthorizationRequ
         Remote: RemotePermissionRequest,
         IdentityDisclosure: S._void,
         AccountAccess: S.Struct({ targetProductId: S.str }) as S.Codec<{
+          targetProductId: string;
+        }>,
+        NftPurseAccess: S._void,
+        NftPurseReceiveFor: S.Struct({ targetProductId: S.str }) as S.Codec<{
           targetProductId: string;
         }>,
       }),
@@ -928,6 +1083,9 @@ export const UserConfirmationReview: S.Codec<UserConfirmationReview> = S.lazy(
       AccountAccess: AccountAccessReview,
       SignVrf: SignVrfReview,
       ProductSubtree: ProductSubtreeReview,
+      NftPurseAccess: NftPurseAccessReview,
+      NftPurseTransfer: NftPurseTransferReview,
+      NftPurseReceiveFor: NftPurseReceiveForReview,
     }),
 );
 

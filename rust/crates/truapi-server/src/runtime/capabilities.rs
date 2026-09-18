@@ -2,6 +2,7 @@
 
 mod account;
 mod chain;
+mod nft_purse;
 mod payment;
 mod platform;
 mod preimage;

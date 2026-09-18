@@ -20,6 +20,7 @@ use truapi::api::{
     Entropy,
     LocalStorage,
     Locale,
+    NftPurse,
     Notifications,
     Payment,
     Permissions,
@@ -55,6 +56,7 @@ where
     register_entropy(dispatcher, host.clone());
     register_local_storage(dispatcher, host.clone());
     register_locale(dispatcher, host.clone());
+    register_nft_purse(dispatcher, host.clone());
     register_notifications(dispatcher, host.clone());
     register_payment(dispatcher, host.clone());
     register_permissions(dispatcher, host.clone());
@@ -1410,6 +1412,132 @@ where
                     move |item: Result<versioned::locale::HostLocaleSubscribeItem, truapi::CallError<versioned::locale::HostLocaleSubscribeError>>| {
                         item.map(|item| {
                             <versioned::locale::HostLocaleSubscribeItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
+                Ok(subscription_stream(stream))
+            })
+        });
+    }
+}
+
+fn register_nft_purse<P>(dispatcher: &mut Dispatcher, host: Arc<P>)
+where
+    P: NftPurse + Send + Sync + 'static,
+{
+    {
+        let host = host.clone();
+        dispatcher.on_request(wire_table::NFT_PURSE_LIST, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let request: versioned::nft_purse::HostNftPurseListRequest = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<versioned::nft_purse::HostNftPurseListError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        let result: Result<versioned::nft_purse::HostNftPurseListResponse, truapi::CallError<versioned::nft_purse::HostNftPurseListError>> = Err(error);
+                        return result.encode();
+                    }
+                };
+                let target_version = request.version();
+                let cx = CallContext::with_request_id(request_id);
+                let result: Result<versioned::nft_purse::HostNftPurseListResponse, truapi::CallError<versioned::nft_purse::HostNftPurseListError>> =
+                    match host.list(&cx, request).await {
+                        Ok(response) => Ok(<versioned::nft_purse::HostNftPurseListResponse as truapi::versioned::FromLatest>::from_latest(
+                            truapi::versioned::IntoLatest::into_latest(response),
+                            target_version,
+                        )),
+                        Err(err) => Err(downgrade_call_error(err, target_version)),
+                    };
+                result.encode()
+            })
+        });
+    }
+    {
+        let host = host.clone();
+        dispatcher.on_request(wire_table::NFT_PURSE_REQUEST_RECEIVE_ADDRESS, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let request: versioned::nft_purse::HostNftPurseRequestReceiveAddressRequest = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<versioned::nft_purse::HostNftPurseRequestReceiveAddressError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        let result: Result<versioned::nft_purse::HostNftPurseRequestReceiveAddressResponse, truapi::CallError<versioned::nft_purse::HostNftPurseRequestReceiveAddressError>> = Err(error);
+                        return result.encode();
+                    }
+                };
+                let target_version = request.version();
+                let cx = CallContext::with_request_id(request_id);
+                let result: Result<versioned::nft_purse::HostNftPurseRequestReceiveAddressResponse, truapi::CallError<versioned::nft_purse::HostNftPurseRequestReceiveAddressError>> =
+                    match host.request_receive_address(&cx, request).await {
+                        Ok(response) => Ok(<versioned::nft_purse::HostNftPurseRequestReceiveAddressResponse as truapi::versioned::FromLatest>::from_latest(
+                            truapi::versioned::IntoLatest::into_latest(response),
+                            target_version,
+                        )),
+                        Err(err) => Err(downgrade_call_error(err, target_version)),
+                    };
+                result.encode()
+            })
+        });
+    }
+    {
+        let host = host.clone();
+        dispatcher.on_subscription(wire_table::NFT_PURSE_TRANSFER, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let request: versioned::nft_purse::HostNftPurseTransferRequest = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<versioned::nft_purse::HostNftPurseTransferError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        return Err(subscription_interrupt(error));
+                    }
+                };
+                let target_version = request.version();
+                let cx = CallContext::with_request_id(request_id);
+                let stream = host.transfer(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::nft_purse::HostNftPurseTransferItem, truapi::CallError<versioned::nft_purse::HostNftPurseTransferError>>| {
+                        item.map(|item| {
+                            <versioned::nft_purse::HostNftPurseTransferItem as truapi::versioned::FromLatest>::from_latest(
+                                truapi::versioned::IntoLatest::into_latest(item),
+                                target_version,
+                            )
+                        })
+                        .map_err(|error| downgrade_call_error(error, target_version))
+                    },
+                );
+                Ok(subscription_stream(stream))
+            })
+        });
+    }
+    {
+        let host = host;
+        dispatcher.on_subscription(wire_table::NFT_PURSE_LIST_SUBSCRIBE, move |request_id: String, bytes: Vec<u8>| {
+            let host = host.clone();
+            Box::pin(async move {
+                let request: versioned::nft_purse::HostNftPurseListSubscribeRequest = match DecodeAll::decode_all(&mut &bytes[..]) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let error: truapi::CallError<versioned::nft_purse::HostNftPurseListSubscribeError> =
+                            truapi::CallError::MalformedFrame { reason: err.to_string() };
+                        return Err(subscription_interrupt(error));
+                    }
+                };
+                let target_version = request.version();
+                let cx = CallContext::with_request_id(request_id);
+                let stream = host.list_subscribe(&cx, request).await;
+                let stream = futures::StreamExt::map(
+                    stream,
+                    move |item: Result<versioned::nft_purse::HostNftPurseListSubscribeItem, truapi::CallError<versioned::nft_purse::HostNftPurseListSubscribeError>>| {
+                        item.map(|item| {
+                            <versioned::nft_purse::HostNftPurseListSubscribeItem as truapi::versioned::FromLatest>::from_latest(
                                 truapi::versioned::IntoLatest::into_latest(item),
                                 target_version,
                             )

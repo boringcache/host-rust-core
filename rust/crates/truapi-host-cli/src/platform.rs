@@ -882,6 +882,43 @@ fn approval_summary(review: &UserConfirmationReview) -> (&'static str, String) {
                 review.product_id
             ),
         ),
+        UserConfirmationReview::NftPurseAccess(review) => (
+            "list your collectibles",
+            match &review.collections {
+                Some(collections) => format!(
+                    "Product {} requested to see its collectibles from collections {collections:?}.",
+                    review.product_id
+                ),
+                None => format!(
+                    "Product {} requested to see its collectibles.",
+                    review.product_id
+                ),
+            },
+        ),
+        UserConfirmationReview::NftPurseTransfer(review) => (
+            "send a collectible",
+            match &review.to_product_id {
+                Some(target) => format!(
+                    "Product {} requested to send collectible #{} (collection {}, item {}) to {target}.",
+                    review.product_id, review.instance, review.collection, review.item
+                ),
+                None => format!(
+                    "Product {} requested to send collectible #{} (collection {}, item {}) to 0x{}.",
+                    review.product_id,
+                    review.instance,
+                    review.collection,
+                    review.item,
+                    hex::encode(review.to)
+                ),
+            },
+        ),
+        UserConfirmationReview::NftPurseReceiveFor(review) => (
+            "place collectibles",
+            format!(
+                "Product {} requested to place collectibles into {}'s collectibles.",
+                review.product_id, review.target_product_id
+            ),
+        ),
     }
 }
 

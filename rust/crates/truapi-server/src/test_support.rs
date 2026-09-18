@@ -28,11 +28,12 @@ use truapi_platform::{
     AccountAccessReview, AuthPresenter, AuthState, ChainProvider,
     CoreStorage as PlatformCoreStorage, CoreStorageKey, CreateTransactionReview,
     Features as PlatformFeatures, HostInfo, JsonRpcConnection, LocaleHost,
-    Navigation as PlatformNavigation, Notifications as PlatformNotifications, PairingHostConfig,
-    Permissions as PlatformPermissions, PlatformInfo, PreimageHost, ProductContext,
-    ProductStorage as PlatformProductStorage, ProductSubtreeReview, ResourceAllocationReview,
-    SignPayloadReview, SignRawReview, SignVrfReview, StatementStoreProductSignReview, ThemeHost,
-    UserConfirmation, UserConfirmationReview,
+    Navigation as PlatformNavigation, NftPurseTransferReview,
+    Notifications as PlatformNotifications, PairingHostConfig, Permissions as PlatformPermissions,
+    PlatformInfo, PreimageHost, ProductContext, ProductStorage as PlatformProductStorage,
+    ProductSubtreeReview, ResourceAllocationReview, SignPayloadReview, SignRawReview,
+    SignVrfReview, StatementStoreProductSignReview, ThemeHost, UserConfirmation,
+    UserConfirmationReview,
 };
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519SecretKey};
 
@@ -93,6 +94,8 @@ pub(crate) struct StubPlatform {
     /// pre-consent behavior where a cold own-account resolve was not gated.
     pub(crate) product_subtree_denied: bool,
     pub(crate) product_subtree_reviews: Arc<Mutex<Vec<ProductSubtreeReview>>>,
+    pub(crate) nft_purse_transfer_denied: bool,
+    pub(crate) nft_purse_transfer_reviews: Arc<Mutex<Vec<NftPurseTransferReview>>>,
     pub(crate) identity_disclosure_confirmed: bool,
     pub(crate) identity_disclosure_error: Option<&'static str>,
     pub(crate) identity_disclosure_calls: Arc<AtomicUsize>,
@@ -1650,6 +1653,17 @@ impl UserConfirmation for StubPlatform {
                     .push(review);
                 (None, !self.product_subtree_denied)
             }
+            UserConfirmationReview::NftPurseTransfer(review) => {
+                self.nft_purse_transfer_reviews
+                    .lock()
+                    .expect("NFT purse transfer review list mutex poisoned")
+                    .push(review);
+                (None, !self.nft_purse_transfer_denied)
+            }
+            // Grants are approved so purse tests can exercise the paths that
+            // follow consent.
+            UserConfirmationReview::NftPurseAccess(_)
+            | UserConfirmationReview::NftPurseReceiveFor(_) => (None, true),
         };
         if let Some(reason) = error {
             return Err(v01::GenericError {

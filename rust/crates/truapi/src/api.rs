@@ -7,6 +7,7 @@ pub mod coin_payment;
 pub mod entropy;
 pub mod local_storage;
 pub mod locale;
+pub mod nft_purse;
 pub mod notifications;
 pub mod payment;
 pub mod permissions;
@@ -26,6 +27,7 @@ pub use coin_payment::CoinPayment;
 pub use entropy::Entropy;
 pub use local_storage::LocalStorage;
 pub use locale::Locale;
+pub use nft_purse::NftPurse;
 pub use notifications::Notifications;
 pub use payment::Payment;
 pub use permissions::Permissions;
@@ -47,6 +49,7 @@ pub trait TrUApi:
     + Entropy
     + LocalStorage
     + Locale
+    + NftPurse
     + Notifications
     + Payment
     + Permissions
@@ -71,6 +74,7 @@ impl<T> TrUApi for T where
         + Entropy
         + LocalStorage
         + Locale
+        + NftPurse
         + Notifications
         + Payment
         + Permissions

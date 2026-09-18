@@ -297,6 +297,23 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
                 )
                 .await
             }
+            PermissionAuthorizationRequest::NftPurseAccess => {
+                authorization_status(
+                    self.storage,
+                    CoreStorageKey::nft_purse_access_authorization(self.product_id),
+                )
+                .await
+            }
+            PermissionAuthorizationRequest::NftPurseReceiveFor { target_product_id } => {
+                authorization_status(
+                    self.storage,
+                    CoreStorageKey::nft_purse_receive_for_authorization(
+                        self.product_id,
+                        target_product_id,
+                    ),
+                )
+                .await
+            }
         }
     }
 
@@ -353,6 +370,15 @@ impl<'a, S: CoreStorage + ?Sized, P: Permissions + ?Sized> PermissionsService<'a
             }
             PermissionAuthorizationRequest::AccountAccess { target_product_id } => {
                 CoreStorageKey::account_access_authorization(self.product_id, target_product_id)
+            }
+            PermissionAuthorizationRequest::NftPurseAccess => {
+                CoreStorageKey::nft_purse_access_authorization(self.product_id)
+            }
+            PermissionAuthorizationRequest::NftPurseReceiveFor { target_product_id } => {
+                CoreStorageKey::nft_purse_receive_for_authorization(
+                    self.product_id,
+                    target_product_id,
+                )
             }
         };
         set_authorization_status(self.storage, key, status).await

@@ -148,6 +148,26 @@ pub mod latest {
     pub type HostLocaleSubscribeItem = LatestOf<versioned::locale::HostLocaleSubscribeItem>;
     /// Navigation request error.
     pub type HostNavigateToError = LatestOf<versioned::system::HostNavigateToError>;
+    /// NFT purse listing request.
+    pub type HostNftPurseListRequest = LatestOf<versioned::nft_purse::HostNftPurseListRequest>;
+    /// NFT purse listing result.
+    pub type HostNftPurseListResponse = LatestOf<versioned::nft_purse::HostNftPurseListResponse>;
+    /// NFT purse listing stream item.
+    pub type HostNftPurseListSubscribeItem =
+        LatestOf<versioned::nft_purse::HostNftPurseListSubscribeItem>;
+    /// NFT purse receive-key request.
+    pub type HostNftPurseRequestReceiveAddressRequest =
+        LatestOf<versioned::nft_purse::HostNftPurseRequestReceiveAddressRequest>;
+    /// NFT purse receive-key result.
+    pub type HostNftPurseRequestReceiveAddressResponse =
+        LatestOf<versioned::nft_purse::HostNftPurseRequestReceiveAddressResponse>;
+    /// NFT purse transfer request.
+    pub type HostNftPurseTransferRequest =
+        LatestOf<versioned::nft_purse::HostNftPurseTransferRequest>;
+    /// NFT purse transfer progress item.
+    pub type HostNftPurseTransferItem = LatestOf<versioned::nft_purse::HostNftPurseTransferItem>;
+    /// NFT purse service failure.
+    pub type HostNftPurseError = LatestOf<versioned::nft_purse::HostNftPurseListError>;
     /// The calling product's Pocket cards.
     pub type HostPocketListSubscribeItem = LatestOf<versioned::pocket::HostPocketListSubscribeItem>;
     /// Pocket card removal request.

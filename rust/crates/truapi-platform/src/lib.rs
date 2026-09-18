@@ -1157,6 +1157,16 @@ pub enum PermissionAuthorizationRequest {
         /// Product whose account context may be accessed.
         target_product_id: String,
     },
+    /// Product-scoped permission to list its own NFT purse and allocate
+    /// receive keys in it.
+    NftPurseAccess,
+    /// Product-scoped permission to allocate NFT receive keys in another
+    /// product's purse, so it can mint or send items into that product's
+    /// collectibles.
+    NftPurseReceiveFor {
+        /// Product whose purse receives the items.
+        target_product_id: String,
+    },
 }
 
 /// Authorization status for a permission request.
@@ -1429,6 +1439,23 @@ pub enum CoreStorageKey {
         /// Product whose manifest was cached, normalized.
         product_id: String,
     },
+    /// The NFT purses' durable records for one wallet: every purse's index
+    /// counter and its reserved receive keys.
+    ///
+    /// One slot so a write is atomic; the value is a versioned snapshot owned
+    /// by the core and holds no secret material.
+    #[codec(index = 13)]
+    NftPurses {
+        /// Root public key of the wallet the purses derive from.
+        root_public_key: [u8; 32],
+    },
+    /// The NFT purses' write-ahead log of in-flight transfers for one wallet,
+    /// written before broadcast and drained by the recovery sweep.
+    #[codec(index = 14)]
+    NftPurseTransferLog {
+        /// Root public key of the wallet the purses derive from.
+        root_public_key: [u8; 32],
+    },
 }
 
 /// Stable metadata describing one strictly decoded [`CoreStorageKey`].
@@ -1482,6 +1509,8 @@ pub fn describe_core_storage_key(
         CoreStorageKey::DeviceEncryptionKey => ("DeviceEncryptionKey", None),
         CoreStorageKey::SsoResponderRequestLedger { .. } => ("SsoResponderRequestLedger", None),
         CoreStorageKey::ProductManifest { product_id } => ("ProductManifest", Some(product_id)),
+        CoreStorageKey::NftPurses { .. } => ("NftPurses", None),
+        CoreStorageKey::NftPurseTransferLog { .. } => ("NftPurseTransferLog", None),
     };
     Ok(CoreStorageKeyDescription { kind, product_id })
 }
@@ -1543,6 +1572,25 @@ impl CoreStorageKey {
         Self::PermissionAuthorization {
             product_id: product_id.to_string(),
             request: PermissionAuthorizationRequest::AccountAccess {
+                target_product_id: target_product_id.to_string(),
+            },
+        }
+    }
+
+    /// Persisted authorization key for a product listing its own NFT purse.
+    pub fn nft_purse_access_authorization(product_id: &str) -> Self {
+        Self::PermissionAuthorization {
+            product_id: product_id.to_string(),
+            request: PermissionAuthorizationRequest::NftPurseAccess,
+        }
+    }
+
+    /// Persisted authorization key for a product allocating NFT receive keys
+    /// in another product's purse.
+    pub fn nft_purse_receive_for_authorization(product_id: &str, target_product_id: &str) -> Self {
+        Self::PermissionAuthorization {
+            product_id: product_id.to_string(),
+            request: PermissionAuthorizationRequest::NftPurseReceiveFor {
                 target_product_id: target_product_id.to_string(),
             },
         }
@@ -2236,6 +2284,41 @@ mod tests {
         expected.extend([0x33; 32]);
 
         assert_eq!(key.encode(), expected);
+    }
+
+    #[test]
+    fn nft_purse_storage_keys_have_stable_encodings() {
+        let mut purses = vec![13];
+        purses.extend([0x44; 32]);
+        assert_eq!(
+            CoreStorageKey::NftPurses {
+                root_public_key: [0x44; 32]
+            }
+            .encode(),
+            purses
+        );
+        let mut log = vec![14];
+        log.extend([0x44; 32]);
+        assert_eq!(
+            CoreStorageKey::NftPurseTransferLog {
+                root_public_key: [0x44; 32]
+            }
+            .encode(),
+            log
+        );
+        // Appended `PermissionAuthorizationRequest` variants keep the earlier
+        // discriminants: Device 0, Remote 1, IdentityDisclosure 2,
+        // AccountAccess 3, NftPurseAccess 4, NftPurseReceiveFor 5.
+        assert_eq!(PermissionAuthorizationRequest::NftPurseAccess.encode(), [4]);
+        let mut receive_for = vec![5];
+        receive_for.extend("seity.dot".encode());
+        assert_eq!(
+            PermissionAuthorizationRequest::NftPurseReceiveFor {
+                target_product_id: "seity.dot".to_string()
+            }
+            .encode(),
+            receive_for
+        );
     }
 
     #[test]
@@ -2984,6 +3067,48 @@ pub struct PreimageSubmitReview {
     pub size: u64,
 }
 
+/// Review shown before a product may list its own NFT purse and allocate
+/// receive keys in it.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct NftPurseAccessReview {
+    /// Product asking to see its purse.
+    pub product_id: String,
+    /// Collections the first request named, for the sheet's wording only; the
+    /// grant covers the product's whole purse.
+    pub collections: Option<Vec<u32>>,
+}
+
+/// Review shown before the host moves one purse NFT for a product.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct NftPurseTransferReview {
+    /// Product asking for the move.
+    pub product_id: String,
+    /// Instance to move.
+    pub instance: u64,
+    /// Collection the instance belongs to.
+    pub collection: u32,
+    /// Item definition within the collection.
+    pub item: u32,
+    /// Destination purse key.
+    pub to: [u8; 32],
+    /// Product whose purse `to` belongs to, when the host derived it; a host
+    /// names the product on the sheet instead of the raw key.
+    pub to_product_id: Option<String>,
+}
+
+/// Review shown before a product may allocate NFT receive keys in another
+/// product's purse, placing items into that product's collectibles.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct NftPurseReceiveForReview {
+    /// Product asking to place items.
+    pub product_id: String,
+    /// Product whose purse will receive them.
+    pub target_product_id: String,
+}
+
 /// Review shown before a user-confirmed core action continues.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -3013,6 +3138,12 @@ pub enum UserConfirmationReview {
     SignVrf(SignVrfReview),
     /// Resolve a product's own account subtree over SSO.
     ProductSubtree(ProductSubtreeReview),
+    /// Allow a product to list the NFTs in its purse.
+    NftPurseAccess(NftPurseAccessReview),
+    /// Move one purse NFT on a product's behalf.
+    NftPurseTransfer(NftPurseTransferReview),
+    /// Allow a product to place NFTs into another product's purse.
+    NftPurseReceiveFor(NftPurseReceiveForReview),
 }
 
 /// Local user confirmation UI for sensitive core-owned operations.
