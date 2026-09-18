@@ -7,6 +7,8 @@
 //! never keys: they list their own purse, ask for a fresh empty key to receive
 //! into, and ask the host to move an item they hold.
 
+use core::fmt;
+
 use parity_scale_codec::{Decode, Encode};
 
 use crate::v01::AccountId;
@@ -154,4 +156,23 @@ pub enum NftPurseError {
         /// Human-readable failure reason.
         reason: String,
     },
+}
+
+impl fmt::Display for NftPurseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rejected => f.write_str("the request was rejected"),
+            Self::NotFound => f.write_str("the purse does not hold that instance"),
+            Self::AddressOccupied => f.write_str("the destination purse key already holds an NFT"),
+            Self::Locked { until } => write!(f, "the holding purse key is locked until {until}"),
+            Self::StateMismatch => f.write_str("the instance moved before the transfer was built"),
+            Self::ChainNotServed => {
+                f.write_str("the host serves no chain with the Scarcity pallet")
+            }
+            Self::Soulbound => f.write_str("the item is bound to its purse key"),
+            Self::UnknownTarget => f.write_str("the target purse is not a known product"),
+            Self::NotConnected => f.write_str("no account-authority session is active"),
+            Self::Unknown { reason } => f.write_str(reason),
+        }
+    }
 }

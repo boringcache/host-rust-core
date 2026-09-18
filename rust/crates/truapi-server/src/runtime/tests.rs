@@ -4796,3 +4796,90 @@ fn subnames_of_one_product_share_one_cached_manifest() {
         );
     }
 }
+
+/// On a pairing host a receive address is allocated by the paired Account
+/// Holder: one SSO request carries the purse, caller and idempotency key, and
+/// the answer is the key handed back to the product. The desktop keeps no
+/// purse state of its own.
+#[test]
+fn nft_purse_receive_address_on_a_pairing_host_is_allocated_by_the_account_holder() {
+    use crate::host_logic::sso::messages::{
+        NftPurseAllocateRequest, RemoteMessage, RemoteMessageData, Response, v1,
+    };
+    use crate::test_support::{sso_session_info, sso_success_response_script};
+    use truapi::api::NftPurse;
+    use truapi::versioned::nft_purse::{
+        HostNftPurseRequestReceiveAddressRequest, HostNftPurseRequestReceiveAddressResponse,
+    };
+
+    let session = sso_session_info();
+    let platform = Arc::new(StubPlatform {
+        sso_response_script: Some(sso_success_response_script(
+            &session,
+            RemoteMessage {
+                message_id: "wallet-purse-1".to_string(),
+                data: RemoteMessageData::V1(v1::RemoteMessage::NftPurseAllocateResponse(
+                    Response {
+                        responding_to: "purse-1".to_string(),
+                        payload: Ok([0xAB; 32]),
+                    },
+                )),
+            },
+        )),
+        ..Default::default()
+    });
+    let (host, _pairing) =
+        ProductRuntimeHost::new_compat_with_pairing(platform.clone(), test_spawner());
+    install_pairing_session(&host, session.clone());
+    let cx = CallContext::with_request_id("purse-1".to_string());
+    let response = futures::executor::block_on(NftPurse::request_receive_address(
+        &host,
+        &cx,
+        HostNftPurseRequestReceiveAddressRequest::V1(
+            v01::HostNftPurseRequestReceiveAddressRequest {
+                idempotency_key: "mint-1".to_string(),
+                target: None,
+            },
+        ),
+    ))
+    .unwrap();
+    let HostNftPurseRequestReceiveAddressResponse::V1(inner) = response;
+    assert_eq!(inner.address, [0xAB; 32]);
+
+    let message = crate::test_support::submitted_remote_message(&platform, &session);
+    let RemoteMessageData::V1(v1::RemoteMessage::NftPurseAllocateRequest(request)) = message.data
+    else {
+        panic!("expected a purse allocation request, got {message:?}");
+    };
+    assert_eq!(
+        request,
+        NftPurseAllocateRequest {
+            target_product_id: "unknown.dot".to_string(),
+            requested_by: "unknown.dot".to_string(),
+            idempotency_key: "mint-1".to_string(),
+        }
+    );
+}
+
+/// A pairing host with no paired session answers the service's
+/// `NotConnected` rather than `Unsupported`: the product waits for a pairing
+/// instead of degrading.
+#[test]
+fn nft_purse_list_without_a_session_reports_not_connected() {
+    use truapi::api::NftPurse;
+    use truapi::versioned::nft_purse::{HostNftPurseListError, HostNftPurseListRequest};
+
+    let (host, _pairing) =
+        ProductRuntimeHost::new_compat_with_pairing(stub_platform(), test_spawner());
+    let cx = CallContext::with_request_id("purse-2".to_string());
+    let error = futures::executor::block_on(NftPurse::list(
+        &host,
+        &cx,
+        HostNftPurseListRequest::V1(v01::HostNftPurseListRequest { collections: None }),
+    ))
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CallError::Domain(HostNftPurseListError::V1(v01::NftPurseError::NotConnected))
+    ));
+}

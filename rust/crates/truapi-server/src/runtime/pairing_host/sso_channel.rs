@@ -4,6 +4,7 @@ use super::super::authority::{
     AuthorityCancelError, AuthorityError, BulletinAllowanceKey, CreateTransactionAuthorityRequest,
     SignPayloadAuthorityRequest, SignRawAuthorityRequest, StatementStoreAllowanceKey,
 };
+use super::super::nft_purse::NftPurseAuthorityError;
 use super::super::sso_remote::{
     RemoteResponseWait, SSO_LOCAL_DISCONNECT_REASON, SSO_PEER_DISCONNECT_REASON,
     SsoRemoteResponseError, SsoSessionKey, fresh_statement_expiry, reply_matcher, sso_message_id,
@@ -14,11 +15,11 @@ use super::PairingHost;
 use crate::host_logic::session::{SessionInfo, SessionState, SsoSessionInfo};
 use crate::host_logic::sso::messages::{
     CreateTransactionLegacyPayload, CreateTransactionPayload, CreateTransactionRequest,
-    CreateTransactionWithLegacyAccountRequest, OnExistingAllowancePolicy, ProductRequest,
-    ProductSubtreeRequest, RemoteMessage, RemoteMessageData, ResourceAllocationRequest,
-    RingVrfError, SignRawWithLegacyAccountRequest, SignRequest, SsoAllocatedResource,
-    SsoAllocationOutcome, SsoSessionStatement, build_outgoing_request_statement,
-    decode_sso_session_statement, v1,
+    CreateTransactionWithLegacyAccountRequest, NftPurseAllocateRequest, NftPurseListRequest,
+    NftPurseTransferRequest, OnExistingAllowancePolicy, ProductRequest, ProductSubtreeRequest,
+    RemoteMessage, RemoteMessageData, ResourceAllocationRequest, RingVrfError,
+    SignRawWithLegacyAccountRequest, SignRequest, SsoAllocatedResource, SsoAllocationOutcome,
+    SsoSessionStatement, build_outgoing_request_statement, decode_sso_session_statement, v1,
 };
 use crate::host_logic::sso::wire::SsoRequest;
 use crate::host_logic::statement_store::parse_new_statements_result;
@@ -230,6 +231,46 @@ impl PairingHost {
             self.handle_signing_host_disconnected(key).await;
         }
         result.map(|response| response.payload)
+    }
+
+    /// Ask the Account Holder for the items in a product's NFT purse.
+    pub(super) async fn remote_nft_purse_list(
+        &self,
+        cx: &CallContext,
+        session: &SessionInfo,
+        request: NftPurseListRequest,
+    ) -> Result<Vec<latest::NftPurseItem>, NftPurseAuthorityError> {
+        self.call(cx, session, request)
+            .await
+            .map_err(remote_authority_error)?
+            .map_err(NftPurseAuthorityError::Service)
+    }
+
+    /// Ask the Account Holder to allocate, or replay, an NFT purse receive key.
+    pub(super) async fn remote_nft_purse_allocate(
+        &self,
+        cx: &CallContext,
+        session: &SessionInfo,
+        request: NftPurseAllocateRequest,
+    ) -> Result<[u8; 32], NftPurseAuthorityError> {
+        self.call(cx, session, request)
+            .await
+            .map_err(remote_authority_error)?
+            .map_err(NftPurseAuthorityError::Service)
+    }
+
+    /// Ask the Account Holder to show, sign, broadcast and verify one NFT
+    /// purse transfer; the answer arrives once ownership is settled.
+    pub(super) async fn remote_nft_purse_transfer(
+        &self,
+        cx: &CallContext,
+        session: &SessionInfo,
+        request: NftPurseTransferRequest,
+    ) -> Result<[u8; 32], NftPurseAuthorityError> {
+        self.call(cx, session, request)
+            .await
+            .map_err(remote_authority_error)?
+            .map_err(NftPurseAuthorityError::Service)
     }
 
     /// Resolve a product's hard-subtree public key, asking the Account Holder

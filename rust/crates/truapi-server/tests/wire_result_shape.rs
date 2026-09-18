@@ -680,3 +680,39 @@ fn coin_payment_request_reports_unsupported_on_the_wire() {
     // `Unsupported` carries no domain payload, so no wrapper tag follows.
     assert_eq!(response.payload.value, vec![0x01u8, 0x02u8]);
 }
+
+/// A pairing host serves the NFT purses through its paired signing host, so
+/// with no session it answers the service's `NotConnected` rather than
+/// `Unsupported`: the product waits for a pairing instead of degrading.
+#[test]
+fn nft_purse_list_reports_not_connected_on_the_wire() {
+    let core = make_core();
+    let request =
+        truapi::versioned::nft_purse::HostNftPurseListRequest::V1(v01::HostNftPurseListRequest {
+            collections: Some(vec![7]),
+        });
+    let ids = request_ids("nft_purse_list").expect("known request method");
+    let frame = ProtocolMessage {
+        request_id: "p:purse".into(),
+        payload: Payload {
+            trait_id: ids.trait_id,
+            method_id: ids.method_id,
+            message_type: MESSAGE_TYPE_REQUEST,
+            value: request.encode(),
+        },
+    };
+    let response = dispatch(&core, frame);
+    assert_eq!(response.payload.trait_id, ids.trait_id);
+    assert_eq!(response.payload.method_id, ids.method_id);
+    assert_eq!(response.payload.message_type, MESSAGE_TYPE_RESPONSE);
+
+    let expected: Result<
+        truapi::versioned::nft_purse::HostNftPurseListResponse,
+        CallError<truapi::versioned::nft_purse::HostNftPurseListError>,
+    > = Err(CallError::Domain(
+        truapi::versioned::nft_purse::HostNftPurseListError::V1(v01::NftPurseError::NotConnected),
+    ));
+    assert_eq!(response.payload.value, expected.encode());
+    // [Err=0x01][CallError::Domain=0x00][V1=0x00][NftPurseError::NotConnected=0x08]
+    assert_eq!(response.payload.value, vec![0x01u8, 0x00, 0x00, 0x08]);
+}

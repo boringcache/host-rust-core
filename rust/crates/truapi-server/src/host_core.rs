@@ -3247,4 +3247,91 @@ mod tests {
             "and does not dial any chain at all"
         );
     }
+
+    /// The NFT purse requests a paired host relays are answered from the
+    /// local root with the service's typed error: a numeric purse id is no
+    /// purse, so allocation and transfer both refuse before any chain read or
+    /// consent sheet.
+    #[test]
+    fn nft_purse_sso_requests_are_answered_from_the_local_root() {
+        use crate::host_logic::sso::messages::{
+            NftPurseAllocateRequest, NftPurseTransferRequest, RemoteMessage, RemoteMessageData, v1,
+        };
+        use truapi::latest::NftPurseError;
+        use truapi_platform::{HostInfo, PlatformInfo, SigningHostConfig};
+
+        const ENTROPY: [u8; 32] = [0xab; 32];
+
+        let config = SigningHostConfig::new(
+            HostInfo {
+                name: "Polkadot Mobile".to_string(),
+                icon: None,
+                version: None,
+                platform: truapi::latest::HostPlatform::Unknown,
+            },
+            PlatformInfo::default(),
+            [0; 32],
+            [0xbb; 32],
+            [0xcc; 32],
+            "paseo".to_string(),
+        )
+        .expect("signing host config is valid");
+        let platform = Arc::new(StubPlatform::default());
+        let runtime = SigningHostRuntime::new(platform.clone(), config, test_spawner());
+        futures::executor::block_on(runtime.activate_local_session(ENTROPY.to_vec()))
+            .expect("activation succeeds");
+
+        let allocate = RemoteMessage {
+            message_id: "a1".to_string(),
+            data: RemoteMessageData::V1(v1::RemoteMessage::NftPurseAllocateRequest(
+                NftPurseAllocateRequest {
+                    target_product_id: "12345".to_string(),
+                    requested_by: "console.dot".to_string(),
+                    idempotency_key: "mint-1".to_string(),
+                },
+            )),
+        };
+        let SsoRequestOutcome::Response(response) =
+            futures::executor::block_on(runtime.answer_sso_request(allocate))
+        else {
+            panic!("expected a response outcome");
+        };
+        let RemoteMessageData::V1(v1::RemoteMessage::NftPurseAllocateResponse(payload)) =
+            response.data
+        else {
+            panic!("expected a purse allocation response payload");
+        };
+        assert_eq!(payload.responding_to, "a1");
+        assert_eq!(payload.payload, Err(NftPurseError::UnknownTarget));
+
+        let transfer = RemoteMessage {
+            message_id: "t1".to_string(),
+            data: RemoteMessageData::V1(v1::RemoteMessage::NftPurseTransferRequest(
+                NftPurseTransferRequest {
+                    product_id: "12345".to_string(),
+                    instance: 34,
+                    to: [0x33; 32],
+                },
+            )),
+        };
+        let SsoRequestOutcome::Response(response) =
+            futures::executor::block_on(runtime.answer_sso_request(transfer))
+        else {
+            panic!("expected a response outcome");
+        };
+        let RemoteMessageData::V1(v1::RemoteMessage::NftPurseTransferResponse(payload)) =
+            response.data
+        else {
+            panic!("expected a purse transfer response payload");
+        };
+        assert_eq!(payload.payload, Err(NftPurseError::UnknownTarget));
+        assert!(
+            platform
+                .nft_purse_transfer_reviews
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "nothing reached the consent sheet"
+        );
+    }
 }

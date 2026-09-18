@@ -31,6 +31,7 @@ use super::authority::{
 };
 use super::connected_session_ui_info;
 use super::identity::resolve_session_identity_with_chain;
+use super::nft_purse::{NftPurseAuthorityError, TransferProgress};
 use super::product_subtree;
 use super::services::RuntimeServices;
 use super::sso_pairing::{SsoPairingFlow, SsoPairingOutcome};
@@ -48,7 +49,10 @@ use crate::host_logic::product_account::{
 use crate::host_logic::raw_signing::raw_payload_bytes;
 use crate::host_logic::session::{SessionInfo, SessionState, encode_persisted_session};
 use crate::host_logic::session_store::SessionStoreChangeNotifier;
-use crate::host_logic::sso::messages::{ProductRequest, RingVrfError};
+use crate::host_logic::sso::messages::{
+    NftPurseAllocateRequest, NftPurseListRequest, NftPurseTransferRequest, ProductRequest,
+    RingVrfError,
+};
 use crate::host_logic::transaction::sign_extrinsic_payload;
 use crate::subscription::Spawner;
 
@@ -2625,6 +2629,75 @@ impl ProductAuthority for PairingHost {
         product_id: &str,
     ) -> bool {
         PairingHost::subtree_reaches_account_holder(self, session, product_id).await
+    }
+
+    fn supports_nft_purse(&self) -> bool {
+        true
+    }
+
+    async fn nft_purse_list(
+        &self,
+        cx: &CallContext,
+        session: &AuthoritySession,
+        product_id: String,
+        collections: Option<Vec<u32>>,
+    ) -> Result<Vec<truapi::latest::NftPurseItem>, NftPurseAuthorityError> {
+        let session = self.current_private_session(session)?;
+        self.remote_nft_purse_list(
+            cx,
+            &session,
+            NftPurseListRequest {
+                product_id,
+                collections,
+            },
+        )
+        .await
+    }
+
+    async fn nft_purse_request_receive_address(
+        &self,
+        cx: &CallContext,
+        session: &AuthoritySession,
+        target_product_id: String,
+        requested_by: String,
+        idempotency_key: String,
+    ) -> Result<[u8; 32], NftPurseAuthorityError> {
+        let session = self.current_private_session(session)?;
+        self.remote_nft_purse_allocate(
+            cx,
+            &session,
+            NftPurseAllocateRequest {
+                target_product_id,
+                requested_by,
+                idempotency_key,
+            },
+        )
+        .await
+    }
+
+    /// The paired signing host shows the sheet, signs, broadcasts and
+    /// verifies; its one answer arrives after inclusion, so no intermediate
+    /// progress reaches `_progress`.
+    async fn nft_purse_transfer(
+        &self,
+        cx: &CallContext,
+        session: &AuthoritySession,
+        product_id: String,
+        instance: u64,
+        to: [u8; 32],
+        _progress: TransferProgress,
+    ) -> Result<[u8; 32], NftPurseAuthorityError> {
+        let session = self.current_private_session(session)?;
+        self.remote_nft_purse_transfer(
+            cx,
+            &session,
+            NftPurseTransferRequest {
+                product_id,
+                instance,
+                to,
+            },
+        )
+        .await
     }
 
     async fn auto_signing_status(

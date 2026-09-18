@@ -38,8 +38,24 @@ pub(crate) enum NftPurseAuthorityError {
     #[display("{_0}")]
     Authority(AuthorityError),
     /// The service's own failure.
-    #[display("{_0:?}")]
+    #[display("{_0}")]
     Service(NftPurseError),
+}
+
+impl NftPurseAuthorityError {
+    /// Flatten into the service's error, the shape the SSO relay and the wire
+    /// carry: a missing session is `NotConnected`, a refusal is `Rejected`,
+    /// and any other authority failure keeps its reason.
+    pub(crate) fn into_service_error(self) -> NftPurseError {
+        match self {
+            Self::Authority(AuthorityError::Disconnected) => NftPurseError::NotConnected,
+            Self::Authority(AuthorityError::Rejected) => NftPurseError::Rejected,
+            Self::Authority(other) => NftPurseError::Unknown {
+                reason: other.to_string(),
+            },
+            Self::Service(error) => error,
+        }
+    }
 }
 
 impl From<AuthorityError> for NftPurseAuthorityError {

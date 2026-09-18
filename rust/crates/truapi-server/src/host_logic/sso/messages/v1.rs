@@ -4,6 +4,8 @@
 //! <https://github.com/paritytech/host-spec/blob/adb3989208ae1c2107dbf0159611353e6989422c/spec/B-inter-host.md?plain=1#L189-L208>
 //! Additional deployed variants are tracked as divergence D-B.5.6:
 //! <https://github.com/paritytech/host-spec/blob/adb3989208ae1c2107dbf0159611353e6989422c/divergences.md?plain=1#L26-L35>
+//! Indices 24..=29 carry the NFT purse requests a pairing host relays to the
+//! Account Holder; they are not yet in the host spec.
 
 use parity_scale_codec::{Decode, Encode};
 use truapi::latest::{
@@ -14,10 +16,11 @@ use truapi::latest::{
 use super::{
     CreateAccountProofResponse, CreateTransactionRequest, CreateTransactionResponse,
     CreateTransactionWithLegacyAccountRequest, GetAccountAliasResponse, ListRingVrfKeysResponse,
-    ProductRequest, ProductSubtreeRequest, ProductSubtreeResponse, RegisterRingVrfKeyResponse,
-    ResourceAllocationRequest, ResourceAllocationResponse, Response, RingVrfSignResponse,
-    SignRawWithLegacyAccountRequest, SignRawWithLegacyAccountResponse, SignRequest, SignResponse,
-    SignVrfResponse,
+    NftPurseAllocateRequest, NftPurseAllocateResponse, NftPurseListRequest, NftPurseListResponse,
+    NftPurseTransferRequest, NftPurseTransferResponse, ProductRequest, ProductSubtreeRequest,
+    ProductSubtreeResponse, RegisterRingVrfKeyResponse, ResourceAllocationRequest,
+    ResourceAllocationResponse, Response, RingVrfSignResponse, SignRawWithLegacyAccountRequest,
+    SignRawWithLegacyAccountResponse, SignRequest, SignResponse, SignVrfResponse,
 };
 
 /// v1 messages exchanged with the paired signing host over the encrypted SSO channel.
@@ -84,4 +87,23 @@ pub enum RemoteMessage {
     /// Account Holder's answer to [`RemoteMessage::RingVrfSignRequest`].
     #[codec(index = 23)]
     RingVrfSignResponse(Response<RingVrfSignResponse>),
+    /// List the NFTs in a product's purse.
+    #[codec(index = 24)]
+    NftPurseListRequest(NftPurseListRequest),
+    /// Account Holder's answer to [`RemoteMessage::NftPurseListRequest`].
+    #[codec(index = 25)]
+    NftPurseListResponse(Response<NftPurseListResponse>),
+    /// Allocate, or replay, an NFT purse receive key.
+    #[codec(index = 26)]
+    NftPurseAllocateRequest(NftPurseAllocateRequest),
+    /// Account Holder's answer to [`RemoteMessage::NftPurseAllocateRequest`].
+    #[codec(index = 27)]
+    NftPurseAllocateResponse(Response<NftPurseAllocateResponse>),
+    /// Ask the Account Holder to show, sign, broadcast and verify one NFT
+    /// purse transfer.
+    #[codec(index = 28)]
+    NftPurseTransferRequest(NftPurseTransferRequest),
+    /// Account Holder's answer to [`RemoteMessage::NftPurseTransferRequest`].
+    #[codec(index = 29)]
+    NftPurseTransferResponse(Response<NftPurseTransferResponse>),
 }

@@ -21,17 +21,20 @@ use crate::host_logic::product_account::{
 use crate::host_logic::sso::messages::{
     CreateAccountProofResponse, CreateTransactionLegacyPayload, CreateTransactionPayload,
     CreateTransactionRequest, CreateTransactionResponse, CreateTransactionWithLegacyAccountRequest,
-    GetAccountAliasResponse, ListRingVrfKeysResponse, OnExistingAllowancePolicy, ProductRequest,
-    ProductSubtreeRequest, ProductSubtreeResponse, RegisterRingVrfKeyResponse,
-    ResourceAllocationRequest, ResourceAllocationResponse, RingVrfSignResponse,
-    SignRawWithLegacyAccountRequest, SignRawWithLegacyAccountResponse, SignRequest, SignResponse,
-    SignVrfResponse, SsoAllocatedResource, SsoAllocationOutcome,
+    GetAccountAliasResponse, ListRingVrfKeysResponse, NftPurseAllocateRequest,
+    NftPurseAllocateResponse, NftPurseListRequest, NftPurseListResponse, NftPurseTransferRequest,
+    NftPurseTransferResponse, OnExistingAllowancePolicy, ProductRequest, ProductSubtreeRequest,
+    ProductSubtreeResponse, RegisterRingVrfKeyResponse, ResourceAllocationRequest,
+    ResourceAllocationResponse, RingVrfSignResponse, SignRawWithLegacyAccountRequest,
+    SignRawWithLegacyAccountResponse, SignRequest, SignResponse, SignVrfResponse,
+    SsoAllocatedResource, SsoAllocationOutcome,
 };
 use crate::host_logic::sso::wire::ResponseOutcome;
 use crate::runtime::authority::{
     AuthoritySession, CreateTransactionAuthorityRequest, ProductAuthority,
     SignPayloadAuthorityRequest, SignRawAuthorityRequest,
 };
+use crate::runtime::nft_purse::NftPurseAuthorityError;
 use crate::runtime::sso_service::{SsoReply, SsoRequestContext};
 
 /// SSO handlers served by a locally activated [`SigningHost`].
@@ -477,6 +480,64 @@ impl SigningHostSsoService {
             .product_subtree_public_key(&cx.call, &cx.session, request.product_id)
             .await
             .map_err(|err| err.to_string())
+    }
+
+    /// The items in a product's NFT purse, read from the chain here. The
+    /// pairing host already checked the product's grant.
+    async fn nft_purse_list(
+        &self,
+        cx: &SsoRequestContext,
+        request: NftPurseListRequest,
+    ) -> NftPurseListResponse {
+        ProductAuthority::nft_purse_list(
+            self.signing_host.as_ref(),
+            &cx.call,
+            &cx.session,
+            request.product_id,
+            request.collections,
+        )
+        .await
+        .map_err(NftPurseAuthorityError::into_service_error)
+    }
+
+    /// Allocate, or replay, an NFT purse receive key. Only this host's store
+    /// allocates, so paired hosts never hand out the same key.
+    async fn nft_purse_allocate(
+        &self,
+        cx: &SsoRequestContext,
+        request: NftPurseAllocateRequest,
+    ) -> NftPurseAllocateResponse {
+        ProductAuthority::nft_purse_request_receive_address(
+            self.signing_host.as_ref(),
+            &cx.call,
+            &cx.session,
+            request.target_product_id,
+            request.requested_by,
+            request.idempotency_key,
+        )
+        .await
+        .map_err(NftPurseAuthorityError::into_service_error)
+    }
+
+    /// Show the move as this host reads it from the chain, then sign,
+    /// broadcast and verify it. The one answer carries the including block, so
+    /// the pairing host sees no intermediate progress.
+    async fn nft_purse_transfer(
+        &self,
+        cx: &SsoRequestContext,
+        request: NftPurseTransferRequest,
+    ) -> NftPurseTransferResponse {
+        ProductAuthority::nft_purse_transfer(
+            self.signing_host.as_ref(),
+            &cx.call,
+            &cx.session,
+            request.product_id,
+            request.instance,
+            request.to,
+            Arc::new(|_| {}),
+        )
+        .await
+        .map_err(NftPurseAuthorityError::into_service_error)
     }
 
     /// Register a ring-VRF key owned by the calling product.

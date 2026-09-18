@@ -50,6 +50,12 @@ impl SsoError for HostAccountSignVrfError {
     }
 }
 
+impl SsoError for truapi::latest::NftPurseError {
+    fn not_connected() -> Self {
+        Self::NotConnected
+    }
+}
+
 /// Outcome code and reason recorded in the SSO transcript for one response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponseOutcome {

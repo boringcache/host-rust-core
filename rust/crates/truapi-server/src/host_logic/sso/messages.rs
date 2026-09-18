@@ -26,8 +26,8 @@ use parity_scale_codec::{Decode, Encode};
 use truapi::latest::{
     AccountId, AllocatableResource, HostAccountCreateProofResponse, HostAccountGetAliasResponse,
     HostAccountSignVrfError, HostSignPayloadRequest, HostSignPayloadResponse, HostSignRawRequest,
-    LegacyAccountTxPayload, ProductAccountTxPayload, RawPayload, RegisteredRingVrfKey,
-    VrfSignature,
+    LegacyAccountTxPayload, NftPurseError, NftPurseItem, ProductAccountTxPayload, RawPayload,
+    RegisteredRingVrfKey, VrfSignature,
 };
 
 use crate::host_logic::session::SsoSessionInfo;
@@ -297,6 +297,52 @@ pub struct ProductSubtreeRequest {
 
 /// Account Holder response carrying a product subtree public key.
 pub type ProductSubtreeResponse = Result<[u8; 32], String>;
+
+/// Request to list the NFTs in `product_id`'s purse. Covered by the grant the
+/// pairing host already checked; the Account Holder reads the chain.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct NftPurseListRequest {
+    /// Product whose purse is listed.
+    pub product_id: String,
+    /// Restrict the listing to these collections; `None` lists the whole purse.
+    pub collections: Option<Vec<u32>>,
+}
+
+/// Account Holder response carrying the purse's items.
+pub type NftPurseListResponse = Result<Vec<NftPurseItem>, NftPurseError>;
+
+/// Request to allocate, or replay, the next receive key in
+/// `target_product_id`'s purse for `requested_by`. Only the Account Holder
+/// allocates, so paired hosts never hand out the same key.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct NftPurseAllocateRequest {
+    /// Purse the key is allocated in.
+    pub target_product_id: String,
+    /// Product that asked for it.
+    pub requested_by: String,
+    /// Caller-chosen replay key; the same key returns the same address.
+    pub idempotency_key: String,
+}
+
+/// Account Holder response carrying the allocated purse key.
+pub type NftPurseAllocateResponse = Result<[u8; 32], NftPurseError>;
+
+/// Ask the Account Holder to move `instance` out of `product_id`'s purse to
+/// `to`. The Account Holder shows the consent sheet from its own chain read,
+/// signs, broadcasts and verifies, and answers once ownership is settled.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct NftPurseTransferRequest {
+    /// Product whose purse the item leaves.
+    pub product_id: String,
+    /// Instance being moved.
+    pub instance: u64,
+    /// Destination purse key.
+    pub to: [u8; 32],
+}
+
+/// Account Holder response carrying the including block once the destination
+/// holds the instance.
+pub type NftPurseTransferResponse = Result<[u8; 32], NftPurseError>;
 
 /// Request sent when a product asks the signing host to create a transaction
 /// for a product-derived account.
@@ -951,6 +997,100 @@ mod tests {
             Some(Response {
                 responding_to: "request".to_string(),
                 payload: Ok([0xAB; 32]),
+            })
+        );
+    }
+
+    /// The NFT purse requests sit at indices 24..=29, encode their fields in
+    /// declaration order, and carry the service's typed error back.
+    #[test]
+    fn nft_purse_messages_match_the_pinned_wire_indices() {
+        let list = RemoteMessage::request(
+            "request".to_string(),
+            NftPurseListRequest {
+                product_id: "cardclash.dot".to_string(),
+                collections: Some(vec![7]),
+            },
+        );
+        assert_eq!(
+            hex::encode(list.encode()),
+            "1c726571756573740018".to_string()
+                + "34"
+                + &hex::encode("cardclash.dot")
+                + "01"
+                + "04"
+                + "07000000"
+        );
+        let list_response = v1::RemoteMessage::NftPurseListResponse(Response {
+            responding_to: "request".to_string(),
+            payload: Err(NftPurseError::NotConnected),
+        });
+        assert_eq!(list_response.encode()[0], 0x19);
+        assert_eq!(
+            NftPurseListRequest::response_from_message(list_response),
+            Some(Response {
+                responding_to: "request".to_string(),
+                payload: Err(NftPurseError::NotConnected),
+            })
+        );
+
+        let allocate = RemoteMessage::request(
+            "request".to_string(),
+            NftPurseAllocateRequest {
+                target_product_id: "cardclash.dot".to_string(),
+                requested_by: "console.dot".to_string(),
+                idempotency_key: "mint-1".to_string(),
+            },
+        );
+        assert_eq!(
+            hex::encode(allocate.encode()),
+            "1c72657175657374001a".to_string()
+                + "34"
+                + &hex::encode("cardclash.dot")
+                + "2c"
+                + &hex::encode("console.dot")
+                + "18"
+                + &hex::encode("mint-1")
+        );
+        let allocate_response = v1::RemoteMessage::NftPurseAllocateResponse(Response {
+            responding_to: "request".to_string(),
+            payload: Ok([0xCD; 32]),
+        });
+        assert_eq!(allocate_response.encode()[0], 0x1b);
+        assert_eq!(
+            NftPurseAllocateRequest::response_from_message(allocate_response),
+            Some(Response {
+                responding_to: "request".to_string(),
+                payload: Ok([0xCD; 32]),
+            })
+        );
+
+        let transfer = RemoteMessage::request(
+            "request".to_string(),
+            NftPurseTransferRequest {
+                product_id: "console.dot".to_string(),
+                instance: 34,
+                to: [0x33; 32],
+            },
+        );
+        assert_eq!(
+            hex::encode(transfer.encode()),
+            "1c72657175657374001c".to_string()
+                + "2c"
+                + &hex::encode("console.dot")
+                + "2200000000000000"
+                + &"33".repeat(32)
+        );
+        let transfer_response = v1::RemoteMessage::NftPurseTransferResponse(Response {
+            responding_to: "request".to_string(),
+            payload: Err(NftPurseError::Locked { until: 60 }),
+        });
+        assert_eq!(transfer_response.encode()[0], 0x1d);
+        assert_eq!(
+            NftPurseTransferRequest::response_from_message(transfer_response),
+            Some(Response {
+                responding_to: "request".to_string(),
+                payload: Err(NftPurseError::Locked { until: 60 }),
             })
         );
     }
