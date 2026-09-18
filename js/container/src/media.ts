@@ -110,6 +110,21 @@ export function installMediaPolicy(
     }
   }
 
+  if (typeof devices?.getDisplayMedia === 'function') {
+    lockMethod(devices, 'getDisplayMedia', function () {
+      return new NativePromise(
+        (_resolve: unknown, reject: (error: unknown) => void) => {
+          reject(
+            new NativeDOMException(
+              'Screen capture is not allowed',
+              'NotAllowedError',
+            ),
+          );
+        },
+      );
+    });
+  }
+
   if (typeof nativeGetUserMedia === 'function') {
     lockMethod(devices, 'getUserMedia', function (this: any, input: any) {
       return new NativePromise(

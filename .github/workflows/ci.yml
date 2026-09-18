@@ -575,7 +575,9 @@ jobs:
         run: npm test --prefix js/packages/truapi
 
       - name: Test shared product container
-        run: bun test js/container/src
+        run: |
+          npm ci --prefix js/container --ignore-scripts
+          bun test js/container/src
 
       - name: Test product preparation
         run: |

@@ -340,6 +340,7 @@ impl ProductRuntimeHost {
             self.authority.sign_statement_store_product_payload(
                 &cx,
                 &session,
+                Some(self.product_id().as_str()),
                 product_account_id,
                 payload,
             ),

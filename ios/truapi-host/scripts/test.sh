@@ -4,7 +4,7 @@ set -euo pipefail
 TRUAPI_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$TRUAPI_ROOT"
 
-generator="$TRUAPI_ROOT/.agent/tools/xcodegen/2.46.0"
+generator="$TRUAPI_ROOT/target/tools/xcodegen/2.46.0"
 if [[ ! -x "$generator/xcodegen/bin/xcodegen" ]]; then
   mkdir -p "$generator"
   curl --fail --location --silent --show-error \
