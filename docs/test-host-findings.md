@@ -1412,6 +1412,53 @@ The statement refusals (`getSubmittedStatements`, `injectStatement`,
 mechanism has already shifted once under the allowance port, as section 27
 records.
 
+## 31. Can an enrolled identity be created? What the escape hatches actually do
+
+Short answer: not with anything in this repo. Three candidates looked like they
+might grant personhood and none of them does.
+
+**`development_context_bytes`** is a real dev escape hatch -- it is even marked
+`TODO(development_createAccountProof): dev-only ... yet to be removed before a
+production release`. But it only changes the proof *context*: a `raw:` product
+id, which dotNS cannot issue, makes the suffix the context verbatim. Membership
+is untouched.
+
+**`StubRingResolver`** exists and implements the `RingResolver` trait, so it
+looks like the substitution point. It is inside `#[cfg(test)]`, reachable only
+from Rust unit tests. More to the point, the allowance path does not go through
+`RingResolver` at all: `statement_allowance.rs:584` scans the chain itself, which
+is where `no ring includes our member key` comes from.
+
+**`chainResponses`** replays canned JSON-RPC frames, but positionally and in
+order rather than matched to requests. Scripting a ring scan's storage reads
+through it would be guesswork that breaks on any reordering.
+
+The CLI has no enrolment command either. `register-name` is explicit: it
+"requires a recognized full person". The CLI can prove membership and spend it;
+it cannot grant it.
+
+### The workaround that does work: a chain you control
+
+`chainProxies` opens `new WebSocket(proxy.rpcUrl)` with no scheme check and no
+allowlist, so a loopback endpoint is as valid as a public one. A two-chain local
+setup configures cleanly today:
+
+```ts
+networks: [
+  { id: "local-asset-hub", genesisHash: HUB_GENESIS,    rpcUrl: "ws://127.0.0.1:9944" },
+  { id: "local-people",    genesisHash: PEOPLE_GENESIS, rpcUrl: "ws://127.0.0.1:9945" },
+]
+```
+
+Both roles resolve from the id suffixes, both proxies get hashed, and the
+runtime config declares both. On a local People chain with sudo, a key can be
+put in a ring directly, and with the explicit-entropy support from section 30
+the browser host can then sign as it. That closes the loop with no dependency on
+a public testnet or on anyone else's enrolment.
+
+What this repo does not provide is the node: the `people-next` runtime is not
+vendored here, so standing one up is the cost of this route.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is
