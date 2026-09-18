@@ -38,8 +38,9 @@ const authorizationResponse = scale.Result(
 );
 
 interface NetworkOperation {
+  url: string;
   active: boolean;
-  authorizations: Map<string, Authorization>;
+  authorization?: Authorization;
 }
 export function browserAssets(): Promise<BrowserAssets> {
   return (assetPromise ??= (async () => {
@@ -171,7 +172,7 @@ export async function runBrowserScript(
       const request = networkRequest(event.requestId);
       const needsAuthorization = event.type === "Fetch" || event.type === "XHR";
       if (needsAuthorization && !operations.has(event.requestId)) {
-        const operation = { active: true, authorizations: new Map() };
+        const operation = { url: event.request.url, active: true };
         operations.set(event.requestId, operation);
         request.resolve(operation);
       } else if (
@@ -189,8 +190,7 @@ export async function runBrowserScript(
       const operation = operations.get(requestId);
       if (operation) {
         operation.active = false;
-        for (const authorization of operation.authorizations.values())
-          authorization.cancel();
+        operation.authorization?.cancel();
         operations.delete(requestId);
       }
       networkRequests.get(requestId)?.resolve();
@@ -226,13 +226,10 @@ export async function runBrowserScript(
           if (["http:", "https:"].includes(url.protocol) && event.networkId) {
             operation = await networkRequest(event.networkId).ready;
             if (operation?.active) {
-              const host = url.hostname.replace(/\.$/, "");
-              let authorization = operation.authorizations.get(host);
-              if (!authorization) {
-                authorization = authorizeNetworkRequest(url.href);
-                operation.authorizations.set(host, authorization);
-              }
-              const allowed = await authorization.result;
+              operation.authorization ??= authorizeNetworkRequest(
+                operation.url,
+              );
+              const allowed = await operation.authorization.result;
               if (!operation.active) return;
               if (allowed) {
                 await session.send("Fetch.continueRequest", {

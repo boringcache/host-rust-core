@@ -496,11 +496,10 @@ so its pairing runs only for the current process and `/devices` is unavailable.
 A product script is top-level JavaScript or TypeScript run as a browser ES
 module. The CLI uses the same `js/container` code as the native iOS host and
 the shared Rust Remote permission policy. In the CLI, the trusted launcher asks
-Rust to authorize each destination host when Chromium intercepts an outgoing fetch or XHR.
-It uses the product's existing connection and consumes a one-use grant once per
-host in that operation, including CORS preflights and same-host redirects.
-A redirect to a different host requires its own authorization. XHR supports asynchronous requests with native
-headers and response types; synchronous XHR is unavailable. Browser CORS rules still apply.
+Rust to authorize the initial URL when Chromium intercepts an outgoing fetch or XHR.
+One approval covers the request, its CORS preflights and redirects, matching native
+hosts. XHR supports asynchronous requests with native headers and response types;
+synchronous XHR is unavailable. Browser CORS rules still apply.
 
 Permission prompts name the requested domains or capability and offer Allow once,
 Allow always and Deny. A domain grant covers every port on that host, including

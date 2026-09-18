@@ -173,7 +173,7 @@ for (const api of ["fetch", "XHR"] as const) {
   }, 20_000);
 }
 
-test("cross-host redirects require their own authorization", async () => {
+test("cross-host redirects use the initial request's authorization", async () => {
   const hits: string[] = [];
   const authorizations: string[] = [];
   const target = Bun.serve({
@@ -204,17 +204,17 @@ test("cross-host redirects require their own authorization", async () => {
   });
   try {
     for (const api of ["fetch", "XHR"] as const) {
-      for (const allowDestination of [false, true]) {
+      for (const allowRequest of [false, true]) {
         hits.length = 0;
         authorizations.length = 0;
         await runBrowserScript({
           source: `
             ${requestScript(api)}
             const endpoint = ${JSON.stringify(redirect.url.href)};
-            if (${allowDestination}) {
+            if (${allowRequest}) {
               assert(await (await request(endpoint)).text() === 'authorized');
             } else {
-              try { await request(endpoint); throw new Error('redirect destination escaped authorization'); }
+              try { await request(endpoint); throw new Error('denied request was sent'); }
               catch (error) { assert(error instanceof TypeError); }
             }
           `,
@@ -222,13 +222,13 @@ test("cross-host redirects require their own authorization", async () => {
           provider,
           authorize: async (url) => {
             authorizations.push(url);
-            return new URL(url).hostname === "127.0.0.1" || allowDestination;
+            return allowRequest && url === redirect.url.href;
           },
           timeoutMs: 10_000,
         });
         expect({ hits, authorizations }).toEqual({
-          hits: allowDestination ? ["allowed", "destination"] : ["allowed"],
-          authorizations: [redirect.url.href, destination.href],
+          hits: allowRequest ? ["allowed", "destination"] : [],
+          authorizations: [redirect.url.href],
         });
       }
     }

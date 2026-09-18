@@ -825,11 +825,10 @@ the browser SDK shipped with the host. Product preparation does not execute
 package hooks or compile-time product code.
 
 The container sends fetch and XHR intent through its private port. The trusted launcher
-intercepts the actual request and asks Rust to authorize its destination host on
+intercepts the actual request and asks Rust to authorize its initial host on
 the product's existing connection. Chromium request IDs associate CORS preflights
-and redirects with the operation. Approval is reused for the same normalized host;
-each new redirect host requires authorization, consuming its own one-use grant
-when applicable.
+and redirects with the operation. One approval covers the entire operation,
+including redirects to other hosts, matching native fetch/XHR behavior.
 Aborting a request invalidates its pending authorization. XHR keeps native request
 headers, response types and events after authorization; synchronous XHR is unavailable.
 CORS remains browser-enforced. Remote WebSockets are opened by a trusted launcher broker after
@@ -847,7 +846,7 @@ consent outside the product realm. CLI browser tests exercise that enforcement;
 the shared container tests separately cover denial through its private port.
 
 Chromium's local-network permission is scoped to the synthetic product origin.
-Without it, even Rust-approved loopback requests fail. Each destination still
+Without it, even Rust-approved loopback requests fail. Each operation's initial host
 passes Rust authorization; host-scoped grants include all ports and the prompt
 states this. CSP restricts protocols and disables JavaScript evaluation, workers and frames;
 WebAssembly compilation remains available. CDP applies the destination permission check.
