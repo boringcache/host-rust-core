@@ -496,7 +496,7 @@ so its pairing runs only for the current process and `/devices` is unavailable.
 A product script is top-level JavaScript or TypeScript run as a browser ES
 module. The CLI uses the same `js/container` code as the native iOS host and
 the shared Rust Remote permission policy. In the CLI, the trusted launcher asks
-Rust to authorize the initial URL when Chromium intercepts an outgoing fetch or XHR.
+Rust to authorize the initial destination host when Chromium intercepts an outgoing fetch or XHR.
 It uses the product's existing connection and consumes a one-use grant only
 once, including requests with CORS preflights. Native requests follow redirects
 without asking about each destination. XHR supports asynchronous requests with native

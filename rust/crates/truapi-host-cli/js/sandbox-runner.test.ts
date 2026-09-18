@@ -5,16 +5,13 @@ import {
   MESSAGE_TYPE_REQUEST,
   MESSAGE_TYPE_RESPONSE,
   scale,
+  VersionedRemotePermissionRequest,
   VersionedRemotePermissionResponse,
   VersionedRemotePermissionError,
   type ProtocolMessage,
   type WireProvider,
 } from "@parity/truapi";
-import {
-  VersionedAuthorizeNetworkAccessResponse,
-  VersionedAuthorizeNetworkAccessError,
-} from "../../../../js/packages/truapi/src/generated/internal.ts";
-import { PERMISSIONS_AUTHORIZE_NETWORK_ACCESS } from "../../../../js/packages/truapi/src/generated/wire-table.ts";
+import { PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION } from "../../../../js/packages/truapi/src/generated/wire-table.ts";
 import { runBrowserScript } from "./sandbox-runner.ts";
 
 const provider = {
@@ -26,23 +23,15 @@ const provider = {
 } satisfies WireProvider;
 
 function reply(request: ProtocolMessage, allowed: boolean): Uint8Array {
-  const value =
-    request.payload.methodId === PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method
-      ? scale
-          .Result(
-            VersionedAuthorizeNetworkAccessResponse,
-            scale.CallError(VersionedAuthorizeNetworkAccessError),
-          )
-          .enc({ success: true, value: { tag: "V1", value: { allowed } } })
-      : scale
-          .Result(
-            VersionedRemotePermissionResponse,
-            scale.CallError(VersionedRemotePermissionError),
-          )
-          .enc({
-            success: true,
-            value: { tag: "V1", value: { granted: allowed } },
-          });
+  const value = scale
+    .Result(
+      VersionedRemotePermissionResponse,
+      scale.CallError(VersionedRemotePermissionError),
+    )
+    .enc({
+      success: true,
+      value: { tag: "V1", value: { granted: allowed } },
+    });
   return encodeWireMessage({
     ...request,
     payload: { ...request.payload, messageType: MESSAGE_TYPE_RESPONSE, value },
@@ -424,8 +413,8 @@ test("product frames cannot use the interceptor's reserved request IDs", async (
   const request = encodeWireMessage({
     requestId: "__truapi_cli_network__:1",
     payload: {
-      traitId: PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.trait,
-      methodId: PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method,
+      traitId: PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.trait,
+      methodId: PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.method,
       messageType: MESSAGE_TYPE_REQUEST,
       value: new Uint8Array(),
     },
@@ -482,8 +471,16 @@ for (const api of ["fetch", "XHR"] as const) {
         ids.push(request.requestId);
         if (
           request.payload.methodId ===
-          PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method
+          PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.method
         ) {
+          expect(
+            VersionedRemotePermissionRequest.dec(request.payload.value),
+          ).toEqual({
+            tag: "V1",
+            value: {
+              permission: { tag: "Remote", value: { domains: ["127.0.0.1"] } },
+            },
+          });
           if (grant) {
             authorizationRequest = request;
             flush();
@@ -572,7 +569,7 @@ for (const api of ["fetch", "XHR"] as const) {
         const request = decodeWireMessage(frame)._unsafeUnwrap();
         if (
           request.payload.methodId ===
-          PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method
+          PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.method
         ) {
           authorizations++;
           if (authorizations === 1) {
@@ -703,11 +700,19 @@ test("one WebSocket grant covers messages but the next connection needs permissi
     postMessage(frame) {
       const request = decodeWireMessage(frame)._unsafeUnwrap();
       expect(request.payload.methodId).toBe(
-        PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method,
+        PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.method,
       );
       expect(request.requestId.startsWith("__truapi_cli_network__:")).toBe(
         true,
       );
+      expect(
+        VersionedRemotePermissionRequest.dec(request.payload.value),
+      ).toEqual({
+        tag: "V1",
+        value: {
+          permission: { tag: "Remote", value: { domains: ["127.0.0.1"] } },
+        },
+      });
       receive(reply(request, ++authorizations === 1));
     },
     subscribe(listener) {
@@ -797,7 +802,8 @@ test("closing pending WebSocket authorization prevents late approvals and forged
     postMessage(frame) {
       const request = decodeWireMessage(frame)._unsafeUnwrap();
       if (
-        request.payload.methodId === PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method
+        request.payload.methodId ===
+        PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.method
       ) {
         if (++authorizations === 1) {
           pendingAuthorization = request;

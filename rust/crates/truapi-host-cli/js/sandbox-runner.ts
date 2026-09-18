@@ -6,14 +6,12 @@ import {
   MESSAGE_TYPE_REQUEST,
   MESSAGE_TYPE_RESPONSE,
   scale,
+  VersionedRemotePermissionRequest,
+  VersionedRemotePermissionResponse,
+  VersionedRemotePermissionError,
   type WireProvider,
 } from "../../../../js/packages/truapi/src/index.ts";
-import {
-  VersionedAuthorizeNetworkAccessRequest,
-  VersionedAuthorizeNetworkAccessResponse,
-  VersionedAuthorizeNetworkAccessError,
-} from "../../../../js/packages/truapi/src/generated/internal.ts";
-import { PERMISSIONS_AUTHORIZE_NETWORK_ACCESS } from "../../../../js/packages/truapi/src/generated/wire-table.ts";
+import { PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION } from "../../../../js/packages/truapi/src/generated/wire-table.ts";
 import { buildProductScript } from "./sandbox-build.ts";
 import { buildBrowserAssets, type BrowserAssets } from "./browser-assets.ts";
 import { wsProvider } from "./ws-provider.ts";
@@ -35,8 +33,8 @@ export interface BrowserScriptOptions {
 let assetPromise: Promise<BrowserAssets> | undefined;
 const authorizationPrefix = "__truapi_cli_network__:";
 const authorizationResponse = scale.Result(
-  VersionedAuthorizeNetworkAccessResponse,
-  scale.CallError(VersionedAuthorizeNetworkAccessError),
+  VersionedRemotePermissionResponse,
+  scale.CallError(VersionedRemotePermissionError),
 );
 
 interface NetworkOperation {
@@ -271,19 +269,21 @@ export async function runBrowserScript(
         const request = decoded.value;
         if (
           request.payload.traitId !==
-            PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.trait ||
+            PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.trait ||
           request.payload.methodId !==
-            PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method ||
+            PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.method ||
           request.payload.messageType !== MESSAGE_TYPE_REQUEST
         )
           throw new Error("Invalid authorization method");
-        const { url } = VersionedAuthorizeNetworkAccessRequest.dec(
+        const { permission } = VersionedRemotePermissionRequest.dec(
           request.payload.value,
         ).value;
         // CLI authorization belongs to the intercepted request, so cancellation cannot leave a reusable grant.
-        const allowed = ["http:", "https:", "ws:", "wss:"].includes(
-          new URL(url).protocol,
-        );
+        const granted =
+          permission.tag === "Remote" &&
+          permission.value.domains.length === 1 &&
+          permission.value.domains[0] !== "" &&
+          !permission.value.domains[0].includes("*");
         const response = encodeWireMessage({
           requestId: request.requestId,
           payload: {
@@ -291,7 +291,7 @@ export async function runBrowserScript(
             messageType: MESSAGE_TYPE_RESPONSE,
             value: authorizationResponse.enc({
               success: true,
-              value: { tag: "V1", value: { allowed } },
+              value: { tag: "V1", value: { granted } },
             }),
           },
         });
@@ -368,8 +368,8 @@ export async function runBrowserScript(
       ) {
         const { requestId, payload } = decoded.value;
         if (
-          payload.traitId !== PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.trait ||
-          payload.methodId !== PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method ||
+          payload.traitId !== PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.trait ||
+          payload.methodId !== PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.method ||
           payload.messageType !== MESSAGE_TYPE_RESPONSE
         )
           return;
@@ -377,7 +377,7 @@ export async function runBrowserScript(
         if (!finish) return;
         try {
           const response = authorizationResponse.dec(payload.value);
-          finish(response.success && response.value.value.allowed);
+          finish(response.success && response.value.value.granted);
         } catch {
           finish(false);
         }
@@ -448,15 +448,29 @@ export async function runBrowserScript(
       };
       privateRequests.set(requestId, finish);
       try {
+        const destination = new URL(url);
+        if (
+          !["http:", "https:", "ws:", "wss:"].includes(destination.protocol) ||
+          !destination.hostname ||
+          destination.hostname.includes("*")
+        )
+          throw new Error(
+            "Network access requires a concrete HTTP(S) or WS(S) URL",
+          );
         const request = encodeWireMessage({
           requestId,
           payload: {
-            traitId: PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.trait,
-            methodId: PERMISSIONS_AUTHORIZE_NETWORK_ACCESS.method,
+            traitId: PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.trait,
+            methodId: PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.method,
             messageType: MESSAGE_TYPE_REQUEST,
-            value: VersionedAuthorizeNetworkAccessRequest.enc({
+            value: VersionedRemotePermissionRequest.enc({
               tag: "V1",
-              value: { url },
+              value: {
+                permission: {
+                  tag: "Remote",
+                  value: { domains: [destination.hostname] },
+                },
+              },
             }),
           },
         })._unsafeUnwrap();

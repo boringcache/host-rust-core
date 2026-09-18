@@ -1690,7 +1690,7 @@ reports:
 - `Notifications/cancel_push_notification`
 - `Permissions/request_device_permission`
 - `Permissions/request_remote_permission`
-- `Permissions/authorize_network_access`
+- `Permissions/authorize_remote_permission`
 - `Preimage/lookup_subscribe`
 - `Preimage/submit`
 - `Resource Allocation/request`
