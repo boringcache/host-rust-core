@@ -134,17 +134,14 @@ pub struct PairedSsoPeer {
 
 /// Host notified when a device finishes pairing with this signing host.
 ///
-/// The core owns the pairing protocol and nothing past it. Telling the user's
-/// existing chat contacts that a new device joined is the host's to do, because
-/// the core has no chat of its own. Optional, like every host adapter: a host
-/// that installs no observer is told nothing and pairs unchanged.
+/// The core has no chat of its own, so announcing a new device to the user's
+/// existing contacts belongs to the host.
 ///
 /// Arrives on the thread answering the handshake, while the pairing call is
 /// still running, so hand the device off rather than announcing it inline.
 pub trait DevicePairingObserver: Send + Sync {
     /// `device` paired: its handshake answer reached the Statement Store, so
-    /// the session is live and the host can resume or disconnect that device
-    /// later by this same value.
+    /// the session is live.
     fn device_paired(&self, device: PairedSsoPeer);
 }
 
@@ -299,9 +296,8 @@ async fn establish_pairing_session(
     )
     .await?;
     debug!("answered pairing handshake");
-    // Only once the answer is on the Statement Store: before that the peer has
-    // nothing to pair with, and a host told otherwise would announce a device
-    // over a session that never opened.
+    // A host told before the submit lands would announce a device over a
+    // session that never opened.
     if let Some(observer) = services.device_pairing_observer() {
         observer.device_paired(peer);
     }
@@ -1418,8 +1414,6 @@ mod tests {
         }
     }
 
-    /// Build the pairing deeplink a device with `peer`'s public material would
-    /// present.
     fn pairing_deeplink(peer: PairedSsoPeer) -> String {
         let proposal = VersionedHandshakeProposal::V2(v2::Proposal {
             device: v2::Device {
@@ -1437,7 +1431,6 @@ mod tests {
         )
     }
 
-    /// Records every device the responder reports as paired.
     #[derive(Default)]
     struct RecordingPairingObserver {
         paired: std::sync::Mutex<Vec<PairedSsoPeer>>,
@@ -1461,7 +1454,6 @@ mod tests {
         }
     }
 
-    /// A host with a statement-store stub that accepts one handshake answer.
     fn pairing_fixture(
         submit_status: &'static str,
     ) -> (Arc<RuntimeServices>, Arc<SigningHost>, Arc<StubPlatform>) {
@@ -1476,10 +1468,8 @@ mod tests {
         (services, signing_host, platform)
     }
 
-    /// The core answers the handshake and stops there: it has no chat of its
-    /// own, so announcing the new device to the user's contacts is the host's.
-    /// Without this the host never learns a device paired and no contact is
-    /// told.
+    /// Without this the host never learns a device paired, so no contact is
+    /// told a new device joined.
     #[test]
     fn a_paired_device_is_reported_to_the_host() {
         let peer = PairedSsoPeer {
@@ -1500,16 +1490,15 @@ mod tests {
         assert_eq!(observer.paired(), vec![peer]);
     }
 
-    /// A handshake the peer never received did not pair anything. Reporting it
-    /// would have the host announce a device to every contact over a session
-    /// that does not exist.
+    /// Reporting a handshake the peer never received would have the host
+    /// announce a device over a session that does not exist.
     #[test]
     fn a_handshake_that_never_landed_reports_no_device() {
         let peer = PairedSsoPeer {
             statement_account_id: [0x31; 32],
             encryption_public_key: x25519_public_key([0x42; 32]),
         };
-        // Neither `new` nor `known`: the submit is rejected.
+        // Neither "new" nor "known", so the submit is rejected.
         let (services, signing_host, _platform) = pairing_fixture("ignored");
         let observer = Arc::new(RecordingPairingObserver::default());
         assert!(services.install_device_pairing_observer(observer.clone()));
@@ -1520,8 +1509,8 @@ mod tests {
             &pairing_deeplink(peer),
         ))
         .expect_err("a rejected handshake submit fails the pairing");
-        // Pinned so the test cannot pass on a failure from somewhere earlier,
-        // which would leave the reporting rule itself unexercised.
+        // Without this the test would also pass on a failure from earlier,
+        // leaving the rule unexercised.
         assert!(
             failure.contains("statement_submit not accepted"),
             "pairing failed before the handshake submit: {failure}"
@@ -1530,8 +1519,6 @@ mod tests {
         assert_eq!(observer.paired(), Vec::new());
     }
 
-    /// The observer is optional, like every host adapter. A host that installs
-    /// none still pairs.
     #[test]
     fn pairing_without_an_observer_still_answers_the_handshake() {
         let peer = PairedSsoPeer {

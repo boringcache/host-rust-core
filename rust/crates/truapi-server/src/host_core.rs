@@ -3055,8 +3055,8 @@ mod tests {
         }
     }
 
-    /// The observer that announces a new device is set once, so a second
-    /// installer cannot take over the announcement between two pairings.
+    /// A second installer must not take over the announcement between two
+    /// pairings.
     #[test]
     fn the_device_pairing_observer_is_installed_once() {
         use truapi_platform::{HostInfo, PlatformInfo, SigningHostConfig};
