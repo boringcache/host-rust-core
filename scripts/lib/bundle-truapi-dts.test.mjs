@@ -32,9 +32,9 @@ test("playground declarations expose the SDK without container or debugger inter
     "generated/client.d.ts":
       'import * as T from "./types.js";\nexport declare function requestRemotePermission(request: T.RemotePermissionRequest): void;\n',
     "generated/internal.d.ts":
-      'import * as T from "./types.js";\nexport declare function authorizeNetworkAccess(request: T.RemotePermissionRequest): void;\n',
+      'import * as T from "./types.js";\nexport declare function authorizeRemotePermission(request: T.RemotePermissionRequest): void;\n',
     "generated/wire-table.d.ts":
-      "export declare const PERMISSIONS_AUTHORIZE_NETWORK_ACCESS: { trait: 8; method: 2 };\n",
+      "export declare const PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION: { trait: 8; method: 2 };\n",
     "generated/wire-decode.d.ts":
       "export declare const WIRE_DECODE_TABLE: Record<number, unknown>;\n",
     "playground/codegen/services.d.ts":
@@ -56,8 +56,8 @@ test("playground declarations expose the SDK without container or debugger inter
     "export import RemotePermissionRequest = T.RemotePermissionRequest": true,
     "function requestRemotePermission": true,
     "type Codec<T>": true,
-    authorizeNetworkAccess: false,
-    PERMISSIONS_AUTHORIZE_NETWORK_ACCESS: false,
+    authorizeRemotePermission: false,
+    PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION: false,
     WIRE_DECODE_TABLE: false,
     "const services": false,
   };

@@ -65,7 +65,6 @@ pub use signing_host::{PairedSsoPeer, ResponderExit};
 pub use signing_host::{StatementRenewalTarget, TrackedStatementRenewalTarget};
 use tracing::{instrument, warn};
 use truapi::api::{Chat, Pocket, Renderer};
-use truapi::latest::{GenericError, RemotePermission, RemotePermissionRequest};
 use truapi::versioned::account::{HostAccountGetError, HostAccountSignVrfError};
 use truapi::versioned::chat::{
     HostChatActionSubscribeError, HostChatActionSubscribeItem, HostChatActionSubscribeRequest,
@@ -604,30 +603,6 @@ impl ProductRuntimeHost {
 }
 
 impl ProductRuntimeHost {
-    /// Apply the bound product's permissions to a concrete network destination.
-    #[instrument(skip_all, fields(runtime.method = "permissions.authorize_network_access"))]
-    pub(crate) async fn authorize_network_access(
-        &self,
-        url: String,
-    ) -> Result<PermissionAuthorizationStatus, GenericError> {
-        let host = url::Url::parse(&url)
-            .ok()
-            .filter(|url| matches!(url.scheme(), "http" | "https" | "ws" | "wss"))
-            .and_then(|url| url.host_str().map(truapi_platform::normalize_remote_domain))
-            .filter(|host| !host.is_empty() && !host.contains('*'))
-            .ok_or_else(|| GenericError {
-                reason: "network access requires a concrete HTTP(S) or WS(S) URL".to_string(),
-            })?;
-        let product_id = self.product_id();
-        self.permissions_service(&product_id)
-            .authorize_remote(RemotePermissionRequest {
-                permission: RemotePermission::Remote {
-                    domains: vec![host],
-                },
-            })
-            .await
-    }
-
     /// Read a stored permission authorization status without prompting.
     ///
     /// A device capability also resolves the host application's OS gate, so an
