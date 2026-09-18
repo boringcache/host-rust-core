@@ -544,7 +544,6 @@ jobs:
     if: needs.changes.outputs.cli_package == 'true'
     env:
       TRUAPI_REQUIRE_GENERATED: 1
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/truapi-browsers
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -565,6 +564,7 @@ jobs:
 
       - name: Install and build the client
         run: |
+          echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/truapi-browsers" >> "$GITHUB_ENV"
           npm ci --ignore-scripts
           npm run build --prefix js/packages/truapi
 
