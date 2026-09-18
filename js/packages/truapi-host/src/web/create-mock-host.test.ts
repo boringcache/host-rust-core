@@ -543,18 +543,19 @@ describe("statement injection through the chain connection", () => {
 
     expect(host.injectStatement(new Uint8Array([1, 2, 3]))).toBe(1);
 
-    const frame = JSON.parse((await reader.next()).value as string) as {
-      method: string;
+    // Compared whole: the core reads `result.data.statements`, and asserting
+    // the fields one by one would not catch an envelope carrying extra keys.
+    expect(JSON.parse((await reader.next()).value as string)).toEqual({
+      jsonrpc: "2.0",
+      method: "statement_subscribeStatement",
       params: {
-        subscription: string;
-        result: { event: string; data: { statements: string[] } };
-      };
-    };
-    expect(frame.method).toBe("statement_subscribeStatement");
-    expect(frame.params.subscription).toBe("sub-1");
-    // The envelope the core reads: `result.data.statements`, hex-encoded.
-    expect(frame.params.result.event).toBe("newStatements");
-    expect(frame.params.result.data.statements).toEqual(["0x010203"]);
+        subscription: "sub-1",
+        result: {
+          event: "newStatements",
+          data: { statements: ["0x010203"], remaining: 0 },
+        },
+      },
+    });
   });
 
   it("reaches nothing before the product subscribes", async () => {
