@@ -303,7 +303,7 @@ export type WorkerToMain =
  * Cleartext is the right call *because* the target is loopback-only. TLS defends
  * against a party on the path, and a loopback socket has no path: the frames
  * never reach an interface. `wss://` would instead require the debugger to
- * present a certificate — unobtainable for `localhost` from a real CA, and
+ * present a certificate, unobtainable for `localhost` from a real CA, and
  * self-signed on iOS costs the developer a CA install plus a manual enable under
  * Settings → General → About → Certificate Trust Settings before a single frame
  * arrives. So `wss://` buys no confidentiality here and costs setup, while adding
@@ -322,6 +322,11 @@ export type WorkerToMain =
  * `url` string is passed to `new WebSocket(url)` below, so the browser resolves
  * exactly what was validated. The Rust "validate one string, dial another" gap
  * cannot open here because there is only ever one string.
+ *
+ * The accepted set is the one the native sink accepts, so a dial that works in
+ * one host works in the other: `localhost`, 127.0.0.0/8, and `::1`. An
+ * IPv4-mapped literal such as `ws://[::ffff:127.0.0.1]` is refused in both,
+ * because `Ipv6Addr::is_loopback` on the native side matches only `::1`.
  */
 export function isLoopbackWsUrl(url: string): boolean {
   try {
@@ -331,9 +336,7 @@ export function isLoopbackWsUrl(url: string): boolean {
     return (
       host === "localhost" ||
       host === "::1" ||
-      /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
-      // IPv4-mapped loopback: WHATWG serializes ::ffff:127.x.y.z as ::ffff:7fxx:yyyy.
-      /^::ffff:7f[0-9a-f]{2}:/.test(host)
+      /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
     );
   } catch {
     return false;

@@ -11,8 +11,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Window } from "happy-dom";
 
 import {
+  installDebuggerDial,
   productionReason,
-  renderDebuggerIndicator,
+  releaseDebuggerDial,
   resolveDebuggerEnablement,
 } from "./create-worker-host-runtime.js";
 import { FakeWorker, readyRuntime } from "./worker-test-harness.js";
@@ -159,22 +160,53 @@ describe("productionReason", () => {
   });
 });
 
-describe("the dial indicator", () => {
+// What a resolved dial actually does, which is the half the suites above cannot
+// reach: they go through the live `import.meta.env.DEV` gate, so `url` is always
+// null there and every dev-build behaviour is invisible. `installDebuggerDial`
+// takes the enablement instead of resolving it, so the resolved case is
+// reachable here.
+describe("putting a dial into service", () => {
+  const ENDPOINT = "ws://127.0.0.1:9231";
+  const OTHER = "ws://127.0.0.1:9300";
+
   // A real DOM, not a stand-in: the badge touches createElement/appendChild/
   // getElementById/remove, and a hand-rolled fake would be asserting the fake.
   const g = globalThis as unknown as { document?: unknown };
   let had = false;
   let previous: unknown;
+  let owners: object[] = [];
 
   beforeEach(() => {
     had = Object.prototype.hasOwnProperty.call(g, "document");
     previous = g.document;
     g.document = new Window().document;
+    owners = [];
   });
   afterEach(() => {
+    // The dial registry is module state and outlives this document, so a dial
+    // left in it would paint into the next test's page.
+    for (const owner of owners) releaseDebuggerDial(owner);
     if (had) g.document = previous;
     else delete g.document;
   });
+
+  /** A stand-in for one worker runtime, released when the test ends. */
+  const newOwner = (): object => {
+    const owner = {};
+    owners.push(owner);
+    return owner;
+  };
+
+  /** Install a dial for a fresh owner. */
+  const dial = (url: string | null, indicator?: boolean): object => {
+    const owner = newOwner();
+    installDebuggerDial(
+      owner,
+      { url, reason: url === null ? "not-configured" : "enabled-from-option" },
+      indicator,
+    );
+    return owner;
+  };
 
   const badge = (): { textContent: string | null } | null =>
     (
@@ -183,24 +215,76 @@ describe("the dial indicator", () => {
       }
     ).getElementById("truapi-debugger-indicator");
 
-  // PG's requirement: a host streaming frames must say so where you can see it,
-  // not only in a console line that scrolls away.
-  it("names the endpoint while a dial is live", () => {
-    renderDebuggerIndicator("ws://127.0.0.1:9231", undefined);
-    expect(badge()?.textContent).toContain("ws://127.0.0.1:9231");
+  // The live wiring, asserted as one thing. A runtime that resolves a dial has
+  // to report it, show it (PG's requirement: a host streaming frames says so
+  // where you can see it, not only in a console line that scrolls away), and
+  // hand that same URL to the worker, or the host and what it is doing part
+  // company. Dropping any one of the three leaves the other two looking fine.
+  it("reports the endpoint, shows it, and hands it to the worker", () => {
+    const logged: string[] = [];
+    const info = console.info;
+    console.info = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    };
+    const owner = newOwner();
+    let forWorker: string | null;
+    try {
+      forWorker = installDebuggerDial(
+        owner,
+        { url: ENDPOINT, reason: "enabled-from-option" },
+        undefined,
+      );
+    } finally {
+      console.info = info;
+    }
+
+    expect(forWorker).toBe(ENDPOINT);
+    expect(logged.filter((l) => l.includes(ENDPOINT))).toHaveLength(1);
+    expect(badge()?.textContent).toContain(ENDPOINT);
   });
 
   // The null case is every production build, and any dev build nobody gave a
   // dial: there is nothing to announce, so nothing may be painted.
   it("paints nothing without a dial", () => {
-    renderDebuggerIndicator(null, undefined);
+    dial(null);
     expect(badge()).toBeNull();
   });
 
   // Only for a host that renders its own signal - the guarantee is that a tap is
   // never invisible, not that this particular badge is the one used.
   it("can be suppressed by the host", () => {
-    renderDebuggerIndicator("ws://127.0.0.1:9231", false);
+    dial(ENDPOINT, false);
+    expect(badge()).toBeNull();
+  });
+
+  // An embedder with one worker runtime per product surface gives only some of
+  // them a dial. The badge is a single node at a fixed id, so a runtime with
+  // nothing to announce must leave it alone rather than take down the signal
+  // that another runtime's tap is still streaming.
+  it("leaves a badge another runtime's dial put there alone", () => {
+    dial(ENDPOINT);
+    dial(null);
+    dial(OTHER, false);
+    expect(badge()?.textContent).toContain(ENDPOINT);
+  });
+
+  // Two taps are two places frames are going, and a badge naming one of them
+  // reads as the whole story.
+  it("names every live endpoint", () => {
+    dial(ENDPOINT);
+    dial(OTHER);
+    expect(badge()?.textContent).toContain(ENDPOINT);
+    expect(badge()?.textContent).toContain(OTHER);
+  });
+
+  // Nothing streams once the runtimes are gone, and a badge naming an endpoint
+  // no frame reaches is as misleading as a silent tap.
+  it("paints nothing once the last dial is released", () => {
+    const first = dial(ENDPOINT);
+    const second = dial(OTHER);
+    releaseDebuggerDial(first);
+    expect(badge()?.textContent).not.toContain(ENDPOINT);
+    releaseDebuggerDial(second);
     expect(badge()).toBeNull();
   });
 
@@ -208,8 +292,6 @@ describe("the dial indicator", () => {
   // and under plain Node.
   it("is inert where there is no document", () => {
     delete g.document;
-    expect(() =>
-      renderDebuggerIndicator("ws://127.0.0.1:9231", undefined),
-    ).not.toThrow();
+    expect(() => dial(ENDPOINT)).not.toThrow();
   });
 });

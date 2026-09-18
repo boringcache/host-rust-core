@@ -251,7 +251,7 @@ function readPersistedLogLevel(): LogLevel | null {
  * un-turn-off-able from the host's own UI and invisible across origins and
  * browser profiles, which is what made a dark tap so hard to explain.
  */
-type DebuggerEnablement = {
+export type DebuggerEnablement = {
   readonly url: string | null;
   readonly reason:
     | "enabled-from-option"
@@ -462,9 +462,7 @@ function persistLogLevel(level: LogLevel): void {
 }
 
 let devLogLevelOverride: LogLevel | null = readPersistedLogLevel();
-const devGlobalTargets = new Set<{
-  setLogLevel?: (level: LogLevel) => void;
-}>();
+const devGlobalTargets = new Set<{ setLogLevel?: (level: LogLevel) => void }>();
 /**
  * Deliberately carries no debugger control. The dial is decided once, by the
  * build or by the host, so whether frames are leaving is a property of how this
@@ -886,6 +884,7 @@ function teardown(state: RuntimeState, error: Error, fault: boolean): void {
     handleWorkerDemandChanged(state, productId, false);
   }
   state.workerDemandListeners.clear();
+  releaseDebuggerDial(state);
   if (fault) {
     state.worker.terminate();
   } else {
@@ -1126,13 +1125,15 @@ export function createWebWorkerPairingHostRuntime(
       notifyFault(new Error("worker message could not be deserialized"));
     };
 
-    const debuggerEnablement = readDebuggerEnablement(options.debugger);
-    reportDebuggerEnablement(debuggerEnablement);
     // The tap exists for this session exactly when a dial was resolved, and that
     // is decided here, once. With no attach-later path there is no second piece
     // of state to keep in step - which is what let an earlier
     // `reason !== "production-build"` test arm a production build carrying a URL.
-    renderDebuggerIndicator(debuggerEnablement.url, options.debuggerIndicator);
+    const debuggerDial = installDebuggerDial(
+      state,
+      readDebuggerEnablement(options.debugger),
+      options.debuggerIndicator,
+    );
 
     const onInitMessage = (ev: MessageEvent<WorkerToMain>): void => {
       const msg = ev.data;
@@ -1146,7 +1147,7 @@ export function createWebWorkerPairingHostRuntime(
             permissionStatus: host.permissionStatus !== undefined,
             pocket: host.pocket !== undefined,
           },
-          debuggerUrl: debuggerEnablement.url,
+          debuggerUrl: debuggerDial,
         } satisfies MainToWorker);
       } else if (msg.kind === "ready") {
         state.coreWireSchemaHash = msg.schema;
@@ -1687,8 +1688,58 @@ function buildProvider(
 
 /** Element id of the dial indicator, so a re-render finds the existing node. */
 const DEBUGGER_INDICATOR_ID = "truapi-debugger-indicator";
+
 /**
- * Show, in the page, that wire frames are leaving this host.
+ * The endpoint every live dial is streaming to, keyed by the runtime that owns
+ * it.
+ *
+ * The badge is a single node at a fixed id, while an embedder may create one
+ * worker runtime per product surface and give only some of them a dial. Keyed
+ * ownership is what keeps a runtime with no dial, or one that renders its own
+ * signal, from taking down a badge another runtime's tap is still behind, and
+ * what lets two live dials both be named instead of the later one hiding the
+ * earlier.
+ */
+const liveDebuggerDials = new Map<object, string>();
+
+/**
+ * Put `owner`'s debugger dial into service: say once whether it will dial, show
+ * the endpoint in the page for as long as it does, and hand back the URL the
+ * worker's `init` message carries.
+ *
+ * The three are one decision, so they are one function: a host that resolves a
+ * dial and then reports, badges or forwards something else is the failure the
+ * design doc's §9 is about. Taking the already-resolved enablement as an
+ * argument is what makes that decision testable at all, since the live caller
+ * reads `import.meta.env.DEV`, which a bundler substitutes and a test runner
+ * cannot, so a test driving the runtime only ever sees the production verdict.
+ */
+export function installDebuggerDial(
+  owner: object,
+  enablement: DebuggerEnablement,
+  indicator: boolean | undefined,
+): string | null {
+  reportDebuggerEnablement(enablement);
+  if (enablement.url !== null && indicator !== false)
+    liveDebuggerDials.set(owner, enablement.url);
+  else liveDebuggerDials.delete(owner);
+  paintDebuggerIndicator();
+  return enablement.url;
+}
+
+/**
+ * Take `owner`'s dial out of service. Its worker is gone, so nothing streams on
+ * its account any more, and a badge naming an endpoint no frame reaches is the
+ * silent-tap failure read backwards.
+ */
+export function releaseDebuggerDial(owner: object): void {
+  if (!liveDebuggerDials.delete(owner)) return;
+  paintDebuggerIndicator();
+}
+
+/**
+ * Show, in the page, that wire frames are leaving this host, naming every
+ * endpoint they leave for.
  *
  * A console line is not enough on its own: it scrolls away, and a tap left on
  * from an earlier session is then invisible for the rest of the day. Loopback
@@ -1700,20 +1751,18 @@ const DEBUGGER_INDICATOR_ID = "truapi-debugger-indicator";
  * forgetting. A host that renders its own affordance passes
  * `debuggerIndicator: false` and takes the job on.
  *
- * Dev-only by construction: `url` is null unless the `import.meta.env.DEV` gate
- * resolved a dial, so a production bundle never mounts this. Never throws - a
- * host must not fail to start because a debug badge could not render. Exported
- * for tests: the live call is behind that gate, which a test runner cannot flip.
+ * Dev-only by construction: a dial only reaches {@link liveDebuggerDials} when
+ * the `import.meta.env.DEV` gate resolved one, so a production bundle never
+ * mounts this. Never throws - a host must not fail to start because a debug
+ * badge could not render.
  */
-export function renderDebuggerIndicator(
-  url: string | null,
-  enabled: boolean | undefined,
-): void {
+function paintDebuggerIndicator(): void {
   try {
     const doc = globalThis.document;
     if (doc === undefined || doc.body === null) return;
     const existing = doc.getElementById(DEBUGGER_INDICATOR_ID);
-    if (url === null || enabled === false) {
+    const endpoints = [...new Set(liveDebuggerDials.values())];
+    if (endpoints.length === 0) {
       existing?.remove();
       return;
     }
@@ -1730,7 +1779,7 @@ export function renderDebuggerIndicator(
         "box-shadow:0 2px 8px rgba(0,0,0,.4)";
       doc.body.appendChild(el);
     }
-    el.textContent = `TrUAPI wire → ${url}`;
+    el.textContent = `TrUAPI wire → ${endpoints.join(", ")}`;
     el.title = "This host is streaming product wire frames to a debugger.";
   } catch {
     // A badge that cannot render must never disturb the host.

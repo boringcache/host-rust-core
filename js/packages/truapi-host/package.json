@@ -45,6 +45,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
+    "typecheck:harness": "tsc -p tsconfig.harness.json",
     "build:wasm": "node scripts/build-wasm.mjs",
     "test": "bun test"
   },
