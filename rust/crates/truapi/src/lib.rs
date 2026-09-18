@@ -61,7 +61,8 @@ pub mod latest {
         HostAccountGetAliasRequest, HostAccountListRingVrfKeysRequest,
         HostAccountRegisterRingVrfKeyRequest, HostAccountRingVrfSignRequest,
         HostAccountSignVrfError, HostAccountSignVrfRequest, HostPlatform, HostSignPayloadData,
-        ImageFit, ImageProps, ImageSource, Modifier, NotificationId, OperationStartedResult,
+        ImageFit, ImageProps, ImageSource, Modifier, NftPurseError, NftPurseItem,
+        NftPurseTransferStatus, NftPurseTransferability, NotificationId, OperationStartedResult,
         PocketCard, ProductAccountId, ProductProofContext, RawPayload, RegisteredRingVrfKey,
         RemotePermission, RemoteStatementStoreCreateProofError,
         RemoteStatementStoreCreateProofRequest, RemoteStatementStoreCreateProofResponse,
@@ -166,8 +167,6 @@ pub mod latest {
         LatestOf<versioned::nft_purse::HostNftPurseTransferRequest>;
     /// NFT purse transfer progress item.
     pub type HostNftPurseTransferItem = LatestOf<versioned::nft_purse::HostNftPurseTransferItem>;
-    /// NFT purse service failure.
-    pub type HostNftPurseError = LatestOf<versioned::nft_purse::HostNftPurseListError>;
     /// The calling product's Pocket cards.
     pub type HostPocketListSubscribeItem = LatestOf<versioned::pocket::HostPocketListSubscribeItem>;
     /// Pocket card removal request.

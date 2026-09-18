@@ -20,6 +20,9 @@ mod chat;
 mod dotns_lookup;
 mod identity;
 pub(crate) mod login_failure;
+/// The NFT purses: per-product `pallet-scarcity` purses served by the signing
+/// host and relayed by the pairing host.
+pub(crate) mod nft_purse;
 mod pairing_host;
 pub(crate) mod product_manifest;
 mod product_subtree;

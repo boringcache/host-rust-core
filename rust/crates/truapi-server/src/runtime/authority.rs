@@ -17,7 +17,7 @@ use truapi::latest::{
     HostCreateTransactionResponse, HostRequestResourceAllocationRequest,
     HostRequestResourceAllocationResponse, HostSignPayloadRequest, HostSignPayloadResponse,
     HostSignPayloadWithLegacyAccountRequest, HostSignRawRequest,
-    HostSignRawWithLegacyAccountRequest, LegacyAccountTxPayload, ProductAccountId,
+    HostSignRawWithLegacyAccountRequest, LegacyAccountTxPayload, NftPurseItem, ProductAccountId,
     ProductAccountTxPayload, VrfSignature,
 };
 use truapi::versioned::account::{HostRequestLoginError, HostRequestLoginResponse};
@@ -30,6 +30,7 @@ use crate::host_logic::session::{SessionInfo, SessionState};
 use crate::host_logic::sso::messages::{ProductRequest, RingVrfError};
 use crate::host_logic::statement_store::statement_public_key_from_secret;
 use crate::host_logic::transaction::ExtrinsicPayloadError;
+use crate::runtime::nft_purse::{NftPurseAuthorityError, TransferProgress};
 
 /// Secret key allocated for Bulletin preimage submission.
 ///
@@ -565,6 +566,61 @@ pub(crate) trait ProductAuthority: Send + Sync {
         product_id: &str,
         context: &[u8],
     ) -> Result<[u8; 32], AuthorityError>;
+
+    /// Whether this authority serves the NFT purses at all. A signing host
+    /// derives purse keys from root entropy; a pairing host asks its paired
+    /// signing host. Any other authority answers `Unsupported` before a
+    /// session is even consulted.
+    fn supports_nft_purse(&self) -> bool {
+        false
+    }
+
+    /// List `product_id`'s NFT purse: the items its purse keys hold.
+    async fn nft_purse_list(
+        &self,
+        _cx: &CallContext,
+        _session: &AuthoritySession,
+        _product_id: String,
+        _collections: Option<Vec<u32>>,
+    ) -> Result<Vec<NftPurseItem>, NftPurseAuthorityError> {
+        Err(nft_purse_not_supported())
+    }
+
+    /// Allocate, or replay, a receive key in `target_product_id`'s purse for
+    /// `requested_by`.
+    async fn nft_purse_request_receive_address(
+        &self,
+        _cx: &CallContext,
+        _session: &AuthoritySession,
+        _target_product_id: String,
+        _requested_by: String,
+        _idempotency_key: String,
+    ) -> Result<[u8; 32], NftPurseAuthorityError> {
+        Err(nft_purse_not_supported())
+    }
+
+    /// Show the user the move of `instance` out of `product_id`'s purse to
+    /// `to`, and on approval sign, broadcast and verify it, reporting progress
+    /// through `progress`. Returns the including block once ownership is
+    /// verified there.
+    async fn nft_purse_transfer(
+        &self,
+        _cx: &CallContext,
+        _session: &AuthoritySession,
+        _product_id: String,
+        _instance: u64,
+        _to: [u8; 32],
+        _progress: TransferProgress,
+    ) -> Result<[u8; 32], NftPurseAuthorityError> {
+        Err(nft_purse_not_supported())
+    }
+}
+
+fn nft_purse_not_supported() -> NftPurseAuthorityError {
+    AuthorityError::NotSupported {
+        reason: "this host holds no NFT purses".to_string(),
+    }
+    .into()
 }
 
 /// Build the neutral authority-session snapshot for `session`.

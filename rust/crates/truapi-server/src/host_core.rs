@@ -721,6 +721,66 @@ impl SigningHostRuntime {
             })
     }
 
+    /// Every NFT purse the wallet holds, its own (`nfts.dot`) first.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn nft_purses(&self) -> Result<Vec<String>, v01::GenericError> {
+        self.signing_host
+            .nft_purses()
+            .await
+            .map_err(|err| v01::GenericError {
+                reason: err.to_string(),
+            })
+    }
+
+    /// The items in `product_id`'s NFT purse, read from the chain.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn nft_purse_list(
+        &self,
+        product_id: &str,
+    ) -> Result<Vec<truapi::latest::NftPurseItem>, v01::GenericError> {
+        self.signing_host
+            .nft_purse_list(product_id)
+            .await
+            .map_err(|err| v01::GenericError {
+                reason: err.to_string(),
+            })
+    }
+
+    /// A fresh receive key in `product_id`'s NFT purse for the wallet's own
+    /// use, stable for a repeated `idempotency_key`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn nft_purse_receive_address(
+        &self,
+        product_id: &str,
+        idempotency_key: &str,
+    ) -> Result<[u8; 32], v01::GenericError> {
+        self.signing_host
+            .nft_purse_receive_address(product_id, idempotency_key)
+            .await
+            .map_err(|err| v01::GenericError {
+                reason: err.to_string(),
+            })
+    }
+
+    /// Move one NFT between two products' purses on the user's behalf,
+    /// reporting progress; returns the including block once verified. The
+    /// user's tap is the consent, so no sheet is shown.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn nft_purse_move_to_product(
+        &self,
+        instance: u64,
+        from_product_id: &str,
+        to_product_id: &str,
+        progress: &(dyn Fn(truapi::latest::NftPurseTransferStatus) + Send + Sync),
+    ) -> Result<[u8; 32], v01::GenericError> {
+        self.signing_host
+            .nft_purse_move_to_product(instance, from_product_id, to_product_id, progress)
+            .await
+            .map_err(|err| v01::GenericError {
+                reason: err.to_string(),
+            })
+    }
+
     /// Registered providers available for an internal well-known-ring feature.
     pub async fn ring_vrf_providers(
         &self,

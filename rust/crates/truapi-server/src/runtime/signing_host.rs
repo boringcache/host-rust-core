@@ -127,6 +127,9 @@ pub(crate) struct SigningHost {
     local_grants: Mutex<LocalGrantState>,
     /// Durable RFC-0024 registry, scoped by the active wallet root.
     ring_vrf_registry: Arc<RingVrfRegistryStore>,
+    /// The NFT purses: per-product `pallet-scarcity` purses over root entropy.
+    #[cfg(not(target_arch = "wasm32"))]
+    nft_purses: crate::runtime::nft_purse::NftPurses,
     /// Serializes replay-ledger updates within each wallet and peer scope.
     sso_replay_locks: SsoReplayLocks,
     #[cfg(not(target_arch = "wasm32"))]
@@ -139,6 +142,8 @@ impl SigningHost {
     pub(crate) fn new(services: Arc<RuntimeServices>, network_suffix: String) -> Arc<Self> {
         let platform = services.platform.clone();
         let ring_resolver = ChainRingResolver::new(services.chain.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let nft_purses = crate::runtime::nft_purse::NftPurses::new(services.clone());
         Arc::new(Self {
             services,
             platform: platform.clone(),
@@ -149,6 +154,8 @@ impl SigningHost {
             root_entropy: Mutex::new(None),
             local_grants: Mutex::new(LocalGrantState::default()),
             ring_vrf_registry: RingVrfRegistryStore::new(platform),
+            #[cfg(not(target_arch = "wasm32"))]
+            nft_purses,
             sso_replay_locks: SsoReplayLocks::default(),
             #[cfg(not(target_arch = "wasm32"))]
             renewal: allowance_renewal::RenewalState::default(),
@@ -189,6 +196,8 @@ impl SigningHost {
             [0xcc; 32],
             crate::test_support::test_spawner(),
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        let nft_purses = crate::runtime::nft_purse::NftPurses::new(services.clone());
         Arc::new(Self {
             services,
             platform: platform.clone(),
@@ -199,6 +208,8 @@ impl SigningHost {
             root_entropy: Mutex::new(None),
             local_grants: Mutex::new(LocalGrantState::default()),
             ring_vrf_registry: RingVrfRegistryStore::new(platform),
+            #[cfg(not(target_arch = "wasm32"))]
+            nft_purses,
             sso_replay_locks: SsoReplayLocks::default(),
             #[cfg(not(target_arch = "wasm32"))]
             renewal: allowance_renewal::RenewalState::default(),
@@ -643,6 +654,142 @@ impl SigningHost {
     /// Start the periodic statement-store renewal loop. Idempotent.
     pub(crate) fn start_statement_allowance_renewal(self: &Arc<Self>) {
         allowance_renewal::start_renewal_loop(&self.services, self);
+    }
+}
+
+/// The NFT purses, served from the root entropy of the active local session.
+#[cfg(not(target_arch = "wasm32"))]
+impl SigningHost {
+    /// The wallet's own view of its purses: every purse the host has
+    /// allocated in, the wallet's own first.
+    pub(crate) async fn nft_purses(
+        &self,
+    ) -> Result<Vec<String>, crate::runtime::nft_purse::NftPurseAuthorityError> {
+        let session = self.nft_purse_session()?;
+        let mut purses = vec![crate::host_logic::nft_purse::WALLET_PURSE_PRODUCT_ID.to_string()];
+        for purse in self.nft_purses.known_purses(session.public_key).await? {
+            if !purses.contains(&purse) {
+                purses.push(purse);
+            }
+        }
+        Ok(purses)
+    }
+
+    /// The items `product_id`'s purse holds, for the wallet's own view.
+    pub(crate) async fn nft_purse_list(
+        &self,
+        product_id: &str,
+    ) -> Result<Vec<truapi::latest::NftPurseItem>, crate::runtime::nft_purse::NftPurseAuthorityError>
+    {
+        let session = self.nft_purse_session()?;
+        let entropy = self.root_entropy()?;
+        Ok(self
+            .nft_purses
+            .list(&entropy, session.public_key, product_id, None)
+            .await?)
+    }
+
+    /// A fresh receive key in `product_id`'s purse, requested by the wallet.
+    pub(crate) async fn nft_purse_receive_address(
+        &self,
+        product_id: &str,
+        idempotency_key: &str,
+    ) -> Result<[u8; 32], crate::runtime::nft_purse::NftPurseAuthorityError> {
+        let session = self.nft_purse_session()?;
+        let entropy = self.root_entropy()?;
+        Ok(self
+            .nft_purses
+            .request_receive_address(
+                &entropy,
+                session.public_key,
+                product_id,
+                crate::host_logic::nft_purse::WALLET_PURSE_PRODUCT_ID,
+                idempotency_key,
+            )
+            .await?)
+    }
+
+    /// Move `instance` from one product's purse into a fresh key in another's:
+    /// the cross-purse move the wallet performs on the user's tap. The tap is
+    /// the consent, so no sheet is shown.
+    pub(crate) async fn nft_purse_move_to_product(
+        &self,
+        instance: u64,
+        from_product_id: &str,
+        to_product_id: &str,
+        progress: &(dyn Fn(truapi::latest::NftPurseTransferStatus) + Send + Sync),
+    ) -> Result<[u8; 32], crate::runtime::nft_purse::NftPurseAuthorityError> {
+        let session = self.nft_purse_session()?;
+        let entropy = self.root_entropy()?;
+        let to = self
+            .nft_purses
+            .request_receive_address(
+                &entropy,
+                session.public_key,
+                to_product_id,
+                crate::host_logic::nft_purse::WALLET_PURSE_PRODUCT_ID,
+                &format!("move:{instance}:{from_product_id}->{to_product_id}"),
+            )
+            .await?;
+        Ok(self
+            .nft_purses
+            .transfer(
+                &entropy,
+                session.public_key,
+                from_product_id,
+                instance,
+                to,
+                progress,
+            )
+            .await?)
+    }
+
+    fn nft_purse_session(
+        &self,
+    ) -> Result<AuthoritySession, crate::runtime::nft_purse::NftPurseAuthorityError> {
+        Ok(self
+            .current_local_session()
+            .ok_or(AuthorityError::Disconnected)?)
+    }
+
+    /// Show the move as this host reads it from the chain, then sign,
+    /// broadcast and verify it. Called for a product on this host and for one
+    /// on a paired host alike: the sheet is shown where the keys live.
+    pub(crate) async fn nft_purse_transfer_for_product(
+        &self,
+        session: &AuthoritySession,
+        product_id: &str,
+        instance: u64,
+        to: [u8; 32],
+        progress: &(dyn Fn(truapi::latest::NftPurseTransferStatus) + Send + Sync),
+    ) -> Result<[u8; 32], crate::runtime::nft_purse::NftPurseAuthorityError> {
+        self.require_current_session(session)?;
+        let entropy = self.root_entropy()?;
+        let review = self
+            .nft_purses
+            .transfer_review(&entropy, session.public_key, product_id, instance, to)
+            .await?;
+        let approved = self
+            .platform
+            .confirm_user_action(UserConfirmationReview::NftPurseTransfer(review))
+            .await
+            .map_err(|err| AuthorityError::Unavailable {
+                reason: format!("confirmation failed: {}", err.reason),
+            })?;
+        if !approved {
+            return Err(AuthorityError::Rejected.into());
+        }
+        Ok(self
+            .nft_purses
+            .transfer(
+                &entropy,
+                session.public_key,
+                product_id,
+                instance,
+                to,
+                progress,
+            )
+            .await?)
     }
 }
 
@@ -1185,6 +1332,70 @@ impl ProductAuthority for SigningHost {
             }
         }
         Ok(v01::HostRequestResourceAllocationResponse { outcomes })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn supports_nft_purse(&self) -> bool {
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn nft_purse_list(
+        &self,
+        _cx: &CallContext,
+        session: &AuthoritySession,
+        product_id: String,
+        collections: Option<Vec<u32>>,
+    ) -> Result<Vec<truapi::latest::NftPurseItem>, crate::runtime::nft_purse::NftPurseAuthorityError>
+    {
+        self.require_current_session(session)?;
+        let entropy = self.root_entropy()?;
+        Ok(self
+            .nft_purses
+            .list(
+                &entropy,
+                session.public_key,
+                &product_id,
+                collections.as_deref(),
+            )
+            .await?)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn nft_purse_request_receive_address(
+        &self,
+        _cx: &CallContext,
+        session: &AuthoritySession,
+        target_product_id: String,
+        requested_by: String,
+        idempotency_key: String,
+    ) -> Result<[u8; 32], crate::runtime::nft_purse::NftPurseAuthorityError> {
+        self.require_current_session(session)?;
+        let entropy = self.root_entropy()?;
+        Ok(self
+            .nft_purses
+            .request_receive_address(
+                &entropy,
+                session.public_key,
+                &target_product_id,
+                &requested_by,
+                &idempotency_key,
+            )
+            .await?)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn nft_purse_transfer(
+        &self,
+        _cx: &CallContext,
+        session: &AuthoritySession,
+        product_id: String,
+        instance: u64,
+        to: [u8; 32],
+        progress: crate::runtime::nft_purse::TransferProgress,
+    ) -> Result<[u8; 32], crate::runtime::nft_purse::NftPurseAuthorityError> {
+        self.nft_purse_transfer_for_product(session, &product_id, instance, to, progress.as_ref())
+            .await
     }
 
     async fn statement_store_allowance_key(

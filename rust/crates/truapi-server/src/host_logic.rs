@@ -12,6 +12,7 @@ pub mod dotns_gateway;
 pub mod entropy;
 pub mod extrinsic;
 pub mod features;
+pub mod nft_purse;
 pub mod permissions;
 pub mod product_account;
 pub mod product_manifest;
