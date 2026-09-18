@@ -1,9 +1,6 @@
 //! Unified [`Permissions`] trait.
 
 use crate::versioned::permissions::{
-    AuthorizeMediaCaptureError, AuthorizeMediaCaptureRequest, AuthorizeMediaCaptureResponse,
-    AuthorizeNetworkAccessError, AuthorizeNetworkAccessRequest, AuthorizeNetworkAccessResponse,
-    AuthorizeWebRtcError, AuthorizeWebRtcRequest, AuthorizeWebRtcResponse,
     HostDevicePermissionError, HostDevicePermissionRequest, HostDevicePermissionResponse,
     RemotePermissionError, RemotePermissionRequest, RemotePermissionResponse,
 };
@@ -44,30 +41,19 @@ pub trait Permissions: Send + Sync {
         request: RemotePermissionRequest,
     ) -> Result<RemotePermissionResponse, CallError<RemotePermissionError>>;
 
-    /// Authorize one network operation for the current product, consuming an
-    /// available one-use grant. Used by the host's fetch, XHR and WebSocket
-    /// wrappers before sending a request or opening a connection.
+    /// Authorize one remote operation, consuming an available one-use grant.
     #[wire(id = 2, internal)]
-    async fn authorize_network_access(
+    async fn authorize_remote_permission(
         &self,
         cx: &CallContext,
-        request: AuthorizeNetworkAccessRequest,
-    ) -> Result<AuthorizeNetworkAccessResponse, CallError<AuthorizeNetworkAccessError>>;
+        request: RemotePermissionRequest,
+    ) -> Result<RemotePermissionResponse, CallError<RemotePermissionError>>;
 
-    /// Authorize one peer connection, consuming an available one-use grant.
+    /// Authorize one device operation, consuming an available one-use grant.
     #[wire(id = 3, internal)]
-    async fn authorize_web_rtc(
+    async fn authorize_device_permission(
         &self,
         cx: &CallContext,
-        request: AuthorizeWebRtcRequest,
-    ) -> Result<AuthorizeWebRtcResponse, CallError<AuthorizeWebRtcError>>;
-
-    /// Authorize one media capture, consuming available one-use camera and
-    /// microphone grants for the requested capabilities.
-    #[wire(id = 4, internal)]
-    async fn authorize_media_capture(
-        &self,
-        cx: &CallContext,
-        request: AuthorizeMediaCaptureRequest,
-    ) -> Result<AuthorizeMediaCaptureResponse, CallError<AuthorizeMediaCaptureError>>;
+        request: HostDevicePermissionRequest,
+    ) -> Result<HostDevicePermissionResponse, CallError<HostDevicePermissionError>>;
 }
