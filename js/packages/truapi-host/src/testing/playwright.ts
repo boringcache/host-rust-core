@@ -140,6 +140,16 @@ export interface TestHostFixtureOptions {
    */
   allowances?: "granted" | "chain";
   /**
+   * Serve the statement store in-page instead of forwarding it to the chains
+   * the host proxies. Defaults to on when `allowances` is `"granted"`, so the
+   * two halves of a statement flow agree: a product that is handed an
+   * unregistered allowance key can still submit with it.
+   *
+   * Nothing submitted this way leaves the page, and a real store would refuse
+   * it. Set `false` to send statements to the chain and see what it says.
+   */
+  loopbackStatements?: boolean;
+  /**
    * Core log level (`off`/`error`/`warn`/`info`/`debug`/`trace`).
    *
    * The core logs why a call failed before mapping it to a protocol answer,
@@ -384,7 +394,10 @@ function splitChainId(id: string): {
  * chain both unhashed, the hub took the People reads and allowance registration
  * failed looking for personhood collections on a chain that has none.
  */
-export function fromNetworks(networks: NetworkConfig[]): {
+export function fromNetworks(
+  networks: NetworkConfig[],
+  loopbackStatements = false,
+): {
   mock: Pick<MockHostConfig, "chainProxies" | "supportedChains">;
   runtimeConfig: Record<string, unknown>;
 } {
@@ -404,11 +417,15 @@ export function fromNetworks(networks: NetworkConfig[]): {
   }
   return {
     mock: {
-      chainProxies: networks.map((entry) =>
-        networks.length > 1
-          ? { genesisHash: entry.genesisHash, rpcUrl: entry.rpcUrl }
-          : { rpcUrl: entry.rpcUrl },
-      ),
+      chainProxies: networks.map((entry) => ({
+        ...(networks.length > 1 ? { genesisHash: entry.genesisHash } : {}),
+        rpcUrl: entry.rpcUrl,
+        // Only the People chain carries the statement store, so serving it
+        // locally on the hub as well would claim a store where none exists.
+        ...(loopbackStatements && splitChainId(entry.id).identifier === "People"
+          ? { loopbackStatements: true }
+          : {}),
+      })),
       supportedChains: { network, chains },
     } as Pick<MockHostConfig, "chainProxies" | "supportedChains">,
     runtimeConfig,
@@ -477,7 +494,13 @@ export function createTestHostFixture(defaults: TestHostFixtureOptions) {
     );
   }
   const chains = defaults.networks ?? (defaults.chain ? [defaults.chain] : undefined);
-  const expanded = chains ? fromNetworks(chains) : undefined;
+  // Defaults to on when allocation is granted unchecked, so a product handed
+  // an unregistered allowance key has somewhere its statements are accepted.
+  const loopbackStatements =
+    defaults.loopbackStatements ?? (defaults.allowances ?? "granted") === "granted";
+  const expanded = chains
+    ? fromNetworks(chains, loopbackStatements)
+    : undefined;
   // Explicit settings win over anything derived from `networks`.
   const mock = expanded ? { ...expanded.mock, ...defaults.mock } : defaults.mock;
   const runtimeConfig = expanded

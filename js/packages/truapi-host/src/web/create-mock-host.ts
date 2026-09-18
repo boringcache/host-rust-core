@@ -54,6 +54,9 @@ export type PermissionPolicy = "allow-all" | "deny-all";
  * must be the *real* one of the endpoint, not a {@link MOCK_GENESIS}
  * placeholder, and the runtime config must carry the same value.
  */
+import { createLoopbackStatements } from "./loopback-statements.js";
+import type { LoopbackStatements } from "./loopback-statements.js";
+
 export interface ChainProxy {
   /**
    * Genesis hash to route on. Omit to take every request no hashed entry
@@ -67,6 +70,14 @@ export interface ChainProxy {
   genesisHash?: string;
   /** WebSocket endpoint, e.g. `wss://paseo-asset-hub-next-rpc.polkadot.io`. */
   rpcUrl: string;
+  /**
+   * Serve the statement store in-page for this chain rather than forwarding it.
+   *
+   * Everything else still goes to `rpcUrl`, so a chain can carry real reads and
+   * a local statement store at once. A statement accepted here is registered
+   * nowhere, so a real store would refuse it.
+   */
+  loopbackStatements?: boolean;
 }
 
 /** Optional error injection, mirroring the Rust `MockFaults`. */
@@ -451,6 +462,7 @@ function connectToChain(
   proxy: ChainProxy,
   sentRpc: string[],
   statementSubscriptions?: Set<string>,
+  loopback?: LoopbackStatements,
   // Injectors are held beside the connection rather than on it: the connection
   // type is generated from the protocol and must not grow test-only members.
   injectors?: Set<(frame: string) => void>,
@@ -513,6 +525,7 @@ function connectToChain(
   const finish = () => {
     closed = true;
     injectors?.delete(inject);
+    loopback?.release(deliver);
     // Release every reader, so a stream ends instead of hanging on a drop.
     while (waiting.length > 0) waiting.shift()?.({ value: undefined, done: true });
   };
@@ -521,6 +534,9 @@ function connectToChain(
   return {
     send(request) {
       sentRpc.push(request);
+      // Served here rather than forwarded, so the statement flows work with no
+      // chain behind them. Everything else still goes out.
+      if (loopback?.handle(request, deliver)) return;
       if (statementSubscriptions) {
         try {
           const frame = JSON.parse(request) as { id?: string; method?: string };
@@ -620,6 +636,10 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   const statementSubscriptions = new Set<string>();
   const chainInjectors = new Set<(frame: string) => void>();
   const injectedStatements: string[] = [];
+  const loopbackStatements = createLoopbackStatements();
+  const usingLoopback = (chainProxies ?? []).some(
+    (proxy) => proxy.loopbackStatements,
+  );
   const sentRpc: string[] = [];
   const authStates: AuthState[] = [];
   const reviews: UserConfirmationReview[] = [];
@@ -802,7 +822,13 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
               normalizeHash(candidate.genesisHash) === normalizeHash(genesisHash),
           ) ?? chainProxies.find((candidate) => candidate.genesisHash === undefined);
         if (proxy) {
-          return connectToChain(proxy, sentRpc, statementSubscriptions, chainInjectors);
+          return connectToChain(
+            proxy,
+            sentRpc,
+            statementSubscriptions,
+            proxy.loopbackStatements ? loopbackStatements : undefined,
+            chainInjectors,
+          );
         }
         return {
           send(request) {
@@ -928,6 +954,16 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     getNavigationLog: () => [...navigations],
     getNotificationLog: () => pushedNotifications.map((n) => ({ ...n })),
     injectStatement: (statement) => {
+      if (usingLoopback) {
+        const encoded =
+          typeof statement === "string"
+            ? statement.startsWith("0x")
+              ? statement
+              : `0x${statement}`
+            : `0x${hex(statement)}`;
+        injectedStatements.push(encoded);
+        return loopbackStatements.inject(encoded);
+      }
       const encoded =
         typeof statement === "string"
           ? statement.startsWith("0x")
@@ -957,7 +993,9 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     },
     getInjectedStatements: () => [...injectedStatements],
     getSubmittedStatements: () =>
-      sentRpc.flatMap((request) => {
+      usingLoopback
+        ? loopbackStatements.submitted()
+        : sentRpc.flatMap((request) => {
         try {
           const frame = JSON.parse(request) as {
             method?: string;
@@ -968,11 +1006,12 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
           return typeof statement === "string" ? [statement] : [];
         } catch {
           // A frame that is not JSON is not a submission.
-          return [];
-        }
-      }),
+            return [];
+          }
+        }),
     clearStatements: () => {
       injectedStatements.length = 0;
+      loopbackStatements.clear();
     },
     sentRpc: () => [...sentRpc],
     authStates: () => [...authStates],
