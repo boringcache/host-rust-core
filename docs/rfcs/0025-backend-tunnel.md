@@ -9,7 +9,7 @@ status: draft
 
 ## Summary
 
-A product names a backend and a request against it; the host performs that request with a credential the product never sees and returns the answer. A new `Backend` trait carries it, served by a new optional host capability. The core screens the request, forwards it, and holds no secret of its own.
+A product names a backend and a request against it; the host performs that request against the deployer's backend with a credential the product never sees, and returns the answer. The backend is what reaches the third-party provider, with its own key — the host never holds that key and never calls the provider. A new `Backend` trait carries this, served by a new optional host capability. The core screens the request, forwards it, and holds no secret of its own.
 
 ## Motivation
 
@@ -22,14 +22,18 @@ There are two credentials, belonging to different parties: the **third-party key
 ## Approach
 
 ```
-product  ──  backend.request { backend, method, path, query, body }
+product   ──  backend.request { backend, method, path, query, body }
    │
-core     ──  screens the request; resolves nothing, holds nothing
+core      ──  screens the request; resolves nothing, holds nothing
    │
-host     ──  backend id → base URL + credential; performs the HTTPS call
-   │
-backend  ──  holds the third-party key
+host      ──  backend id → base URL + host's own credential
+   │              ↓ HTTPS, Authorization: Bearer <host↔backend credential>
+backend   ──  the deployer's service; holds the third-party key
+   │              ↓ HTTPS, authenticated with the third-party key
+provider  ──  Meld and the like
 ```
+
+Two hops, two credentials, and the host is only on the first one. It authenticates *itself to the deployer's backend*; it never holds the third-party key and never calls the provider. That is the whole point of the split: the key the product cannot hold is a key the host does not hold either.
 
 The product supplies an opaque identifier and a request relative to it. It never supplies an origin: scheme, host, port and userinfo have no field to travel in. Which base URL the identifier resolves to, and what authenticates the host to it, is host configuration — not protocol, not manifest, and not readable by a product.
 
@@ -38,6 +42,8 @@ The identifier resolves per call rather than at startup, so a host can add a bac
 `Backend::list` answers which identifiers a host serves the calling product, so a product can check before it depends on one rather than discovering the gap from a failed call. It is product-scoped: a registry that pins its entries to product ids answers each product with its own set, and an empty list means this host serves *this product* nothing, not that it has no backends. It carries identifiers only — where a backend lives stays host-side, which is the whole point of naming one by id.
 
 A URL in the product's hands would be a deployment detail in every product's source and every debugger frame, and a value the product could vary. An identifier is neither.
+
+**A registered base must be a service the deployer runs, never a third-party API directly.** Nothing in the core can tell the two apart — a host could point an entry straight at `api.meld.io` with a Meld key beside it, and every mechanism here would work. It would also move the third-party key into the host, where it ships in an app binary or, on a browser host, sits in devtools. The Motivation for this RFC applies one layer up: a host is a better place for a credential than a product, and still the wrong place for the provider's.
 
 ### What the core screens
 

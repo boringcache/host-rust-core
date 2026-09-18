@@ -966,6 +966,12 @@ export interface AuthPresenter {
  * protocol-relative prefix. Percent-encoding the query names and values when
  * building the URL is the host's job.
  *
+ * A registered base must be a service the deployer runs, never a third-party
+ * API directly. The host authenticates itself to that backend; the backend
+ * holds the provider's key and makes the onward call. Pointing an entry at the
+ * provider would work mechanically and put that key in the host, which ships
+ * it in a binary or exposes it in devtools.
+ *
  * Obligations the core cannot enforce:
  *
  * - **Set the path on the parsed base; never concatenate strings.** Refuse a

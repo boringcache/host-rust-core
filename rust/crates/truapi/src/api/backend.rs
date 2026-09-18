@@ -10,9 +10,10 @@ use crate::{wire, wire_trait};
 /// Requests against a backend the host holds a credential for.
 ///
 /// A product cannot hold a server-side API key, so the deployer's backend holds
-/// the third-party key, the host holds a credential for that backend, and the
-/// core carries the request between them. The product never learns the origin it
-/// reached or the credential that authenticated the call.
+/// the third-party key and makes the onward call to the provider. The host holds
+/// a credential for that backend and nothing else; the core carries the request
+/// between them. The product never learns the origin it reached or the
+/// credential that authenticated the call.
 ///
 /// Which backends exist is host configuration, not protocol. A host with no
 /// tunnel at all answers `Unsupported`; one that has a tunnel but does not
