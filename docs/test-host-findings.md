@@ -686,7 +686,10 @@ The instruments also have to exist where they are used. `getHostCallCount` is on
 quoted from a fixture-level probe has no source behind it. Either expose it or
 stop citing it.
 
-## 19. Wire codec 2 is an adoption prerequisite, and nothing published meets it
+## 19. Wire codec 2 is an adoption prerequisite
+
+> Superseded in part by section 22: the published fleet has since moved. The
+> prerequisite below still holds; the survey of who meets it is out of date.
 
 `@parity/truapi` 0.16.0 is the first release on wire codec 2; 0.13.1 before it
 is codec 1, and the published versions jump straight from one to the other
@@ -973,6 +976,261 @@ accepted and ignored.
 host, which answers `request_login` with `AlreadyConnected`.
 
 Neither is a gap to close. Both are the old realm's shape showing through.
+
+## 22. What the two codec-2 products found
+
+Two products ship on TrUAPI today. Running both against this host surfaced one
+real compatibility gap and corrected two claims made earlier in this document.
+
+### `window.__TEST_HOST__` is public surface, and the gap was the name
+
+`@parity/host-api-test-sdk` publishes its control object on
+`window.__TEST_HOST__`. That is documented surface, not an internal: it is in
+that package's README, typed in its `dist/types.d.ts` as "Shape of
+window.__TEST_HOST__ -- shared between browser bundle and Playwright fixture",
+and its own Playwright fixture is a thin wrapper of `page.evaluate` calls over
+it.
+
+A suite that drives the host page directly, rather than through the fixture,
+therefore names the global. browse does, in `navigateToTestHost`: it navigates
+to the host URL and waits for `window.__TEST_HOST__` to appear. Against this
+host that wait timed out on every spec that used it -- 19 of browse's 41 tests
+failed and 22 never ran, all from one missing name.
+
+This host already published the identical object, as
+`window.__TRUAPI_TEST_HOST__`. The entire gap was the name, so the host page now
+publishes both, and clears both on dispose. `test-host-surface.test.ts` asserts
+the two names are assigned *the same identifier*, not merely that both are
+assigned -- a copy would let them drift -- and carries a parse floor so a rename
+that made the patterns match nothing cannot pass vacuously.
+
+### The dependency range excluded the only version that worked
+
+`truapi-host`'s generated adapter imports `HostPocketListSubscribeItem` and
+`HostPocketRemoveCardRequest`. `@parity/truapi` 0.16.0 does not export either;
+0.17.0 does. The package depended on `^0.16.0`, and for a 0.x version npm reads
+that as `~0.16.0` -- so the declared range resolved only the line that lacks the
+types, and could never reach the one that has them. The floor is now `^0.17.0`.
+
+This corrects the earlier conclusion recorded here that no published
+`@parity/truapi` could satisfy the adapter. 0.17.0 satisfies it. The defect was
+one range in our own manifest, not a gap in the registry.
+
+### Section 19's headline no longer holds
+
+Section 19 says nothing published is on codec 2. `@parity/product-sdk-host`
+0.21.0 pins `@parity/truapi` `^0.17.0`, and host-playground's main is on
+`@parity/product-sdk` 0.29.0 above it. Installed from the registry with nothing
+stood in, that tree resolves a single `@parity/truapi` 0.17.0 -- codec 2, from
+npm. The prerequisite in section 19 is still the right prerequisite; the claim
+that nothing meets it is out of date.
+
+### A product account is stable across a host account switch
+
+The refusal text for `productAccounts` told the reader to "expect switching the
+host account to change the product account". The probe behind section 21 showed
+the opposite: `getActiveAccount` moved alice -> charlie while the product
+address held. The message now says the derived address is stable across a host
+account switch rather than following the active account.
+
+## 23. Three gaps host-playground closed, and the one it cannot
+
+### Allowance allocation is compiled out of the wasm core
+
+`account.get_user_id` and the notification log were fixable in the test host.
+Resource allocation is not, and the reason is in the core rather than the mock:
+`runtime/statement_allowance.rs` is declared `#[cfg(not(target_arch =
+"wasm32"))]`, and all three allocators in `sso_responder.rs` carry a wasm32 stub
+returning `NativeOnly`. `allocate_resources` catches that, logs it, and pushes
+`AllocationOutcome::NotAvailable`, which the product renders as "Requested
+resource is unavailable".
+
+A native CLI host allocates allowances; the browser-hosted wasm core cannot.
+Closing it means porting a 2,547-line native-only module to wasm32, which is a
+Rust project rather than a test-host change. It accounts for 15 of
+host-playground's failures: the four allowance flows, the four allocation
+requests, and the statement, preimage, bulletin and contract-write tests that
+each need an allowance first.
+
+### The core's reasons were unreadable from a test
+
+The core logs why a call failed before mapping it to a protocol answer, but by
+default it runs in a Web Worker, whose console `page.on("console")` does not
+observe. A failing call therefore arrived as a bare outcome with no reason
+attached, which is how the allowance stub stayed hidden behind three wrong
+guesses.
+
+`topology` and `logLevel` are now fixture options. `"main-thread"` puts the core
+on the page so its output reaches the page console; `logLevel` sets the level at
+boot on either topology. With both, the diagnosis is one line:
+
+```
+WARN truapi_server::runtime::signing_host: direct resource allocation item failed
+  {product_id=localhost:5199, reason=signing host: statement-store allowance allocation is native-only}
+```
+
+### A session had no name
+
+`account.get_user_id` answered `Unknown { reason: "No primary username for this
+session" }` because the test host activated sessions through
+`activateLocalSession`, which leaves the session anonymous. The core has a
+second entry point that takes one. The host page now activates under the active
+account's name, matching what `@parity/host-api-test-sdk` answers. The worker
+protocol's activation message carries the name so both topologies behave
+identically.
+
+### Notification ids started at zero
+
+`getNotificationLog` returned the raw requests, with no `id` or `cancelled`, so
+a suite could not assert that a cancel landed. Entries now carry the
+`NotificationLogEntry` fields and `cancelled` flips in place on cancel.
+
+The subtler half was the id. The counter started at 0, and a product that reads
+0 as "no id" rejects it: host-playground validates the id as a positive integer,
+so the first notification of every run was uncancellable. Ids start at 1.
+
+## 24. browse's failures are not the migration's
+
+browse fails 14 of 41 with 22 never reached. The cause is not the test host, and
+a baseline settles it.
+
+The host boots fine. Measured in browse's own harness, `window.__TEST_HOST__`
+appears **69ms** after `goto`. What takes the time is the product: its
+`.category-tab` ready selector resolves at **34.7s**, against a suite whose
+per-test timeout is **10s**. So the failures are the app being slow to render,
+not the host being slow to start.
+
+Reverting browse to `@parity/host-api-test-sdk` 0.12.1 -- the original
+`utils.ts` from git, that package linked back in -- and running the same
+measurement, the old SDK does not reach a ready product frame **at all** within
+180s. The suite is broken in this environment whichever host it runs against,
+which is consistent with the dry PGAS funder in section 22: the app cannot
+populate itself from a chain it has no funded account for.
+
+Take the comparison as "the migration is not the cause", not as "the test host
+is faster". One run each, on a network that was visibly degraded that day.
+
+The lesson repeats: baseline the suite against its current host before
+attributing a failure to the new one.
+
+## 25. The allowance port was un-gating, not porting
+
+Section 23 said closing the allowance gap meant porting a 2,547-line native-only
+module to wasm32, and called it a Rust project rather than a test-host change.
+That estimate was wrong, and wrong in a useful direction.
+
+The module never needed porting. Its real dependencies were already
+wasm-capable: `verifiable`, the ring-VRF prover, is an unconditional dependency
+and was being compiled for wasm32 the whole time, and `subxt`/`subxt-rpcs` are
+declared for wasm with their `web` feature. What kept the module out of the
+browser was the `#[cfg(not(target_arch = "wasm32"))]` on its module declaration,
+plus the same gate spread across the call path.
+
+Removing the gate and compiling for wasm32 produced **11 errors**, not a port:
+
+- `frame-metadata` and `scale-info` sat in the native-only dependency block,
+  although metadata decoding is needed on both. They are now unconditional.
+- `RpcClient::connect(url)` opens a socket by URL, which a browser cannot do
+  from Rust. It is the one genuinely native-only piece, and it stays gated:
+  `truapi-host-cli` uses it, and the browser gets its connection from the
+  platform through `RpcClient::new`, which is what `chain_client` already did.
+- `Instant::now()` and `SystemTime::now()` compile for wasm32 and panic when
+  read. The crate already had the pattern -- `web_time` -- so the two allowance
+  clocks now follow it.
+
+The rest was lifting the gate off ~25 items that the allocators reach: the
+renewal state on `SigningHost`, the chain-context cache on `RuntimeServices`,
+`reserved_person_collection_candidates`, the RPC client accessors, and six
+variants of `AllowanceAllocationError` whose constructors were all native-only.
+
+The diff is 34 insertions against 89 deletions: mostly deleting the three
+`NativeOnly` stubs and the gates. Native `cargo check`, `clippy -D warnings` and
+the test suite are unchanged by it.
+
+### What it revealed next
+
+With the stub gone, allocation runs in the browser and reaches real chain reads.
+The first failure after it was not a gap but a misconfiguration, and the logging
+from section 23 is what showed it:
+
+```
+WARN statement_allowance: could not resolve this collection
+  {collection=People, err=Members.Collections[People] missing}
+```
+
+Allowance registration reads personhood collections from the **People** chain,
+and host-playground's fixture served only the hub. browse always passed
+`[activeNetwork(), activePeopleChain()]`; host-playground now passes a
+`paseo-people` network too. A suite that allocates allowances has to serve that
+chain, which is a migration precondition rather than a defect.
+
+## 26. Where the allowance path actually stops
+
+With the wasm gates lifted, allocation runs the real path in the browser, and
+two further problems surfaced in sequence. Each one was only visible because the
+previous was fixed, which is the usual shape of this work.
+
+### The hub was answering the People chain's reads
+
+`fromNetworks` built every chain proxy without a genesis hash. That is right for
+one chain -- an unhashed proxy takes every request, so a chain reset cannot
+break routing -- but with a hub and a People chain both unhashed, the first
+entry answered both. The core asked the People chain for personhood collections
+and the hub replied that it has none:
+
+```
+WARN statement_allowance: chain reports a different genesis than the host configured
+  {configured=4a2b5b73…(People), reported=4349b00e…(AssetHub)}
+WARN statement_allowance: could not resolve this collection
+  {collection=People, err=Members.Collections[People] missing}
+```
+
+Proxies are now hashed whenever there is more than one, and a lone proxy stays
+unhashed for the reset-immunity that motivated it. The mock already supported
+hash routing; only the fixture's expansion never used it.
+
+### Dev accounts are not personhood ring members
+
+With routing fixed, the People chain answers, collections resolve, ring scanning
+runs, and the allocation stops on the condition that is actually true:
+
+```
+DEBUG statement_allowance: no ring includes our member key {collection=People}
+WARN signing_host: direct resource allocation item failed
+  {reason=signing account is not a personhood ring member;
+   cannot grant statement-store allowance}
+```
+
+A statement-store allowance is granted against a proof of personhood ring
+membership. The test host's accounts are derived from fixed dev entropy and are
+not enrolled in any ring on the live People chain, so the proof cannot be built.
+The core is behaving correctly; there is no key it could substitute.
+
+This is the same shape as browse's dry PGAS funder in section 24: an on-chain
+identity the suite must be given, not a gap the host can close. `@parity/host-api-test-sdk`
+never met it because it had no core to enforce it -- it answered `Allocated`
+without proving anything.
+
+So a suite whose allowance specs passed against that package will not pass here
+on dev accounts alone, and that is a true difference rather than a regression.
+Closing it needs an enrolled identity on the target People chain, which belongs
+with whoever owns that enrolment.
+
+### The port did not move the pass count
+
+host-playground before the port: 36 passed, 15 failed, 2 flaky. After it: **38
+passed, 15 failed**, no flakes. The same fifteen specs fail, and the two signing
+specs that were flaky are now stable.
+
+What changed is the reason, not the score. Before, the fifteen failed because
+the capability was compiled out of the wasm core and no configuration could have
+reached it. Now they fail on an on-chain identity the accounts do not hold. The
+first was ours to fix and is fixed; the second is not a defect at all.
+
+Whether an enrolled identity turns those fifteen green is untested -- the
+allocation stops at the membership proof, so nothing past that point has ever
+run in the browser. Treat "enrol an identity and they pass" as the next
+hypothesis to check, not as a result.
 
 ## Working notes
 

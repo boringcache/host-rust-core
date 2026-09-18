@@ -112,7 +112,51 @@ A suite that starts the server itself also needs no restructuring:
 (`productUrl`, `accounts`, `networks`) and returns a URL ready to open.
 
 Set `productId` to the dotNS identifier the product signs with. A product that
-derives its own identifier from `window.location.host` wants that value here.
+derives its own identifier from `window.location.host` wants that value here --
+under Playwright that is the dev-server origin, e.g. `"localhost:5199"`.
+
+Get it wrong and every signing call fails with `PermissionDenied`, which reads
+like a permission-policy problem and is not one: the core scopes a product
+account to its identifier and refuses a request scoped to a different one. If
+signing fails but reads pass, set this before looking anywhere else.
+
+### Allowance specs need a personhood-enrolled account
+
+`@parity/host-api-test-sdk` answered `Allocated` without proving anything,
+because it had no core behind it. This host runs the real path: a statement-store
+or bulletin allowance is granted against a proof of personhood ring membership.
+Dev accounts are derived from fixed entropy and are not enrolled in any ring on
+a live People chain, so the proof cannot be built and the outcome is
+`NotAvailable`:
+
+```
+WARN signing_host: direct resource allocation item failed
+  {reason=signing account is not a personhood ring member;
+   cannot grant statement-store allowance}
+```
+
+Allowance specs that passed against the old package will therefore fail here on
+dev accounts alone. That is a real difference, not a regression -- the old green
+was unearned. Either supply an enrolled identity for the target chain, or treat
+those specs as out of scope for the migration and say so.
+
+### A suite that allocates allowances must serve the People chain
+
+Allowance registration reads personhood collections from the People chain, not
+the hub. Serving only the hub fails every allocation with an outcome the product
+renders as "resource is unavailable", and the core's log names the real cause:
+
+```
+WARN statement_allowance: could not resolve this collection
+  {collection=People, err=Members.Collections[People] missing}
+```
+
+Pass both, using an `id` ending in `-people` to select the role:
+
+```ts
+networks: [PASEO, { id: "paseo-people", name: "Paseo People",
+                    genesisHash: PEOPLE_GENESIS, rpcUrl: PEOPLE_WS }],
+```
 
 ## 3. The three assertions that change
 
@@ -184,3 +228,27 @@ npx playwright test --reporter=line
 Expect the same passes, minus anything in section 4. If a spec fails on a
 locator timeout at the app's connecting state, re-check step 0 -- that is the
 codec symptom, not a fixture problem.
+
+### When a call fails and the product only says "error"
+
+The core logs why a call failed before mapping it to a protocol answer, but it
+runs in a Web Worker by default, and `page.on("console")` does not observe a
+worker's console. Move it onto the page and raise the level:
+
+```ts
+createTestHostFixture({
+  productUrl: PRODUCT_URL,
+  topology: "main-thread",
+  logLevel: "debug",
+});
+```
+
+The reason then arrives on the page console:
+
+```
+WARN truapi_server::runtime::signing_host: direct resource allocation item failed
+  {reason=signing host: statement-store allowance allocation is native-only}
+```
+
+Both are debugging aids. `"worker"` is the production topology, so take them
+back out once the failure is understood.
