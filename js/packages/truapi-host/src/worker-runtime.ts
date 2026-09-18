@@ -786,7 +786,7 @@ ctx.addEventListener("message", (ev: MessageEvent<MainToWorker>) => {
       break;
     }
     case "activateLocalSession": {
-      const { secret } = msg;
+      const { secret, liteUsername } = msg;
       void handleSessionActivation(
         msg.requestId,
         "activateLocalSession",
@@ -800,6 +800,17 @@ ctx.addEventListener("message", (ev: MessageEvent<MainToWorker>) => {
                 "activateLocalSession needs a signing host; this runtime is " +
                   'a pairing host (pass role: "signing" to init)',
               ),
+            );
+          }
+          // Activating with a name is a separate core entry point. Fall back
+          // when the name is absent, or when a core predating it is loaded.
+          if (
+            liteUsername !== undefined &&
+            typeof signing.activateLocalSessionWithIdentity === "function"
+          ) {
+            return signing.activateLocalSessionWithIdentity(
+              secret,
+              liteUsername,
             );
           }
           return signing.activateLocalSession(secret);

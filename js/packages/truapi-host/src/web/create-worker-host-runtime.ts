@@ -78,7 +78,7 @@ export interface WorkerPairingHostRuntime {
    * Signing hosts only. A pairing host has no local secret and rejects this:
    * it waits for a wallet to answer over the statement-store channel instead.
    */
-  activateLocalSession(secret: Uint8Array): Promise<void>;
+  activateLocalSession(secret: Uint8Array, liteUsername?: string): Promise<void>;
   /**
    * Drop the active paired session without notifying the peer. Rejects on a
    * disposed runtime, as
@@ -1244,11 +1244,15 @@ function buildRuntime(state: RuntimeState): WorkerPairingHostRuntime {
         blob,
       }));
     },
-    activateLocalSession(secret: Uint8Array): Promise<void> {
+    activateLocalSession(
+      secret: Uint8Array,
+      liteUsername?: string,
+    ): Promise<void> {
       return sendSessionActivationRequest(state, (requestId) => ({
         kind: "activateLocalSession",
         requestId,
         secret,
+        liteUsername,
       }));
     },
     resetSessionState(): Promise<void> {

@@ -82,6 +82,15 @@ export interface WorkerPairingHostRuntime extends PermissionAuthorizationRuntime
  */
 export interface WorkerSigningHostRuntime extends WorkerPairingHostRuntime {
   activateLocalSession(secret: Uint8Array): Promise<void>;
+  /**
+   * Activate and give the session a display name, which is what
+   * `account.get_user_id` answers with. Optional: a core built before this
+   * entry point existed exposes only {@link activateLocalSession}.
+   */
+  activateLocalSessionWithIdentity?(
+    secret: Uint8Array,
+    liteUsername?: string | null,
+  ): Promise<void>;
 }
 
 /** Module surface the wasm-pack glue exports. */

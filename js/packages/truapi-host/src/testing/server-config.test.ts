@@ -54,3 +54,42 @@ describe("createTestHostServer host configuration", () => {
     expect(url.searchParams.get("login")).toBe("manual");
   });
 });
+
+describe("diagnostic options reach the page", () => {
+  it("carries topology and logLevel through the URL", () => {
+    const url = new URL(
+      hostPageUrl("http://host.test/", {
+        productUrl: "http://localhost:5173",
+        topology: "main-thread",
+        logLevel: "debug",
+      }),
+    );
+    expect(url.searchParams.get("topology")).toBe("main-thread");
+    expect(url.searchParams.get("logLevel")).toBe("debug");
+  });
+
+  it("omits them when unset, so the page keeps its production defaults", () => {
+    const url = new URL(
+      hostPageUrl("http://host.test/", {
+        productUrl: "http://localhost:5173",
+      }),
+    );
+    expect(url.searchParams.has("topology")).toBe(false);
+    expect(url.searchParams.has("logLevel")).toBe(false);
+  });
+
+  it("serves them from the server entry point too", async () => {
+    // Both entry points build the same query string. Asserting only through
+    // the fixture would let the server keep an option the page never sees.
+    const server = await createTestHostServer({
+      unref: true,
+      productUrl: "http://localhost:5173",
+      topology: "main-thread",
+      logLevel: "trace",
+    });
+    const url = new URL(server.url);
+    expect(url.searchParams.get("topology")).toBe("main-thread");
+    expect(url.searchParams.get("logLevel")).toBe("trace");
+    await server.close();
+  });
+});

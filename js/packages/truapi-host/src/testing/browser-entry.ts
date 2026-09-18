@@ -27,6 +27,8 @@ const accounts = params.get("accounts")?.split(",").filter(Boolean);
 const login = params.get("login");
 const productId = params.get("productId") ?? undefined;
 const rawRuntimeConfig = params.get("runtimeConfig");
+const topology = params.get("topology");
+const logLevel = params.get("logLevel") ?? undefined;
 
 void startTestHost({
   productUrl,
@@ -40,6 +42,8 @@ void startTestHost({
   },
   accounts: accounts as DevAccountName[] | undefined,
   loginBehavior: login === "manual" ? "manual" : "auto",
+  topology: topology === "main-thread" ? "main-thread" : "worker",
+  logLevel,
 }).catch((error: unknown) => {
   // Surface boot failures in the page rather than only the console: a fixture
   // that times out waiting for the control surface should be able to read why.

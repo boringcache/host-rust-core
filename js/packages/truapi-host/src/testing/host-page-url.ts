@@ -20,6 +20,19 @@ export interface HostPageConfig {
   accounts?: string[];
   /** Whether the host starts signed in. */
   loginBehavior?: "auto" | "manual";
+  /**
+   * Where the core runs. `"worker"` is the production topology and the
+   * default. `"main-thread"` is the debugging one: the core's log output
+   * reaches the page console, where `page.on("console")` can read it, instead
+   * of the worker console Playwright does not observe.
+   */
+  topology?: "worker" | "main-thread";
+  /**
+   * Core log level (`off`/`error`/`warn`/`info`/`debug`/`trace`). Raising it
+   * is what turns a bare failure outcome into the reason behind it: the core
+   * logs why a call failed before mapping it to a protocol answer.
+   */
+  logLevel?: string;
 }
 
 /** Apply `config` to a host page URL, returning the configured URL. */
@@ -35,5 +48,7 @@ export function hostPageUrl(base: string, config: HostPageConfig): string {
     url.searchParams.set("accounts", config.accounts.join(","));
   }
   if (config.loginBehavior) url.searchParams.set("login", config.loginBehavior);
+  if (config.topology) url.searchParams.set("topology", config.topology);
+  if (config.logLevel) url.searchParams.set("logLevel", config.logLevel);
   return url.toString();
 }

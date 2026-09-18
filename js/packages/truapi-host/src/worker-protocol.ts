@@ -96,7 +96,17 @@ export type MainToWorker =
    * Establish a session from host-held entropy. Signing hosts only: a pairing
    * host has no local secret and answers this with an error.
    */
-  | { kind: "activateLocalSession"; requestId: number; secret: Uint8Array }
+  | {
+      kind: "activateLocalSession";
+      requestId: number;
+      secret: Uint8Array;
+      /**
+       * Display name to activate the session under. Absent activates without
+       * one, which leaves the session with no primary username -- and
+       * `account.get_user_id` answers `Unknown` rather than a name.
+       */
+      liteUsername?: string;
+    }
   | { kind: "resetSessionState"; requestId: number }
   | {
       kind: "getPermissionAuthorizationStatus";

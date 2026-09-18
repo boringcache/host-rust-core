@@ -82,6 +82,16 @@ export interface TestHostPageOptions {
   topology?: "worker" | "main-thread";
   /** URL of the worker script. Defaults to what the test host server serves. */
   workerUrl?: string;
+  /**
+   * Core log level (`off`/`error`/`warn`/`info`/`debug`/`trace`).
+   *
+   * The core logs why a call failed before mapping it to a protocol answer,
+   * so raising this is what turns an opaque outcome into its reason. Under
+   * `"worker"` those lines go to the worker console, which Playwright's
+   * `page.on("console")` does not observe; pair this with
+   * `topology: "main-thread"` to read them from a test.
+   */
+  logLevel?: string;
 }
 
 /** How the test host answers login at boot. */
@@ -125,6 +135,13 @@ declare global {
   interface Window {
     /** Published for the Playwright fixture; see the module comment. */
     __TRUAPI_TEST_HOST__?: TestHostControl;
+    /**
+     * The same object under the name `@parity/host-api-test-sdk` published.
+     * Suites that drive the host page directly, rather than through the
+     * fixture, reach it here, so migrating one does not mean rewriting every
+     * `page.evaluate` that names the global.
+     */
+    __TEST_HOST__?: TestHostControl;
   }
 }
 
@@ -150,7 +167,13 @@ export async function startTestHost(
   // Exactly one of these is set; which one is the topology.
   let workerRuntime: WorkerSigningRuntime | undefined;
   let directRuntime: DirectSigningRuntime | undefined;
-  let runtime: { activateLocalSession(secret: Uint8Array): Promise<void>; disconnectSession(): Promise<void> };
+  let runtime: {
+    activateLocalSession(
+      secret: Uint8Array,
+      liteUsername?: string,
+    ): Promise<void>;
+    disconnectSession(): Promise<void>;
+  };
   if ((options.topology ?? "worker") === "worker") {
     // Production topology: the core runs in a Web Worker, reached over the
     // same protocol a real web host uses.
@@ -162,17 +185,20 @@ export async function startTestHost(
       host.callbacks,
       { hostConfig: hostConfig as never, role: "signing" },
     )) as unknown as WorkerSigningRuntime;
+    if (options.logLevel) workerRuntime.setLogLevel?.(options.logLevel);
     runtime = workerRuntime;
   } else {
     const wasmUrl = options.wasmUrl ?? "./wasm/testing/truapi_server.js";
     const glue = (await import(/* @vite-ignore */ wasmUrl)) as {
       default: () => Promise<unknown>;
+      setLogLevel?: (level: string) => void;
       WasmSigningHostRuntime: new (
         callbacks: unknown,
         config: unknown,
       ) => DirectSigningRuntime;
     };
     await glue.default();
+    if (options.logLevel) glue.setLogLevel?.(options.logLevel);
     const { createWasmRawCallbacks } = await import(
       "../generated/host-callbacks-adapter.js"
     );
@@ -186,7 +212,22 @@ export async function startTestHost(
       },
       hostConfig,
     );
-    runtime = directRuntime;
+    // The direct core takes a name through a separate entry point, so the
+    // shared `activate` above cannot call it directly. Adapt here rather than
+    // branching there, so both topologies activate identically.
+    const direct = directRuntime;
+    runtime = {
+      activateLocalSession(secret, liteUsername) {
+        if (
+          liteUsername !== undefined &&
+          typeof direct.activateLocalSessionWithIdentity === "function"
+        ) {
+          return direct.activateLocalSessionWithIdentity(secret, liteUsername);
+        }
+        return direct.activateLocalSession(secret);
+      },
+      disconnectSession: () => direct.disconnectSession(),
+    };
   }
 
   let roster: DevAccount[] = (options.accounts ?? ["alice"]).map(resolveAccount);
@@ -194,7 +235,11 @@ export async function startTestHost(
 
   const activate = async (account: DevAccount) => {
     if (active) await runtime.disconnectSession();
-    await runtime.activateLocalSession(account.entropy);
+    // Named, not anonymous: a session with no username makes
+    // `account.get_user_id` answer `Unknown`, where a real host names the
+    // signed-in identity. `@parity/host-api-test-sdk` answers with the account
+    // name, so a migrating suite asserting on it keeps working.
+    await runtime.activateLocalSession(account.entropy, account.name);
     active = account;
   };
 
@@ -281,12 +326,14 @@ export async function startTestHost(
   iframeHost.iframe.id = PRODUCT_FRAME_ID;
 
   window.__TRUAPI_TEST_HOST__ = control;
+  window.__TEST_HOST__ = control;
 
   return {
     host: control,
     iframe: iframeHost.iframe,
     dispose() {
       delete window.__TRUAPI_TEST_HOST__;
+      delete window.__TEST_HOST__;
       detach?.();
       iframeHost.dispose();
       worker?.terminate();
@@ -298,6 +345,10 @@ export async function startTestHost(
 /** The main-thread signing runtime: hands back a product core directly. */
 interface DirectSigningRuntime {
   activateLocalSession(secret: Uint8Array): Promise<void>;
+  activateLocalSessionWithIdentity?(
+    secret: Uint8Array,
+    liteUsername?: string | null,
+  ): Promise<void>;
   disconnectSession(): Promise<void>;
   productRuntime(
     product: { productId: string },
@@ -307,8 +358,9 @@ interface DirectSigningRuntime {
 
 /** The worker-backed signing runtime: hands back a wire provider. */
 interface WorkerSigningRuntime {
-  activateLocalSession(secret: Uint8Array): Promise<void>;
+  activateLocalSession(secret: Uint8Array, liteUsername?: string): Promise<void>;
   disconnectSession(): Promise<void>;
+  setLogLevel?(level: string): void;
   createProvider(product: { productId: string }): Promise<{
     postMessage(frame: Uint8Array): void;
     subscribe(listener: (frame: Uint8Array) => void): () => void;

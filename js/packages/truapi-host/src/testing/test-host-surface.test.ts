@@ -88,3 +88,36 @@ describe("TestHost covers TestHostAPI", () => {
     expect(ours).toContain("productFrame");
   });
 });
+
+describe("the host page publishes the compatibility global", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("./host-page.ts", import.meta.url)),
+    "utf8",
+  );
+
+  /** Both global names, in assignment and in deletion. */
+  const assigned = [...source.matchAll(/window\.(__\w*TEST_HOST__) = (\w+);/g)];
+  const deleted = [...source.matchAll(/delete window\.(__\w*TEST_HOST__);/g)];
+
+  it("assigns both names, and assigns the same object to each", () => {
+    // Parse floor: a rename that made these patterns match nothing would
+    // otherwise satisfy every assertion below vacuously.
+    expect(assigned.length).toBe(2);
+
+    const names = assigned.map((m) => m[1]).sort();
+    expect(names).toEqual(["__TEST_HOST__", "__TRUAPI_TEST_HOST__"]);
+
+    // The point of the alias: one control object under two names. Assigning a
+    // copy would let the two drift apart.
+    const values = new Set(assigned.map((m) => m[2]));
+    expect(values.size).toBe(1);
+  });
+
+  it("clears both names on dispose", () => {
+    expect(deleted.length).toBe(2);
+    expect(deleted.map((m) => m[1]).sort()).toEqual([
+      "__TEST_HOST__",
+      "__TRUAPI_TEST_HOST__",
+    ]);
+  });
+});

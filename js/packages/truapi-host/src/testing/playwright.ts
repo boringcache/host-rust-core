@@ -15,6 +15,7 @@ import type {
   ChainStatus,
   ChatMessageRecord,
   MockHostConfig,
+  NotificationLogEntry,
   PermissionDecision,
   PermissionPolicy,
   SigningLogEntry,
@@ -41,6 +42,7 @@ export type { DevAccount, DevAccountName } from "./dev-accounts.js";
 // so a suite that annotates a control-surface result compiles unchanged.
 export type {
   ChatMessageRecord as ChatMessageLogEntry,
+  NotificationLogEntry,
   PermissionDecision as PermissionLogEntry,
   PermissionPolicy as PermissionBehavior,
   SigningLogEntry,
@@ -115,6 +117,23 @@ export interface TestHostFixtureOptions {
   accounts?: (string | { name: string; uri?: string })[];
   /** Whether the host starts signed in. Defaults to `"auto"`. */
   loginBehavior?: "auto" | "manual";
+  /**
+   * Where the core runs. Defaults to `"worker"`, the production topology.
+   *
+   * Switch to `"main-thread"` to debug: the core's log output then reaches the
+   * page console, where `page.on("console")` can read it. Under `"worker"` it
+   * goes to the worker console, which Playwright does not observe -- so a
+   * failing call looks like a bare outcome with no reason attached.
+   */
+  topology?: "worker" | "main-thread";
+  /**
+   * Core log level (`off`/`error`/`warn`/`info`/`debug`/`trace`).
+   *
+   * The core logs why a call failed before mapping it to a protocol answer,
+   * so this is what turns an opaque outcome into its cause. Pair it with
+   * `topology: "main-thread"` to read those lines from a test.
+   */
+  logLevel?: string;
   /** How long to wait for the host page to publish its control surface. */
   readyTimeoutMs?: number;
 }
@@ -128,7 +147,7 @@ export interface TestHost {
 
   getNavigationLog(): Promise<string[]>;
   clearNavigationLog(): Promise<void>;
-  getNotificationLog(): Promise<unknown[]>;
+  getNotificationLog(): Promise<NotificationLogEntry[]>;
   clearNotificationLog(): Promise<void>;
   getSigningLog(): Promise<SigningLogEntry[]>;
   clearSigningLog(): Promise<void>;
@@ -312,8 +331,8 @@ const NO_PINNED_PRODUCT_ACCOUNT =
   "from (session root, product id), so it cannot be mapped to a chosen dev " +
   "account. `@parity/host-api-test-sdk` could pin one because it reimplements " +
   "the protocol with no core behind it. Read the address back from the host " +
-  "instead of pinning it, and expect switching the host account to change the " +
-  "product account -- that is the real behaviour, not a test-host limitation.";
+  "instead of pinning it: the core derives it, so it is stable across a host " +
+  "account switch rather than following the active account.";
 
 /** Why a derivation URI cannot name an account. */
 const NO_DERIVATION_URI =
@@ -346,9 +365,14 @@ function splitChainId(id: string): {
 /**
  * Expand `networks` into the three settings that have to agree.
  *
- * The proxy entries carry no genesis hash: an unhashed proxy takes every
+ * A single proxy carries no genesis hash: an unhashed proxy takes every
  * request, so routing survives a chain reset while only the DECLARED hash --
  * which the product checks against its descriptor bundle -- needs re-pinning.
+ *
+ * Several proxies have to be hashed, because an unhashed one would answer the
+ * other chain's requests too. That is not hypothetical: with a hub and a People
+ * chain both unhashed, the hub took the People reads and allowance registration
+ * failed looking for personhood collections on a chain that has none.
  */
 export function fromNetworks(networks: NetworkConfig[]): {
   mock: Pick<MockHostConfig, "chainProxies" | "supportedChains">;
@@ -370,7 +394,11 @@ export function fromNetworks(networks: NetworkConfig[]): {
   }
   return {
     mock: {
-      chainProxies: networks.map((entry) => ({ rpcUrl: entry.rpcUrl })),
+      chainProxies: networks.map((entry) =>
+        networks.length > 1
+          ? { genesisHash: entry.genesisHash, rpcUrl: entry.rpcUrl }
+          : { rpcUrl: entry.rpcUrl },
+      ),
       supportedChains: { network, chains },
     } as Pick<MockHostConfig, "chainProxies" | "supportedChains">,
     runtimeConfig,
@@ -448,6 +476,8 @@ export function createTestHostFixture(defaults: TestHostFixtureOptions) {
         runtimeConfig,
         accounts,
         loginBehavior: defaults.loginBehavior,
+        topology: defaults.topology,
+        logLevel: defaults.logLevel,
       });
       await page.goto(url);
 

@@ -106,3 +106,33 @@ describe("host-api-test-sdk option compatibility", () => {
     ).not.toThrow();
   });
 });
+
+describe("proxy routing across several chains", () => {
+  const PEOPLE = {
+    id: "paseo-people",
+    name: "Paseo People",
+    genesisHash: "0x4a2b5b73",
+    rpcUrl: "wss://paseo-people-next-system-rpc.polkadot.io",
+  };
+
+  it("hashes every proxy once there is more than one chain", () => {
+    const { mock } = fromNetworks([SAMPLE_CHAIN, PEOPLE]);
+    // Both hashed: an unhashed entry takes every request no hashed entry
+    // claims, so leaving either one unhashed lets it answer for the other.
+    expect(mock.chainProxies).toEqual([
+      { genesisHash: SAMPLE_CHAIN.genesisHash, rpcUrl: SAMPLE_CHAIN.rpcUrl },
+      { genesisHash: PEOPLE.genesisHash, rpcUrl: PEOPLE.rpcUrl },
+    ]);
+    // Each chain still has to reach its own endpoint.
+    const byHash = new Map(
+      (mock.chainProxies ?? []).map((p) => [p.genesisHash, p.rpcUrl]),
+    );
+    expect(byHash.get(PEOPLE.genesisHash)).toBe(PEOPLE.rpcUrl);
+    expect(byHash.get(SAMPLE_CHAIN.genesisHash)).toBe(SAMPLE_CHAIN.rpcUrl);
+  });
+
+  it("leaves a lone proxy unhashed, so a chain reset cannot break it", () => {
+    const { mock } = fromNetworks([SAMPLE_CHAIN]);
+    expect(mock.chainProxies).toEqual([{ rpcUrl: SAMPLE_CHAIN.rpcUrl }]);
+  });
+});
