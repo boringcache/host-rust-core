@@ -310,12 +310,15 @@ struct DeviceCapabilityPermissionHandlerTests {
     }
 
     @Test
-    func requestDecisionTransfersAnExistingOneTimeGrant() async throws {
-        let (handler, repository, _, _) = makeSUT(osStatus: .allowed, promptDecision: .deny)
+    func requestDecisionDoesNotReuseOrConsumeALegacyOneTimeGrant() async throws {
+        let (handler, repository, requester, _) = makeSUT(osStatus: .allowed, promptDecision: .deny)
         repository.grantOneTime(productId: productId, permission: .deviceCapability(capability))
-        let first = try await handler.requestDecision(productId: productId, capability: capability)
-        let second = try await handler.requestDecision(productId: productId, capability: capability)
-        #expect([first, second] == [.allowOnce, .deny])
+        let result = try await handler.requestDecision(productId: productId, capability: capability)
+        #expect(result == .deny)
+        #expect(requester.promptCalls.map(\.permission) == [.deviceCapability(capability)])
+        #expect(try await repository.getPermissionState(
+            productId: productId, permission: .deviceCapability(capability)
+        ) == .allowedOnce)
     }
 
     @Test
