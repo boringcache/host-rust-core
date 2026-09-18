@@ -14,16 +14,15 @@ owner: "@johnthecat"
 > **NOTE (2026-09-18): external navigation uses `OpenUrl`, matching legacy Swift.**
 > This revises [#434](https://github.com/paritytech/host-rust-core/pull/434), which gated external HTTP(S) navigation by destination domain and exempted application schemes. External `host_navigate_to` calls now require `DevicePermission::OpenUrl`, including allowed application schemes. `AllowAlways` covers future handoffs to any external destination; `AllowOnce` covers one handoff. Domain permissions continue to govern outbound network requests. Internal dotNS, localhost and host-handled Pocket navigation remain exempt.
 
+> **NOTE (2026-09-18): retain the legacy Google Fonts exception.**
+> For compatibility, `BLESSED_REMOTE_DOMAINS` lets every product access `fonts.googleapis.com` and `fonts.gstatic.com` without a prompt. This covers all paths and query strings on those hosts, not only font requests, and requests disclose the user's IP address to Google. An explicit matching denial overrides the exception. These implicit grants are not stored.
+
 ## Summary
 
 The host callback distinguishes `AllowOnce`, `AllowAlways`, and `Deny`.
 One-use grants stay in memory for the product execution and are consumed by
 the operation that needs them. Requesting permission upfront does not consume
 the grant. Product-facing permission responses remain boolean.
-
-`BLESSED_REMOTE_DOMAINS` holds the domains that need no prompt, initially
-`fonts.googleapis.com` and `fonts.gstatic.com`. An explicit matching denial
-overrides this exception. These implicit grants are not written to storage.
 
 The Host API currently has two underdefined permission calls — `host_device_permission` and `remote_permission` — that lack coverage for several device capabilities (NFC, Clipboard, OpenUrl, Biometrics), do not support batched remote-permission requests, and have no specified lifecycle for when prompts occur or how decisions are persisted. This RFC defines the complete set of device and remote permissions, updates the `remote_permission` signature to accept a batch, specifies lasting and one-use permission decisions, and establishes that business methods (`host_sign_raw`, `host_sign_payload`, `host_create_transaction`, `host_create_transaction_with_non_product_account`, `remote_statement_store_submit`, `remote_preimage_submit`, `remote_chain_transaction_broadcast`) implicitly trigger permission prompts if permission has not yet been granted.
 
@@ -64,7 +63,18 @@ The result is that products cannot predictably reason about which operations wil
 
 Since some interactions with the Web platform cannot be covered by the Host API, the permission system is coupled to the sandbox implementation.
 That means that fetch requests, WebSockets, WebRTC, and device permissions should be handled by the Host's sandbox implementation.
-The exact mechanism is out of scope for this RFC.
+
+`#[wire(internal)]` hides the consuming authorization methods from the product
+SDK; it does not authenticate callers. Rust still accepts those calls and
+checks permissions for the calling product execution. A direct product call
+can consume that execution's one-use grant. `ProductExecutionKind` describes
+App, Widget or Worker entrypoints, not whether the caller is the container.
+
+The shared container in [#828](https://github.com/paritytech/host-rust-core/pull/828)
+captures its authorization transport before product code runs and keeps the
+response handler private. Its wrappers trust replies from that channel,
+separate from public SDK replies. This browser enforcement lands with the
+container change, separately from the Rust authorization methods in #827.
 
 ### Updated Type Definitions
 
