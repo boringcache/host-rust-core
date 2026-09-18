@@ -93,13 +93,7 @@ use truapi_platform::{
 use web_time::Instant;
 
 use crate::chain_runtime::RuntimeFailure;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{SystemTime, UNIX_EPOCH};
-#[cfg(target_arch = "wasm32")]
-use web_time::{SystemTime, UNIX_EPOCH};
-
 use crate::host_logic::bulletin::preimage_key;
-use crate::host_logic::credential::{self, CredentialRequestError, CredentialRequestHeaders};
 use crate::host_logic::permissions::PermissionsService;
 use crate::host_logic::product_account::{
     derivation_index_bytes, derive_product_public_key, public_key_from_address,
@@ -266,6 +260,8 @@ pub struct ProductRuntimeHost {
     chat: Arc<ActionChannel<HostChatActionSubscribeItem>>,
     renderer: Arc<ActionChannel<HostRendererActionSubscribeItem>>,
     pocket_platform: Option<Arc<dyn truapi_platform::PocketPlatform>>,
+    /// Tunnel to the host's registered backends, when the host serves any.
+    backend_host: Option<Arc<dyn truapi_platform::BackendHost>>,
 }
 
 impl ProductRuntimeHost {
@@ -289,6 +285,7 @@ impl ProductRuntimeHost {
             chat: adapters.chat,
             renderer: adapters.renderer,
             pocket_platform: adapters.pocket_platform,
+            backend_host: adapters.backend_host,
         }
     }
 
@@ -336,6 +333,13 @@ impl ProductRuntimeHost {
     #[cfg(test)]
     fn new_compat(platform: Arc<dyn Platform>, spawner: Spawner) -> Self {
         Self::new_compat_with_pairing(platform, spawner).0
+    }
+
+    /// Install a backend tunnel on a test host.
+    #[cfg(test)]
+    fn with_backend_host(mut self, host: Arc<dyn truapi_platform::BackendHost>) -> Self {
+        self.backend_host = Some(host);
+        self
     }
 
     #[cfg(test)]
@@ -414,6 +418,7 @@ impl ProductRuntimeHost {
             chat,
             renderer,
             pocket_platform: None,
+            backend_host: None,
         };
         (host, pairing_host)
     }
@@ -645,119 +650,6 @@ impl ProductRuntimeHost {
         let product_id = self.product_id();
         let service = self.permissions_service(&product_id);
         service.set_authorization_status(&request, status).await
-    }
-
-    /// The remote-permission request to put to the user, or `None` to refuse
-    /// it without a prompt.
-    ///
-    /// A credential grant is refused unprompted when it could never produce an
-    /// identity: no session to derive one from (RFC 0009), or a triple naming
-    /// something a grant cannot cover.
-    ///
-    /// Otherwise it is canonicalized *before* the prompt, not only on the way
-    /// to storage. The user has to be asked about the endpoint that will
-    /// actually be granted: `/session/../../admin` reads as something beneath
-    /// `/session` and resolves to `/admin`, so prompting on the raw triple
-    /// would show one endpoint and grant another. Any other permission passes
-    /// through untouched.
-    pub(super) fn askable_remote_request(
-        &self,
-        request: v01::RemotePermissionRequest,
-    ) -> Option<v01::RemotePermissionRequest> {
-        let v01::RemotePermission::Credential {
-            domain,
-            path,
-            method,
-        } = &request.permission
-        else {
-            return Some(request);
-        };
-        self.authority.current_session()?;
-        credential::CredentialGrant::new(domain, path, method)
-            .ok()
-            .map(|grant| v01::RemotePermissionRequest {
-                permission: grant.permission(),
-            })
-    }
-
-    /// Identity headers for one outbound request a credential grant covers
-    /// (RFC 0025), or an error naming why the request is not covered.
-    ///
-    /// Never prompts. A grant is the standing consent, and an HTTP request
-    /// cannot raise a dialog; an endpoint with no grant is refused and the
-    /// product asks for one through `request_remote_permission` instead.
-    ///
-    /// `body_hash` is the hash of the request body, which the caller computes
-    /// with [`credential::body_hash`] so a streaming body never has to be
-    /// buffered across the boundary.
-    /// Mint a timestamp and nonce, then sign. Doing it here rather than at each
-    /// boundary keeps every host binding a signature to a clock and a fresh
-    /// nonce the same way.
-    #[instrument(skip_all, fields(runtime.method = "permissions.credential_request_headers"))]
-    pub(crate) async fn credential_request_headers(
-        &self,
-        method: String,
-        url: String,
-        body_hash: [u8; 32],
-    ) -> Result<CredentialRequestHeaders, CredentialRequestError> {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| CredentialRequestError::Unknown {
-                reason: "system clock is before the Unix epoch".to_string(),
-            })?
-            .as_secs();
-        let mut nonce = [0u8; 16];
-        getrandom::getrandom(&mut nonce).map_err(|err| CredentialRequestError::Unknown {
-            reason: format!("nonce generation failed: {err}"),
-        })?;
-        self.credential_request_headers_at(method, url, body_hash, timestamp, nonce.to_vec())
-            .await
-    }
-
-    /// [`Self::credential_request_headers`] with the clock and randomness as
-    /// inputs, so a signature is reproducible from a vector.
-    pub(crate) async fn credential_request_headers_at(
-        &self,
-        method: String,
-        url: String,
-        body_hash: [u8; 32],
-        timestamp: u64,
-        nonce: Vec<u8>,
-    ) -> Result<CredentialRequestHeaders, CredentialRequestError> {
-        let (grant, query) = credential::CredentialGrant::from_request(&method, &url)?;
-
-        let product_id = self.product_id();
-        let status = self
-            .permissions_service(&product_id)
-            .peek_remote(&v01::RemotePermissionRequest {
-                permission: grant.permission(),
-            })
-            .await
-            .map_err(|err| CredentialRequestError::Unknown {
-                reason: format!("permission storage failed: {err:?}"),
-            })?;
-        if status != PermissionAuthorizationStatus::Authorized {
-            return Err(CredentialRequestError::NotGranted);
-        }
-
-        let session = self
-            .authority
-            .current_session()
-            .ok_or(CredentialRequestError::NotConnected)?;
-        let keypair = self
-            .authority
-            .credential_signing_key(&session, &product_id, &grant)
-            .map_err(|err| CredentialRequestError::Unknown {
-                reason: err.to_string(),
-            })?;
-
-        let digest = credential::request_digest(&grant, &query, timestamp, &nonce, &body_hash);
-        Ok(CredentialRequestHeaders {
-            key: keypair.public.to_bytes().to_vec(),
-            signature: credential::sign_request(&keypair, &digest).to_vec(),
-            timestamp,
-            nonce,
-        })
     }
 
     #[instrument(skip_all, fields(runtime.method = "permissions.remote_authorization"))]
@@ -1129,6 +1021,11 @@ impl ProductRuntimeHost {
             self.authority.session_state().current().is_some(),
             self.chat_platform.as_ref(),
         )
+    }
+
+    /// The host's backend tunnel, or `Unsupported` when it registers none.
+    fn backend_host<E>(&self) -> Result<Arc<dyn truapi_platform::BackendHost>, CallError<E>> {
+        self.backend_host.clone().ok_or(CallError::Unsupported)
     }
 
     fn chat_platform<E>(&self) -> Result<Arc<dyn truapi_platform::ChatPlatform>, CallError<E>> {

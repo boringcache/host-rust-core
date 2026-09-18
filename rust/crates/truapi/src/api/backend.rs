@@ -1,0 +1,44 @@
+//! Unified [`Backend`] trait.
+
+use crate::versioned::backend::{HostBackendError, HostBackendRequest, HostBackendResponse};
+use crate::{CallContext, CallError};
+use crate::{wire, wire_trait};
+
+/// Requests against a backend the host holds a credential for.
+///
+/// A product cannot hold a server-side API key, so the deployer's backend holds
+/// the third-party key, the host holds a credential for that backend, and the
+/// core carries the request between them. The product never learns the origin it
+/// reached or the credential that authenticated the call.
+///
+/// Which backends exist is host configuration, not protocol: a host that
+/// registers none answers `Unsupported`.
+#[wire_trait(id = 19)]
+#[crate::async_trait]
+pub trait Backend: Send + Sync {
+    /// Perform one request against a registered backend.
+    ///
+    /// `path` is absolute within the backend and cannot leave its origin, so
+    /// variable data belongs in `query`. A redirect comes back as its `3xx`
+    /// rather than being followed.
+    ///
+    /// ```ts
+    /// const result = await truapi.backend.request({
+    ///   backend: "echo",
+    ///   method: "Get",
+    ///   path: "/ok",
+    ///   query: [{ name: "hello", value: "world" }],
+    ///   body: undefined,
+    /// });
+    /// assert(result.isOk(), "backend request failed:", result);
+    /// console.log("backend answered:", result.value.status);
+    /// ```
+    #[wire(id = 0)]
+    async fn request(
+        &self,
+        _cx: &CallContext,
+        _request: HostBackendRequest,
+    ) -> Result<HostBackendResponse, CallError<HostBackendError>> {
+        Err(CallError::unavailable())
+    }
+}

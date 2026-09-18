@@ -31,18 +31,19 @@ uniffi::use_remote_type!(truapi::Bytes32);
 use truapi::Bytes32;
 use truapi::latest::{
     AllocatableResource, ChainIdentifier, ChatAction, ChatActions, ChatCustomMessage, ChatFile,
-    ChatMedia, ChatMessageContent, ChatReaction, ChatRichText, GenericError,
-    HostChatCreateRoomError, HostChatCreateRoomRequest, HostChatCreateRoomResponse,
-    HostChatListSubscribeItem, HostChatPostMessageError, HostChatPostMessageRequest,
-    HostChatPostMessageResponse, HostChatRegisterBotError, HostChatRegisterBotRequest,
-    HostChatRegisterBotResponse, HostDevicePermissionRequest, HostDevicePermissionResponse,
-    HostFeatureSupportedRequest, HostFeatureSupportedResponse, HostLocaleSubscribeItem,
-    HostNavigateToError, HostPlatform, HostPocketListSubscribeItem, HostPocketRemoveCardError,
-    HostPocketRemoveCardRequest, HostPushNotificationRequest, HostPushNotificationResponse,
-    HostSignPayloadRequest, HostSignPayloadWithLegacyAccountRequest, HostSignRawRequest,
-    HostSignRawWithLegacyAccountRequest, HostThemeSubscribeItem, LegacyAccountTxPayload,
-    NotificationId, ProductAccountId, ProductAccountTxPayload, ProductProofContext,
-    RemotePermission, RemotePermissionRequest, RemotePermissionResponse, RingLocation,
+    ChatMedia, ChatMessageContent, ChatReaction, ChatRichText, GenericError, HostBackendError,
+    HostBackendRequest, HostBackendResponse, HostChatCreateRoomError, HostChatCreateRoomRequest,
+    HostChatCreateRoomResponse, HostChatListSubscribeItem, HostChatPostMessageError,
+    HostChatPostMessageRequest, HostChatPostMessageResponse, HostChatRegisterBotError,
+    HostChatRegisterBotRequest, HostChatRegisterBotResponse, HostDevicePermissionRequest,
+    HostDevicePermissionResponse, HostFeatureSupportedRequest, HostFeatureSupportedResponse,
+    HostLocaleSubscribeItem, HostNavigateToError, HostPlatform, HostPocketListSubscribeItem,
+    HostPocketRemoveCardError, HostPocketRemoveCardRequest, HostPushNotificationRequest,
+    HostPushNotificationResponse, HostSignPayloadRequest, HostSignPayloadWithLegacyAccountRequest,
+    HostSignRawRequest, HostSignRawWithLegacyAccountRequest, HostThemeSubscribeItem,
+    LegacyAccountTxPayload, NotificationId, ProductAccountId, ProductAccountTxPayload,
+    ProductProofContext, RemotePermission, RemotePermissionRequest, RemotePermissionResponse,
+    RingLocation,
 };
 use truapi::v01::HostAccountSignVrfRequest;
 use url::{Host, Url};
@@ -1610,17 +1611,6 @@ fn canonical_remote_request(request: &RemotePermissionRequest) -> RemotePermissi
             canonical.dedup();
             RemotePermission::Remote { domains: canonical }
         }
-        RemotePermission::Credential {
-            domain,
-            path,
-            method,
-        } => RemotePermission::Credential {
-            // Same reasoning as the domain set above: case must not produce a
-            // second key. `path` is case-sensitive and is keyed verbatim.
-            domain: normalize_remote_domain(domain),
-            path: path.clone(),
-            method: method.to_ascii_uppercase(),
-        },
         other => other.clone(),
     };
     RemotePermissionRequest { permission }
@@ -3139,6 +3129,45 @@ pub trait PermissionStatusHost: Send + Sync {
     ) -> Result<DevicePermissionStatus, GenericError>;
 }
 
+/// Host-owned tunnel to the backends this host is registered for. Optional: a
+/// host that registers none leaves backend requests answered `Unsupported`.
+/// See [`OptionalPlatform`].
+///
+/// The host alone resolves `backend` to a base URL and holds the credential
+/// that authenticates the call. It resolves per call, not at install time, so a
+/// host may add a backend or refresh a credential without the core knowing. A
+/// host that cannot keep a credential from its own users — anything running as
+/// script in a browser — registers no backends.
+///
+/// The core screens the request first: `path` is absolute within the backend
+/// and carries no dot segments, empty segments, percent escapes or
+/// protocol-relative prefix. Percent-encoding the query names and values when
+/// building the URL is the host's job.
+///
+/// Obligations the core cannot enforce:
+///
+/// - **Set the path on the parsed base; never concatenate strings.** Refuse a
+///   base carrying a query or fragment — appended to
+///   `https://api.example.com/v1?key=abc`, a path lands inside the query.
+/// - **Do not follow redirects.** Return the `3xx`.
+/// - **Cap the response body** and answer [`HostBackendError::ResponseTooLarge`]
+///   rather than truncating.
+/// - **Filter response headers** to `content-type`, `retry-after`, `link` and
+///   the `x-ratelimit-*` trio, which the core re-screens. Keep no cookie jar.
+/// - **Forward the caller as `X-Polkadot-Product`**, overwriting any header of
+///   that name. It is host-attested, not cryptographic.
+/// - **Keep the credential out of anything the product can name.**
+#[async_trait]
+pub trait BackendHost: Send + Sync {
+    /// Perform one request against a registered backend, attaching the host's
+    /// own credential.
+    async fn backend_request(
+        &self,
+        product: &ProductContext,
+        request: HostBackendRequest,
+    ) -> Result<HostBackendResponse, HostBackendError>;
+}
+
 /// Combined platform interface. A host must provide every capability trait
 /// listed here. Members marked optional may be omitted; the core answers their
 /// product calls with `Unsupported`. See [`OptionalPlatform`].
@@ -3178,6 +3207,12 @@ impl<T> Platform for T where
 /// omits one is not broken: the core answers the corresponding product calls
 /// with `Unsupported`. Codegen reads this list to emit each capability as an
 /// optional group on the host-callback surface.
-pub trait OptionalPlatform: ChatPlatform + PermissionStatusHost + PocketPlatform {}
+pub trait OptionalPlatform:
+    BackendHost + ChatPlatform + PermissionStatusHost + PocketPlatform
+{
+}
 
-impl<T> OptionalPlatform for T where T: ChatPlatform + PermissionStatusHost + PocketPlatform {}
+impl<T> OptionalPlatform for T where
+    T: BackendHost + ChatPlatform + PermissionStatusHost + PocketPlatform
+{
+}

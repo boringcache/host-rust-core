@@ -300,6 +300,16 @@ public protocol HostBridge: AnyObject, Sendable {
     func devicePermissionStatus(request: HostDevicePermissionRequest) async throws
         -> NativeDevicePermissionStatus
 
+    /// Perform one request against a backend this host holds a credential for,
+    /// on behalf of `productId`. The core has already screened the request.
+    /// Resolve the identifier, set the path on the parsed base rather than
+    /// concatenating, do not follow redirects, cap the response, return only
+    /// the allowlisted headers, and forward `productId` as `X-Polkadot-Product`.
+    /// Defaults to `.unknownBackend`, so an app that registers no backends
+    /// leaves these calls refused.
+    func backendRequest(productId: String, request: HostBackendRequest) async throws
+        -> HostBackendResponse
+
     /// Prompt for a remote (product-scoped) permission bundle. Invoked on a
     /// blocking-pool thread; present the prompt on the main thread and block
     /// the calling thread until the user decides. Blocking here does not
@@ -459,6 +469,8 @@ public extension HostBridge {
     func workerDemandChanged(productId: String, transition: WorkerTransition) {}
     func devicePermissionStatus(request: HostDevicePermissionRequest) async throws
         -> NativeDevicePermissionStatus { .notApplicable }
+    func backendRequest(productId _: String, request _: HostBackendRequest) async throws
+        -> HostBackendResponse { throw HostBackendRejection.UnknownBackend }
 }
 
 /// Adapter that bridges the public `ChatHostBridge` to the generated UniFFI
@@ -586,6 +598,18 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
     {
         try await withHostRejection {
             try await bridge.devicePermissionStatus(request: request)
+        }
+    }
+
+    func backendRequest(productId: String, request: HostBackendRequest) async throws
+        -> HostBackendResponse
+    {
+        do {
+            return try await bridge.backendRequest(productId: productId, request: request)
+        } catch let error as HostBackendRejection {
+            throw error
+        } catch {
+            throw HostBackendRejection.Unknown(reason: hostRejectionReason(error))
         }
     }
 

@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::channel::mpsc;
 use futures::future::{AbortHandle, Abortable};
 use futures::stream::{self, BoxStream, Stream, StreamExt};
-use js_sys::{Array, Function, Object, Reflect, Uint8Array};
+use js_sys::{Array, Function, Reflect, Uint8Array};
 use parity_scale_codec::{Decode, Encode};
 use send_wrapper::SendWrapper;
 use truapi::latest::HostPlatform;
@@ -27,7 +27,7 @@ use truapi::v01;
 #[cfg(feature = "wasm-signing-host")]
 use truapi_platform::SigningHostConfig;
 use truapi_platform::{
-    ChainProvider, ChatPlatform, HostInfo, JsonRpcConnection, PairingHostConfig,
+    BackendHost, ChainProvider, ChatPlatform, HostInfo, JsonRpcConnection, PairingHostConfig,
     PermissionStatusHost, PlatformInfo, PocketPlatform, ProductContext, ProductExecutionKind,
     RuntimeConfigValidationError,
 };
@@ -87,17 +87,6 @@ impl FrameSink for WasmFrameSink {
 #[wasm_bindgen(js_name = wireSchemaHash)]
 pub fn wire_schema_hash() -> String {
     crate::generated::wire_table::TRUAPI_WIRE_SCHEMA_HASH.to_string()
-}
-
-/// Whether the host reserves this header name (RFC 0025).
-///
-/// A host drops every header this answers `true` for from a product's outgoing
-/// request before attaching the identity `credentialRequestHeaders` returns.
-/// Otherwise a product could set `X-Polkadot-Key` itself and present whatever
-/// identity it liked to the backend.
-#[wasm_bindgen(js_name = isReservedCredentialHeader)]
-pub fn is_reserved_credential_header(name: String) -> bool {
-    crate::host_logic::credential::is_reserved_header(&name)
 }
 
 /// Streams tapped debug frames out to a JS `debugEmit(channelId, dir, frame)`
@@ -855,6 +844,7 @@ struct WasmPlatformAdapters {
     chat_platform: Option<Arc<dyn ChatPlatform>>,
     status_host: Option<Arc<dyn PermissionStatusHost>>,
     pocket_platform: Option<Arc<dyn PocketPlatform>>,
+    backend_host: Option<Arc<dyn BackendHost>>,
 }
 
 /// Build the platform and the optional capability adapters supplied by the host.
@@ -862,15 +852,18 @@ fn wasm_platform(bridge: Arc<JsBridge>) -> WasmPlatformAdapters {
     let has_chat = bridge.has_chat();
     let has_permission_status = bridge.has_permission_status();
     let has_pocket = bridge.has_pocket();
+    let has_backend = bridge.has_backend();
     let platform = Arc::new(WasmPlatform::new(bridge));
     let chat = has_chat.then(|| platform.clone() as Arc<dyn ChatPlatform>);
     let status = has_permission_status.then(|| platform.clone() as Arc<dyn PermissionStatusHost>);
     let pocket = has_pocket.then(|| platform.clone() as Arc<dyn PocketPlatform>);
+    let backend = has_backend.then(|| platform.clone() as Arc<dyn BackendHost>);
     WasmPlatformAdapters {
         platform,
         chat_platform: chat,
         status_host: status,
         pocket_platform: pocket,
+        backend_host: backend,
     }
 }
 
@@ -933,6 +926,7 @@ impl WasmPairingHostRuntime {
             chat_platform,
             status_host,
             pocket_platform,
+            backend_host,
         } = wasm_platform(bridge);
         let spawner: Spawner = Arc::new(|fut| {
             wasm_bindgen_futures::spawn_local(fut);
@@ -945,6 +939,9 @@ impl WasmPairingHostRuntime {
         }
         if let Some(pocket_platform) = pocket_platform {
             runtime.set_pocket_platform(pocket_platform);
+        }
+        if let Some(backend_host) = backend_host {
+            runtime.set_backend_host(backend_host);
         }
         install_worker_demand_observer(runtime.worker_ledger(), &callbacks)?;
         Ok(Self {
@@ -1185,6 +1182,7 @@ impl WasmSigningHostRuntime {
         let WasmPlatformAdapters {
             platform,
             pocket_platform,
+            backend_host,
             ..
         } = wasm_platform(bridge);
         let spawner: Spawner = Arc::new(|fut| {
@@ -1194,6 +1192,9 @@ impl WasmSigningHostRuntime {
         let runtime = SigningHostRuntime::new(platform, host_config, spawner);
         if let Some(pocket_platform) = pocket_platform {
             runtime.set_pocket_platform(pocket_platform);
+        }
+        if let Some(backend_host) = backend_host {
+            runtime.set_backend_host(backend_host);
         }
         install_worker_demand_observer(runtime.worker_ledger(), &callbacks)?;
         Ok(Self {
@@ -1353,6 +1354,7 @@ impl WasmProductRuntime {
             chat_platform,
             status_host,
             pocket_platform,
+            backend_host,
         } = wasm_platform(bridge);
         let spawner: Spawner = Arc::new(|fut| {
             wasm_bindgen_futures::spawn_local(fut);
@@ -1367,6 +1369,9 @@ impl WasmProductRuntime {
         }
         if let Some(pocket_platform) = pocket_platform {
             pairing.set_pocket_platform(pocket_platform);
+        }
+        if let Some(backend_host) = backend_host {
+            pairing.set_backend_host(backend_host);
         }
         install_worker_demand_observer(pairing.worker_ledger(), &callbacks)?;
         let core = pairing.product_runtime(product, frame_sink);
@@ -1405,44 +1410,6 @@ impl WasmProductRuntime {
             .await
             .map_err(generic_error_to_js)?;
         Ok(permission_authorization_status_to_js(status))
-    }
-
-    /// Identity headers for one outbound request a credential grant covers,
-    /// for the host to attach as it forwards the request (RFC 0025).
-    ///
-    /// The host strips every `X-Polkadot-*` header the caller supplied before
-    /// attaching these, so a product cannot present an identity of its own
-    /// choosing. `bodyHash` is the BLAKE2b-256 of the request body, empty body
-    /// included.
-    ///
-    /// Resolves to an object of header name to value, ready to set on the
-    /// outgoing request, and rejects when no grant covers the endpoint.
-    #[wasm_bindgen(js_name = credentialRequestHeaders)]
-    pub async fn credential_request_headers(
-        &self,
-        method: String,
-        url: String,
-        body_hash: Vec<u8>,
-    ) -> Result<JsValue, JsValue> {
-        let body_hash: [u8; 32] = body_hash
-            .try_into()
-            .map_err(|_| JsValue::from_str("bodyHash must be 32 bytes"))?;
-        let headers = self
-            .inner
-            .core
-            .credential_request_headers(method, url, body_hash)
-            .await
-            .map_err(|err| JsValue::from_str(&err.to_string()))?;
-
-        let object = Object::new();
-        for header in headers.to_headers() {
-            Reflect::set(
-                &object,
-                &JsValue::from_str(&header.name),
-                &JsValue::from_str(&header.value),
-            )?;
-        }
-        Ok(object.into())
     }
 
     /// Read permission authorization statuses without prompting.

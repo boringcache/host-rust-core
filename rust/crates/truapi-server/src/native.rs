@@ -20,8 +20,6 @@ use futures::stream::{self, BoxStream, StreamExt};
 use futures::task::SpawnExt;
 use parity_scale_codec::Encode;
 use truapi::{Bytes32, latest::HostPlatform, v01};
-
-use crate::host_logic::credential::{self, CredentialHeader, CredentialRequestError};
 use truapi_platform::{
     AuthPresenter, AuthState, ChainProvider, CoreAdmin, CoreStorage, CoreStorageKey, Features,
     HostInfo, JsonRpcConnection, LocaleHost, Navigation, Notifications,
@@ -115,6 +113,51 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for HostRejection {
             "host callback threw an undeclared error; reporting it as a rejection"
         );
         HostRejection::Rejected { reason: err.reason }
+    }
+}
+
+/// Backend failure reported by a native host: the subset of
+/// `HostBackendError` a host can raise, in the shape [`uniffi::Error`] requires.
+#[derive(Debug, Clone, thiserror::Error, uniffi::Error)]
+pub enum HostBackendRejection {
+    /// This host serves no backend under the requested identifier.
+    #[error("unknown backend")]
+    UnknownBackend,
+    /// The response exceeded the host's cap and was not truncated to fit.
+    #[error("response too large")]
+    ResponseTooLarge,
+    /// The request was sent and did not complete.
+    #[error("{reason}")]
+    Transport {
+        /// Human-readable failure reason.
+        reason: String,
+    },
+    /// Catch-all.
+    #[error("{reason}")]
+    Unknown {
+        /// Human-readable failure reason.
+        reason: String,
+    },
+}
+
+impl From<HostBackendRejection> for v01::HostBackendError {
+    fn from(err: HostBackendRejection) -> Self {
+        match err {
+            HostBackendRejection::UnknownBackend => Self::UnknownBackend,
+            HostBackendRejection::ResponseTooLarge => Self::ResponseTooLarge,
+            HostBackendRejection::Transport { reason } => Self::Transport { reason },
+            HostBackendRejection::Unknown { reason } => Self::Unknown { reason },
+        }
+    }
+}
+
+impl From<uniffi::UnexpectedUniFFICallbackError> for HostBackendRejection {
+    fn from(err: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        tracing::warn!(
+            reason = %err.reason,
+            "backend callback threw an undeclared error; reporting it as unknown"
+        );
+        HostBackendRejection::Unknown { reason: err.reason }
     }
 }
 
@@ -417,17 +460,6 @@ pub fn parse_navigate(input: String) -> NavigateDecision {
     dotns::parse_navigate(&input)
 }
 
-/// Whether the host reserves this header name (RFC 0025).
-///
-/// A host drops every header this answers `true` for from a product's outgoing
-/// request before attaching the identity `credential_request_headers` returns.
-/// Otherwise a product could set `X-Polkadot-Key` itself and present whatever
-/// identity it liked to the backend. Pure and stateless.
-#[uniffi::export]
-pub fn is_reserved_credential_header(name: String) -> bool {
-    credential::is_reserved_header(&name)
-}
-
 /// OS status of a device capability, as a native host reports it.
 ///
 /// Mirrors [`truapi_platform::DevicePermissionStatus`], which cannot be used
@@ -512,6 +544,15 @@ pub trait HostCallbacks: Send + Sync {
         &self,
         request: v01::HostDevicePermissionRequest,
     ) -> Result<NativeDevicePermissionStatus, HostRejection>;
+
+    /// Perform one request against a backend this host holds a credential for,
+    /// on behalf of `product_id`. The request is already screened; the
+    /// obligations are on [`truapi_platform::BackendHost`].
+    async fn backend_request(
+        &self,
+        product_id: String,
+        request: v01::HostBackendRequest,
+    ) -> Result<v01::HostBackendResponse, HostBackendRejection>;
 
     /// Prompt the user for a remote (product-scoped) permission.
     async fn remote_permission(
@@ -743,6 +784,7 @@ impl NativeTrUApiHostRuntime {
         });
         let permission_status: Arc<dyn truapi_platform::PermissionStatusHost> =
             callback_platform.clone();
+        let backend_host: Arc<dyn truapi_platform::BackendHost> = callback_platform.clone();
         let platform: Arc<dyn truapi_platform::Platform> = callback_platform;
         let chat: Option<Arc<dyn truapi_platform::ChatPlatform>> =
             chat_callbacks.map(|chat| -> Arc<dyn truapi_platform::ChatPlatform> {
@@ -765,6 +807,7 @@ impl NativeTrUApiHostRuntime {
             chat,
             pocket,
             permission_status,
+            backend_host,
             events,
             shared_events: self.events.clone(),
             #[cfg(feature = "ws-bridge")]
@@ -1147,6 +1190,8 @@ pub struct NativeProductExecution {
     /// The same `CallbackPlatform` as `platform`, kept separately because
     /// `Arc<dyn Platform>` cannot be downcast to the optional capability.
     permission_status: Arc<dyn truapi_platform::PermissionStatusHost>,
+    /// The same `CallbackPlatform` again, for the backend tunnel.
+    backend_host: Arc<dyn truapi_platform::BackendHost>,
     events: Arc<NativeEventBus>,
     /// Host-runtime events back the process-wide services shared by every
     /// product execution (chain, Statement Store, and Bulletin). Native
@@ -1178,6 +1223,7 @@ impl NativeProductExecution {
             platform: self.platform.clone(),
             chat_platform: self.chat.clone(),
             permission_status: Some(self.permission_status.clone()),
+            backend_host: Some(self.backend_host.clone()),
             chat: self.chat_connection.clone(),
             renderer: self.renderer_connection.clone(),
             pocket_platform: self.pocket.clone(),
@@ -1241,26 +1287,6 @@ impl NativeProductExecution {
             .admin()
             .permission_authorization_status(request)
             .await?)
-    }
-
-    /// Identity headers for one outbound request a credential grant covers,
-    /// for the host to attach as it forwards the request (RFC 0025).
-    ///
-    /// The host strips every `X-Polkadot-*` header the caller supplied before
-    /// attaching these, so a product cannot present an identity of its own
-    /// choosing. `body_hash` is the BLAKE2b-256 of the request body, empty body
-    /// included.
-    pub async fn credential_request_headers(
-        &self,
-        method: String,
-        url: String,
-        body_hash: Bytes32,
-    ) -> Result<Vec<CredentialHeader>, CredentialRequestError> {
-        Ok(self
-            .admin()
-            .credential_request_headers(method, url, body_hash)
-            .await?
-            .to_headers())
     }
 
     /// Update a product-scoped permission authorization.
@@ -1742,6 +1768,26 @@ impl truapi_platform::PermissionStatusHost for CallbackPlatform {
             .await
             .map(Into::into)
             .map_err(v01::GenericError::from)
+    }
+}
+
+#[async_trait]
+impl truapi_platform::BackendHost for CallbackPlatform {
+    async fn backend_request(
+        &self,
+        product: &truapi_platform::ProductContext,
+        request: v01::HostBackendRequest,
+    ) -> Result<v01::HostBackendResponse, v01::HostBackendError> {
+        self.callbacks.on_core_log(
+            "truapi.native.callback.backend_request".to_string(),
+            // The path and query can carry user data; only the backend is logged.
+            request.backend.clone(),
+        );
+
+        self.callbacks
+            .backend_request(product.product_id.clone(), request)
+            .await
+            .map_err(v01::HostBackendError::from)
     }
 }
 
@@ -2544,6 +2590,13 @@ mod tests {
                 .expect("auth state mutex poisoned")
                 .push(state);
         }
+        async fn backend_request(
+            &self,
+            _product_id: String,
+            _request: v01::HostBackendRequest,
+        ) -> Result<v01::HostBackendResponse, HostBackendRejection> {
+            Err(HostBackendRejection::UnknownBackend)
+        }
         fn core_storage_read(&self, _key: Vec<u8>) -> Result<Option<Vec<u8>>, HostRejection> {
             Ok(None)
         }
@@ -2978,11 +3031,6 @@ mod tests {
             v01::RemotePermission::ChainSubmit,
             v01::RemotePermission::PreimageSubmit,
             v01::RemotePermission::StatementSubmit,
-            v01::RemotePermission::Credential {
-                domain: "onramp.example.com".to_string(),
-                path: "/session".to_string(),
-                method: "POST".to_string(),
-            },
         ];
 
         let mut cases: Vec<PermissionAuthorizationRequest> = Vec::new();
@@ -3859,6 +3907,14 @@ mod tests {
             fn cancel_notification(&self, _id: u32) -> Result<(), HostRejection> {
                 Ok(())
             }
+            async fn backend_request(
+                &self,
+                _product_id: String,
+                _request: v01::HostBackendRequest,
+            ) -> Result<v01::HostBackendResponse, HostBackendRejection> {
+                Err(HostBackendRejection::UnknownBackend)
+            }
+
             async fn device_permission(
                 &self,
                 _request: v01::HostDevicePermissionRequest,
@@ -4005,6 +4061,14 @@ mod tests {
             fn cancel_notification(&self, _id: u32) -> Result<(), HostRejection> {
                 Ok(())
             }
+            async fn backend_request(
+                &self,
+                _product_id: String,
+                _request: v01::HostBackendRequest,
+            ) -> Result<v01::HostBackendResponse, HostBackendRejection> {
+                Err(HostBackendRejection::UnknownBackend)
+            }
+
             async fn device_permission(
                 &self,
                 _request: v01::HostDevicePermissionRequest,

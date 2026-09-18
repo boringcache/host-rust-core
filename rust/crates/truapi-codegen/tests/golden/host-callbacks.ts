@@ -26,6 +26,8 @@ import {
 
 import type {
   GenericError,
+  HostBackendRequest,
+  HostBackendResponse,
   HostChatCreateRoomRequest,
   HostChatCreateRoomResponse,
   HostChatListSubscribeItem,
@@ -946,6 +948,47 @@ export interface AuthPresenter {
 }
 
 /**
+ * Host-owned tunnel to the backends this host is registered for. Optional: a
+ * host that registers none leaves backend requests answered `Unsupported`.
+ * See `OptionalPlatform`.
+ *
+ * The host alone resolves `backend` to a base URL and holds the credential
+ * that authenticates the call. It resolves per call, not at install time, so a
+ * host may add a backend or refresh a credential without the core knowing. A
+ * host that cannot keep a credential from its own users — anything running as
+ * script in a browser — registers no backends.
+ *
+ * The core screens the request first: `path` is absolute within the backend
+ * and carries no dot segments, empty segments, percent escapes or
+ * protocol-relative prefix. Percent-encoding the query names and values when
+ * building the URL is the host's job.
+ *
+ * Obligations the core cannot enforce:
+ *
+ * - **Set the path on the parsed base; never concatenate strings.** Refuse a
+ *   base carrying a query or fragment — appended to
+ *   `https://api.example.com/v1?key=abc`, a path lands inside the query.
+ * - **Do not follow redirects.** Return the `3xx`.
+ * - **Cap the response body** and answer `HostBackendError::ResponseTooLarge`
+ *   rather than truncating.
+ * - **Filter response headers** to `content-type`, `retry-after`, `link` and
+ *   the `x-ratelimit-*` trio, which the core re-screens. Keep no cookie jar.
+ * - **Forward the caller as `X-Polkadot-Product`**, overwriting any header of
+ *   that name. It is host-attested, not cryptographic.
+ * - **Keep the credential out of anything the product can name.**
+ */
+export interface BackendHost {
+  /**
+   * Perform one request against a registered backend, attaching the host's
+   * own credential.
+   */
+  backendRequest(
+    product: ProductContext,
+    request: HostBackendRequest,
+  ): Promise<HostBackendResponse>;
+}
+
+/**
  * JSON-RPC provider factory for chain access.
  *
  * The platform provides a way to get a JSON-RPC connection for a given chain.
@@ -1409,6 +1452,7 @@ export interface HostCallbacks {
   theme: ThemeHost;
   locale: LocaleHost;
   preimage: PreimageHost;
+  backend?: BackendHost;
   chat?: ChatPlatform;
   permissionStatus?: PermissionStatusHost;
   pocket?: PocketPlatform;
@@ -1427,6 +1471,7 @@ export interface RequiredHostCallbacks {
   theme: Required<ThemeHost>;
   locale: Required<LocaleHost>;
   preimage: Required<PreimageHost>;
+  backend?: Required<BackendHost>;
   chat?: Required<ChatPlatform>;
   permissionStatus?: Required<PermissionStatusHost>;
   pocket?: Required<PocketPlatform>;

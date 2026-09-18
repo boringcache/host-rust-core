@@ -27,6 +27,7 @@ use super::{
 /// true, and answers the rest with `Unsupported`.
 pub(super) struct JsBridge {
     pub(super) auth_state_changed: Function,
+    pub(super) backend_request: Function,
     pub(super) chain_connect: Function,
     pub(super) create_chat_room: Function,
     pub(super) register_chat_bot: Function,
@@ -52,6 +53,7 @@ pub(super) struct JsBridge {
     pub(super) clear: Function,
     pub(super) subscribe_theme: Function,
     pub(super) confirm_user_action: Function,
+    pub(super) backend_present: bool,
     pub(super) chat_present: bool,
     pub(super) permission_status_present: bool,
     pub(super) pocket_present: bool,
@@ -61,6 +63,8 @@ impl JsBridge {
     pub(super) fn from_js(callbacks: &JsValue) -> Result<Self, JsValue> {
         Ok(Self {
             auth_state_changed: get_function(callbacks, "authStateChanged")?,
+            backend_request: get_optional_function(callbacks, "backendRequest")?
+                .unwrap_or_else(|| missing_callback("backendRequest")),
             chain_connect: get_function(callbacks, "chainConnect")?,
             create_chat_room: get_optional_function(callbacks, "createChatRoom")?
                 .unwrap_or_else(|| missing_callback("createChatRoom")),
@@ -93,6 +97,7 @@ impl JsBridge {
             clear: get_function(callbacks, "clear")?,
             subscribe_theme: get_function(callbacks, "subscribeTheme")?,
             confirm_user_action: get_function(callbacks, "confirmUserAction")?,
+            backend_present: get_optional_function(callbacks, "backendRequest")?.is_some(),
             chat_present: get_optional_function(callbacks, "createChatRoom")?.is_some()
                 && get_optional_function(callbacks, "registerChatBot")?.is_some()
                 && get_optional_function(callbacks, "postChatMessage")?.is_some()
@@ -102,6 +107,11 @@ impl JsBridge {
             pocket_present: get_optional_function(callbacks, "subscribePocketCards")?.is_some()
                 && get_optional_function(callbacks, "removePocketCard")?.is_some(),
         })
+    }
+
+    /// Whether the host supplied every `backend` callback.
+    pub(super) fn has_backend(&self) -> bool {
+        self.backend_present
     }
 
     /// Whether the host supplied every `chat` callback.
@@ -128,6 +138,27 @@ impl truapi_platform::AuthPresenter for WasmPlatform {
         ) {
             web_sys::console::error_1(&JsValue::from_str(&reason));
         }
+    }
+}
+
+#[truapi_platform::async_trait]
+impl truapi_platform::BackendHost for WasmPlatform {
+    async fn backend_request(
+        &self,
+        product: &truapi_platform::ProductContext,
+        request: v01::HostBackendRequest,
+    ) -> Result<v01::HostBackendResponse, v01::HostBackendError> {
+        let bytes = invoke_bytes_return(
+            &self.bridge.backend_request,
+            vec![
+                Uint8Array::from(product.encode().as_slice()).into(),
+                Uint8Array::from(request.encode().as_slice()).into(),
+            ],
+        )
+        .await
+        .map_err(|reason| v01::HostBackendError::Unknown { reason })?;
+        decode_bytes::<v01::HostBackendResponse>(bytes, "backendRequest response did not decode")
+            .map_err(|reason| v01::HostBackendError::Unknown { reason })
     }
 }
 
