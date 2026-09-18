@@ -21,10 +21,8 @@ use truapi::v01;
 
 use super::sso_replay::{ReplayExecution, SsoReplayScope, execute_once};
 use super::{SigningHost, SigningHostSsoService};
-#[cfg(not(target_arch = "wasm32"))]
 use crate::chain_runtime::RuntimeFailure;
 use crate::host_logic::entropy::root_entropy_source;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::host_logic::product_account::derive_sr25519_hard_path;
 use crate::host_logic::product_account::{
     ProductAccountError, derive_identity_keypair, derive_root_keypair_from_entropy,
@@ -49,17 +47,14 @@ use crate::runtime::authority::{AuthorityError, AuthoritySession};
 use crate::runtime::services::RuntimeServices;
 use crate::runtime::sso_remote::{fresh_statement_expiry, sso_message_id};
 use crate::runtime::sso_service::Dispatch;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::statement_allowance::StatementAllowanceError;
 use crate::runtime::statement_store_rpc;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::statement_store_rpc::StatementStoreRpcClientError;
 
 /// RFC-0022 domain for the responder's persistent SSO X25519 key.
 const SSO_ENCRYPTION_DOMAIN: &[u8] = b"sso";
 /// Leave the product runtime one minute to receive and process the SSO response
 /// before its 300-second remote-authority deadline expires.
-#[cfg(not(target_arch = "wasm32"))]
 const BULLETIN_AUTHORIZATION_WAIT: std::time::Duration = std::time::Duration::from_secs(240);
 
 /// Upper bound on undecodable request ids acknowledged within one serve loop.
@@ -156,30 +151,24 @@ pub(super) enum AllowanceAllocationError {
     #[error("{0}")]
     Authority(#[from] AuthorityError),
     /// The host serves no chain for this role, so there is nothing to claim on.
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("host serves no {chain} chain")]
     ChainNotServed {
         /// Role that could not be resolved.
         chain: &'static str,
     },
     /// Reading the host's chain set failed.
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("supported chains: {0}")]
     SupportedChains(String),
     /// Product-account key derivation failed.
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("{0}")]
     ProductAccount(#[from] ProductAccountError),
     /// Chain state, metadata, ring, slot, proof, or extrinsic allocation failed.
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("{0}")]
     StatementAllowance(#[from] StatementAllowanceError),
     /// Runtime service could not open the required Statement Store RPC client.
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("{0}")]
     StatementStoreRpcClient(#[from] StatementStoreRpcClientError),
     /// Runtime service could not open the required Bulletin RPC client.
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("{context}: {source}")]
     ChainRpcClient {
         /// Client context, naming which chain failed.
@@ -188,19 +177,10 @@ pub(super) enum AllowanceAllocationError {
         #[source]
         source: RuntimeFailure,
     },
-    /// Allocation helper is unavailable for this target.
-    #[cfg(target_arch = "wasm32")]
-    #[error("signing host: {resource} allowance allocation is native-only")]
-    NativeOnly {
-        /// Resource name.
-        resource: &'static str,
-    },
     /// System time cannot be converted into a UNIX timestamp.
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("system clock before UNIX epoch")]
     SystemClockBeforeUnixEpoch,
     /// The signing account is not in any personhood ring.
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("signing account is not a personhood ring member; cannot grant {resource} allowance")]
     MissingPersonhoodMembership {
         /// Resource name.
@@ -619,7 +599,6 @@ fn response_cli_summary(
     summary
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) async fn allocate_statement_store_allowance(
     services: &RuntimeServices,
     signing_host: &SigningHost,
@@ -748,7 +727,6 @@ pub(super) async fn allocate_statement_store_allowance(
     Ok(allowance.secret.to_bytes().to_vec())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) async fn allocate_bulletin_allowance(
     services: &RuntimeServices,
     signing_host: &SigningHost,
@@ -858,19 +836,6 @@ pub(super) async fn allocate_bulletin_allowance(
     Ok(allowance.secret.to_bytes().to_vec())
 }
 
-#[cfg(target_arch = "wasm32")]
-pub(super) async fn allocate_statement_store_allowance(
-    _services: &RuntimeServices,
-    _signing_host: &SigningHost,
-    _session: &AuthoritySession,
-    _product_id: &str,
-    _policy: OnExistingAllowancePolicy,
-) -> Result<Vec<u8>, AllowanceAllocationError> {
-    Err(AllowanceAllocationError::NativeOnly {
-        resource: "statement-store",
-    })
-}
-
 /// Claim an Asset Hub PGAS allowance for the product account `derivation_index`
 /// selects.
 ///
@@ -882,7 +847,6 @@ pub(super) async fn allocate_statement_store_allowance(
 /// Asset Hub is resolved through the host's chain set rather than a configured
 /// hash, so a host that does not serve it says so instead of claiming against
 /// whatever chain a stale hash happens to reach.
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) async fn allocate_smart_contract_allowance(
     services: &RuntimeServices,
     signing_host: &SigningHost,
@@ -979,36 +943,19 @@ pub(super) async fn allocate_smart_contract_allowance(
     Ok(())
 }
 
-/// PGAS claims need chain access the wasm host does not have.
-#[cfg(target_arch = "wasm32")]
-pub(super) async fn allocate_smart_contract_allowance(
-    _services: &RuntimeServices,
-    _signing_host: &SigningHost,
-    _session: &AuthoritySession,
-    _product_id: &str,
-    _derivation_index: v01::DerivationIndex,
-    _policy: OnExistingAllowancePolicy,
-) -> Result<(), AllowanceAllocationError> {
-    Err(AllowanceAllocationError::NativeOnly { resource: "PGAS" })
-}
 
-#[cfg(target_arch = "wasm32")]
-pub(super) async fn allocate_bulletin_allowance(
-    _services: &RuntimeServices,
-    _signing_host: &SigningHost,
-    _session: &AuthoritySession,
-    _product_id: &str,
-    _policy: OnExistingAllowancePolicy,
-) -> Result<Vec<u8>, AllowanceAllocationError> {
-    Err(AllowanceAllocationError::NativeOnly {
-        resource: "Bulletin",
-    })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
+/// Wall-clock seconds since the UNIX epoch, used to pick the allowance period.
+///
+/// `std::time::SystemTime` compiles for wasm32 but panics when read, so the
+/// browser takes its clock from `web-time` instead.
 pub(super) fn current_unix_secs() -> Result<u64, AllowanceAllocationError> {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::time::{SystemTime, UNIX_EPOCH};
+    #[cfg(target_arch = "wasm32")]
+    use web_time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .map_err(|_| AllowanceAllocationError::SystemClockBeforeUnixEpoch)
 }
