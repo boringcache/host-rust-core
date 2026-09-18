@@ -11,6 +11,9 @@ owner: "@johnthecat"
 > **NOTE (2026-08-18): first-party products hold remote permissions without a prompt.**
 > The lifecycle below specifies that every permission is prompted on first request. That holds for device permissions, identity disclosure and cross-product account access, but not for remote permissions requested by a product on the trusted list in `truapi_platform::REMOTE_PERMISSION_TRUSTED_LABELS`. Those products hold every `RemotePermission` variant — domain access, WebRTC, chain submit, preimage submit, statement submit — without a prompt, because they ship alongside the host and their remote access belongs to the host's own trust boundary. The grant is not persisted, so a `Denied` written through the permission administration surface still outranks it and revokes the access; clearing that denial restores the auto-grant. An empty `Remote` domain bundle remains denied, since it grants nothing. The list holds bare product labels with no TLD, so one entry covers the product on every network. This is an interim mechanism: the allowlist is intended to move into the product manifest, per RFC 0024.
 
+> **NOTE (2026-09-18): external navigation uses `OpenUrl`, matching legacy Swift.**
+> This revises [#434](https://github.com/paritytech/host-rust-core/pull/434), which gated external HTTP(S) navigation by destination domain and exempted application schemes. External `host_navigate_to` calls now require `DevicePermission::OpenUrl`, including allowed application schemes. `AllowAlways` covers future handoffs to any external destination; `AllowOnce` covers one handoff. Domain permissions continue to govern outbound network requests. Internal dotNS, localhost and host-handled Pocket navigation remain exempt.
+
 ## Summary
 
 The host callback distinguishes `AllowOnce`, `AllowAlways`, and `Deny`.
@@ -197,20 +200,20 @@ resolve OS permission without consuming product consent again.
 
 ### Implicit Permission Triggering by Business Methods
 
-The following business methods gate on a specific `RemotePermission` and MUST internally trigger a permission prompt if the permission has not yet been resolved:
+The following business methods gate on a specific permission and MUST internally trigger a permission prompt if the permission has not yet been resolved:
 
 | Business Method                      | Required Permission                       |
 | ------------------------------------ | ----------------------------------------- |
 | `remote_chain_transaction_broadcast` | `RemotePermission::ChainSubmit`           |
 | `remote_preimage_submit`             | `RemotePermission::PreimageSubmit`        |
 | `remote_statement_store_submit`      | `RemotePermission::StatementSubmit`       |
-| `host_navigate_to`                   | `RemotePermission::Remote([target host])` |
+| `host_navigate_to`                   | `DevicePermission::OpenUrl`               |
+| `send_push_notification`             | `DevicePermission::Notifications`         |
 
-`host_navigate_to` gates only an external `http`/`https` destination, on a grant
-for that one host. dotNS names and `localhost` resolve back into the host's own
-product surface and consume no grant, and the app-handoff schemes (`mailto:`,
-`tel:`, `polkadot:`, `dot:`) name no host a grant could speak about. Denial is
-reported as `HostNavigateToError::PermissionDenied`.
+`host_navigate_to` consumes `OpenUrl` for external HTTP(S) destinations and
+allowed application schemes (`mailto:`, `tel:`, `sms:`, `maps:`, `polkadot:`,
+`dot:`). Internal dotNS, localhost and host-handled Pocket navigation consume
+no grant. Denial is reported as `HostNavigateToError::PermissionDenied`.
 
 The following business methods relate to signing and require the user's active consent via their own approval flow (e.g. a signing confirmation dialog). They return `PermissionDenied` when the user cancels or denies that confirmation — this is distinct from the remote permission system but is documented here for completeness:
 

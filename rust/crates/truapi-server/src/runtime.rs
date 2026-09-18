@@ -107,8 +107,8 @@ use crate::host_logic::sso::pairing::x25519_public_key;
 #[cfg(test)]
 use crate::subscription::Spawner;
 
-/// Error reason surfaced to products when a remote permission is not granted.
-pub(super) const REMOTE_PERMISSION_DENIED_REASON: &str = "Permission denied";
+/// Error reason surfaced to products when a permission is not granted.
+pub(super) const PERMISSION_DENIED_REASON: &str = "Permission denied";
 /// Host-spec B.6.2 recommends timing out unanswered SSO application requests
 /// after 180 seconds:
 /// <https://github.com/paritytech/host-spec/blob/adb3989208ae1c2107dbf0159611353e6989422c/spec/B-inter-host.md?plain=1#L303-L307>
