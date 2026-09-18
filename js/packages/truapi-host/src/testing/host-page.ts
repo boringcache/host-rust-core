@@ -83,6 +83,19 @@ export interface TestHostPageOptions {
   /** URL of the worker script. Defaults to what the test host server serves. */
   workerUrl?: string;
   /**
+   * How resource allocation is answered.
+   *
+   * `"granted"` (the default) answers every request as allocated without
+   * performing it, so a suite can exercise a product's allowance-dependent
+   * paths with no on-chain personhood identity. Nothing is allocated: a green
+   * run says the product handles a grant, not that a host would have given one.
+   *
+   * `"chain"` runs the real allocation -- ring membership, slot, proof,
+   * extrinsic -- against the chains the host serves, and fails where a real
+   * host would.
+   */
+  allowances?: "granted" | "chain";
+  /**
    * Core log level (`off`/`error`/`warn`/`info`/`debug`/`trace`).
    *
    * The core logs why a call failed before mapping it to a protocol answer,
@@ -193,6 +206,9 @@ export async function startTestHost(
       { hostConfig: hostConfig as never, role: "signing" },
     )) as unknown as WorkerSigningRuntime;
     if (options.logLevel) workerRuntime.setLogLevel?.(options.logLevel);
+    if ((options.allowances ?? "granted") === "granted") {
+      await workerRuntime.setGrantAllowancesUnchecked?.(true);
+    }
     runtime = workerRuntime;
   } else {
     const wasmUrl = options.wasmUrl ?? "./wasm/testing/truapi_server.js";
@@ -222,6 +238,9 @@ export async function startTestHost(
     // The direct core takes a name through a separate entry point, so the
     // shared `activate` above cannot call it directly. Adapt here rather than
     // branching there, so both topologies activate identically.
+    if ((options.allowances ?? "granted") === "granted") {
+      directRuntime.setGrantAllowancesUnchecked?.(true);
+    }
     const direct = directRuntime;
     runtime = {
       activateLocalSession(secret, liteUsername) {
@@ -381,6 +400,7 @@ export async function startTestHost(
 
 /** The main-thread signing runtime: hands back a product core directly. */
 interface DirectSigningRuntime {
+  setGrantAllowancesUnchecked?(granted: boolean): void;
   activateLocalSession(secret: Uint8Array): Promise<void>;
   activateLocalSessionWithIdentity?(
     secret: Uint8Array,
@@ -398,6 +418,7 @@ interface WorkerSigningRuntime {
   activateLocalSession(secret: Uint8Array, liteUsername?: string): Promise<void>;
   disconnectSession(): Promise<void>;
   setLogLevel?(level: string): void;
+  setGrantAllowancesUnchecked?(granted: boolean): Promise<void>;
   createProvider(product: { productId: string }): Promise<{
     postMessage(frame: Uint8Array): void;
     subscribe(listener: (frame: Uint8Array) => void): () => void;

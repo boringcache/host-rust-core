@@ -119,6 +119,14 @@ pub(crate) struct SigningHost {
     session_state: Arc<SessionState>,
     auth_state: AuthStateMachine,
     ring_resolver: Arc<dyn RingResolver>,
+    /// Answer resource allocation as granted without performing it.
+    ///
+    /// For test hosts whose suites exercise a product's allowance-dependent
+    /// paths without an on-chain personhood identity. Compiled only into a
+    /// build carrying `wasm-signing-host`, which the production browser bundle
+    /// excludes, so a shipping host cannot set it.
+    #[cfg(feature = "wasm-signing-host")]
+    grant_allowances_unchecked: std::sync::atomic::AtomicBool,
     /// Root BIP-39 entropy held only while a session is active.
     root_entropy: Mutex<Option<Zeroizing<Vec<u8>>>>,
     /// In-memory grants and the activation generation that owns them. The
@@ -142,6 +150,8 @@ impl SigningHost {
             services,
             platform: platform.clone(),
             network_suffix,
+            #[cfg(feature = "wasm-signing-host")]
+            grant_allowances_unchecked: std::sync::atomic::AtomicBool::new(false),
             session_state: SessionState::new(),
             auth_state: AuthStateMachine::new(platform.clone()),
             ring_resolver,
@@ -151,6 +161,13 @@ impl SigningHost {
             sso_replay_locks: SsoReplayLocks::default(),
             renewal: allowance_renewal::RenewalState::default(),
         })
+    }
+
+    /// Answer resource allocation as granted without performing it.
+    #[cfg(feature = "wasm-signing-host")]
+    pub(crate) fn set_grant_allowances_unchecked(&self, granted: bool) {
+        self.grant_allowances_unchecked
+            .store(granted, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The shared services this role was built over, for tests that also need
@@ -191,6 +208,8 @@ impl SigningHost {
             services,
             platform: platform.clone(),
             network_suffix: network_suffix.to_string(),
+            #[cfg(feature = "wasm-signing-host")]
+            grant_allowances_unchecked: std::sync::atomic::AtomicBool::new(false),
             session_state: SessionState::new(),
             auth_state: AuthStateMachine::new(platform.clone()),
             ring_resolver,
@@ -1130,6 +1149,18 @@ impl ProductAuthority for SigningHost {
         request: v01::HostRequestResourceAllocationRequest,
     ) -> Result<v01::HostRequestResourceAllocationResponse, AuthorityError> {
         self.require_current_session(session)?;
+        #[cfg(feature = "wasm-signing-host")]
+        if self
+            .grant_allowances_unchecked
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            // Nothing is allocated and no proof is built: a suite in this mode
+            // learns that its product handles a grant, not that a host would
+            // have given one.
+            return Ok(v01::HostRequestResourceAllocationResponse {
+                outcomes: vec![v01::AllocationOutcome::Allocated; request.resources.len()],
+            });
+        }
         let mut outcomes = Vec::with_capacity(request.resources.len());
         for resource in request.resources {
             let outcome = match resource {

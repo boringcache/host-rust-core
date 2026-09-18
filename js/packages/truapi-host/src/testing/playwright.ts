@@ -127,6 +127,19 @@ export interface TestHostFixtureOptions {
    */
   topology?: "worker" | "main-thread";
   /**
+   * How resource allocation is answered. Defaults to `"granted"`.
+   *
+   * `"granted"` answers every request as allocated without performing it, so a
+   * suite exercises its product's allowance-dependent paths with no on-chain
+   * personhood identity. Nothing is allocated, so a pass says the product
+   * handles a grant, not that a host would have given one.
+   *
+   * `"chain"` runs the real allocation against the chains the host serves:
+   * ring membership, slot selection, proof and extrinsic. It fails where a
+   * real host would, which is the point of choosing it.
+   */
+  allowances?: "granted" | "chain";
+  /**
    * Core log level (`off`/`error`/`warn`/`info`/`debug`/`trace`).
    *
    * The core logs why a call failed before mapping it to a protocol answer,
@@ -484,6 +497,7 @@ export function createTestHostFixture(defaults: TestHostFixtureOptions) {
         accounts,
         loginBehavior: defaults.loginBehavior,
         topology: defaults.topology,
+        allowances: defaults.allowances,
         logLevel: defaults.logLevel,
       });
       await page.goto(url);

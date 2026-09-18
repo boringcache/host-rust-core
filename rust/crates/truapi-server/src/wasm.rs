@@ -1189,6 +1189,17 @@ pub struct WasmSigningHostRuntime {
 #[cfg(feature = "wasm-signing-host")]
 #[wasm_bindgen]
 impl WasmSigningHostRuntime {
+    /// Answer resource allocation as granted without performing it.
+    ///
+    /// A test host serves suites that exercise allowance-dependent product
+    /// paths without an on-chain personhood identity. Nothing is allocated, so
+    /// a green run says the product handles a grant, not that a host would
+    /// have given one.
+    #[wasm_bindgen(js_name = setGrantAllowancesUnchecked)]
+    pub fn set_grant_allowances_unchecked(&self, granted: bool) {
+        self.runtime.set_grant_allowances_unchecked(granted);
+    }
+
     /// Build a shared signing runtime from host callbacks and host config.
     #[wasm_bindgen(constructor)]
     pub fn new(

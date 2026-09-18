@@ -818,6 +818,27 @@ ctx.addEventListener("message", (ev: MessageEvent<MainToWorker>) => {
       );
       break;
     }
+    case "setGrantAllowancesUnchecked": {
+      const { granted } = msg;
+      void handleSessionActivation(
+        msg.requestId,
+        "setGrantAllowancesUnchecked",
+        (rt) => {
+          const signing = rt as Partial<WorkerSigningHostRuntime>;
+          if (typeof signing.setGrantAllowancesUnchecked !== "function") {
+            return Promise.reject(
+              new Error(
+                "setGrantAllowancesUnchecked needs a signing host built with " +
+                  "`wasm-signing-host`; this core does not carry it",
+              ),
+            );
+          }
+          signing.setGrantAllowancesUnchecked(granted);
+          return Promise.resolve();
+        },
+      );
+      break;
+    }
     case "resetSessionState":
       void handleSessionActivation(msg.requestId, "resetSessionState", (rt) =>
         rt.resetSessionState(),

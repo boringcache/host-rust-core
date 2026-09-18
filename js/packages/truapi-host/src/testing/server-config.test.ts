@@ -129,3 +129,32 @@ describe("signing as an identity that is not a built-in", () => {
     expect([...decoded]).toEqual([...entropy]);
   });
 });
+
+describe("how resource allocation is answered", () => {
+  it("defaults to granting without performing, and says so only when asked", () => {
+    // Absent from the URL means the page default applies. Sending it always
+    // would make a later change to that default invisible here.
+    const unset = new URL(
+      hostPageUrl("http://host.test/", { productUrl: "http://p.test" }),
+    );
+    expect(unset.searchParams.has("allowances")).toBe(false);
+
+    const chain = new URL(
+      hostPageUrl("http://host.test/", {
+        productUrl: "http://p.test",
+        allowances: "chain",
+      }),
+    );
+    expect(chain.searchParams.get("allowances")).toBe("chain");
+  });
+
+  it("carries the granted mode explicitly when a suite pins it", () => {
+    const url = new URL(
+      hostPageUrl("http://host.test/", {
+        productUrl: "http://p.test",
+        allowances: "granted",
+      }),
+    );
+    expect(url.searchParams.get("allowances")).toBe("granted");
+  });
+});

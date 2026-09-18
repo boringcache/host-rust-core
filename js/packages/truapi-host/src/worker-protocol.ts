@@ -107,6 +107,12 @@ export type MainToWorker =
        */
       liteUsername?: string;
     }
+  | {
+      kind: "setGrantAllowancesUnchecked";
+      requestId: number;
+      /** Answer allocation as granted without performing it. */
+      granted: boolean;
+    }
   | { kind: "resetSessionState"; requestId: number }
   | {
       kind: "getPermissionAuthorizationStatus";

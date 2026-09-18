@@ -40,6 +40,7 @@ const login = params.get("login");
 const productId = params.get("productId") ?? undefined;
 const rawRuntimeConfig = params.get("runtimeConfig");
 const topology = params.get("topology");
+const allowances = params.get("allowances");
 const logLevel = params.get("logLevel") ?? undefined;
 
 void startTestHost({
@@ -55,6 +56,7 @@ void startTestHost({
   accounts: accounts as (DevAccountName | DevAccount)[] | undefined,
   loginBehavior: login === "manual" ? "manual" : "auto",
   topology: topology === "main-thread" ? "main-thread" : "worker",
+  allowances: allowances === "chain" ? "chain" : "granted",
   logLevel,
 }).catch((error: unknown) => {
   // Surface boot failures in the page rather than only the console: a fixture

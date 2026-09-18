@@ -35,6 +35,11 @@ export interface HostPageConfig {
    */
   topology?: "worker" | "main-thread";
   /**
+   * How resource allocation is answered: `"granted"` (the default) without
+   * performing it, or `"chain"` for the real path.
+   */
+  allowances?: "granted" | "chain";
+  /**
    * Core log level (`off`/`error`/`warn`/`info`/`debug`/`trace`). Raising it
    * is what turns a bare failure outcome into the reason behind it: the core
    * logs why a call failed before mapping it to a protocol answer.
@@ -68,6 +73,7 @@ export function hostPageUrl(base: string, config: HostPageConfig): string {
   }
   if (config.loginBehavior) url.searchParams.set("login", config.loginBehavior);
   if (config.topology) url.searchParams.set("topology", config.topology);
+  if (config.allowances) url.searchParams.set("allowances", config.allowances);
   if (config.logLevel) url.searchParams.set("logLevel", config.logLevel);
   return url.toString();
 }

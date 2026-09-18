@@ -87,6 +87,8 @@ export interface WorkerSigningHostRuntime extends WorkerPairingHostRuntime {
    * `account.get_user_id` answers with. Optional: a core built before this
    * entry point existed exposes only {@link activateLocalSession}.
    */
+  /** Only on a core built with `wasm-signing-host`. */
+  setGrantAllowancesUnchecked?(granted: boolean): void;
   activateLocalSessionWithIdentity?(
     secret: Uint8Array,
     liteUsername?: string | null,

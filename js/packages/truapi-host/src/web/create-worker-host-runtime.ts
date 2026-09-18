@@ -79,6 +79,7 @@ export interface WorkerPairingHostRuntime {
    * it waits for a wallet to answer over the statement-store channel instead.
    */
   activateLocalSession(secret: Uint8Array, liteUsername?: string): Promise<void>;
+  setGrantAllowancesUnchecked(granted: boolean): Promise<void>;
   /**
    * Drop the active paired session without notifying the peer. Rejects on a
    * disposed runtime, as
@@ -1253,6 +1254,13 @@ function buildRuntime(state: RuntimeState): WorkerPairingHostRuntime {
         requestId,
         secret,
         liteUsername,
+      }));
+    },
+    setGrantAllowancesUnchecked(granted: boolean): Promise<void> {
+      return sendSessionActivationRequest(state, (requestId) => ({
+        kind: "setGrantAllowancesUnchecked",
+        requestId,
+        granted,
       }));
     },
     resetSessionState(): Promise<void> {
