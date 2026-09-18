@@ -943,7 +943,6 @@ pub(super) async fn allocate_smart_contract_allowance(
     Ok(())
 }
 
-
 /// Wall-clock seconds since the UNIX epoch, used to pick the allowance period.
 ///
 /// `std::time::SystemTime` compiles for wasm32 but panics when read, so the
