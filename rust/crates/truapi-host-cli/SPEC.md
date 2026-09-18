@@ -314,6 +314,7 @@ truapi-host pairing-host [options]
 | Option | Default | Behavior |
 | --- | --- | --- |
 | `--script <path>` | none | Run one JS/TS product script and exit with its status. |
+| `--trusted-script` | off | Run that `--script` in Bun with host capabilities; requires `--script`. |
 | `--product-id <id>` | `headless-playground.dot` | Initial product scope. |
 | `--frame-listen <socket>` | none | Opt into a TCP product WebSocket listener. When omitted, use a private per-process Unix socket. Port `0` selects an available TCP port. |
 | `--base-path <path>` | section 12.1 | Base directory; managed state lives under its `v2/` subdirectory. |
@@ -348,6 +349,7 @@ truapi-host signing-host [options] [exec '<slash-command>']
 | Option | Default | Behavior |
 | --- | --- | --- |
 | `--script <path>` | none | Run one direct product script and exit with its status. |
+| `--trusted-script` | off | Run that `--script` in Bun with host capabilities; requires `--script`. |
 | `--product-id <id>` | `headless-playground.dot` | Initial product scope. |
 | `--deeplink <url>` | none | Answer a pairing deeplink after initialization. |
 | `--mnemonic <phrase>` | none | Use raw BIP-39 entropy as an ephemeral local signer. |
@@ -747,11 +749,12 @@ pairing cancellation method.
 
 An approval temporarily saves and clears the command draft. The operator can:
 
-- press `y` or `Y` with an empty input to approve;
-- press `n`, `N`, or Esc to reject; or
-- type `yes`/`no` and press Enter.
+- press `y` to approve an action;
+- press `o` for Allow once or `a` for Allow always on a permission;
+- press `n` or Esc to reject; or
+- type the corresponding word and press Enter. Letter shortcuts accept either case.
 
-Invalid typed answers show `Answer yes or no`. The saved draft is restored
+Invalid typed answers show the available choices. The saved draft is restored
 after the decision. Approval requests are serialized by the platform prompt
 lock.
 
@@ -822,13 +825,14 @@ the browser SDK shipped with the host. Product preparation does not execute
 package hooks or compile-time product code.
 
 The container sends fetch and XHR intent through its private port. The trusted launcher
-intercepts the actual request and asks Rust to authorize its initial URL on the
-product's existing connection. Chromium request IDs associate CORS preflights
-and redirects with that one decision, so one-use grants are consumed once.
+intercepts the actual request and asks Rust to authorize its destination host on
+the product's existing connection. Chromium request IDs associate CORS preflights
+and redirects with the operation. Approval is reused for the same normalized host;
+each new redirect host requires authorization, consuming its own one-use grant
+when applicable.
 Aborting a request invalidates its pending authorization. XHR keeps native request
 headers, response types and events after authorization; synchronous XHR is unavailable.
-Redirect destinations are not separately authorized. CORS remains
-browser-enforced. Remote WebSockets are opened by a trusted launcher broker after
+CORS remains browser-enforced. Remote WebSockets are opened by a trusted launcher broker after
 one Rust authorization per connection. The broker forwards text/binary messages and
 subprotocols, sends the product Origin and closes its connections at teardown. It
 does not share browser cookies. `bufferedAmount` tracks the relay queue rather than
@@ -836,13 +840,26 @@ the launcher's socket buffer. Direct browser WebSockets remain blocked by CSP.
 Workers, subframes, WebRTC and WebTransport are unavailable in the CLI product realm. Product code has no Bun/Node filesystem,
 subprocess or host-environment access.
 
+The intent binding acknowledges well-formed Remote intents without consulting
+Rust. It lets the container reach the browser request without spending a grant
+twice; it is not an authorization decision. CDP and the WebSocket broker enforce
+consent outside the product realm. CLI browser tests exercise that enforcement;
+the shared container tests separately cover denial through its private port.
+
+Chromium's local-network permission is scoped to the synthetic product origin.
+Without it, even Rust-approved loopback requests fail. Each destination still
+passes Rust authorization; host-scoped grants include all ports and the prompt
+states this. CSP restricts protocols and disables JavaScript evaluation, workers and frames;
+WebAssembly compilation remains available. CDP applies the destination permission check.
+
 The browser execution phase times out after five minutes. Success, failure or
 timeout closes the browser and disposes the frame provider.
 
-`TRUAPI_SCRIPT_MODE=trusted` explicitly selects Bun execution
-for diagnostics that read host logs or write reports. It prints the selected
-mode and imports the product with the launcher's capabilities. The value
-`sandboxed`, or an unset variable, uses the browser. Other values fail.
+`--trusted-script --script <path>` explicitly selects Bun execution for diagnostics
+that read host logs or write reports. It prints the selected mode and imports
+the product with the launcher's capabilities. The flag requires `--script` and
+applies only to that invocation; interactive `/script` remains sandboxed.
+Trusted execution loads neither the browser nor its compiler dependencies.
 
 ### 10.2 Injected globals
 
@@ -1783,8 +1800,9 @@ not written to session state. A new process derives its initial policy from
 In the TUI it uses the approval card described in section 9. In plain mode:
 
 - stdin must be a TTY;
-- the prompt is `Approve? [y/N]`;
-- only `y` or `yes` approves; and
+- action confirmations offer `[y] Approve` and `[n] Reject`;
+- permissions offer `[o] Allow once`, `[a] Allow always` and `[n] Deny`;
+- full words (`yes`, `once`, `always`, `no`) are also accepted; and
 - EOF, invalid input, or non-TTY stdin rejects.
 
 Approval summaries exist for:
@@ -1801,12 +1819,17 @@ Approval summaries exist for:
 - device permission; and
 - remote permission.
 
+Remote permission summaries identify the domains or capability requested. Domain
+grants cover all ports, including local services. Device prompts identify the
+capability. Permission reviews preserve Allow once without writing a permanent
+grant; ordinary action confirmations remain Boolean.
+
 Raw signing payloads are hidden from approval summaries. Proof summaries show
 only product and message length.
 
 ### 17.2 Auto-accept
 
-`--auto-accept` returns `true` for each platform prompt and emits:
+`--auto-accept` approves actions and returns Allow always for permissions. It emits:
 
 ```text
 ✓ Approved <action> automatically
@@ -2074,7 +2097,6 @@ ended. This preserves the child status but bypasses later Rust destructors.
 | `VISUAL` | Preferred script editor. |
 | `EDITOR` | Fallback script editor. |
 | `TRUAPI_HOST_RUNNER` | Override `js/runner.ts`. |
-| `TRUAPI_SCRIPT_MODE` | `sandboxed` by default; `trusted` explicitly permits Bun host capabilities for diagnostics. |
 | `PLAYWRIGHT_BROWSERS_PATH` | Browser cache used by `install-browser` and the sandboxed runner. |
 | `E2E_LIVE_CHAIN` | Value `1` widens routing to endpoints the preset does not serve as a role; no effect on either preset. |
 | `NO_COLOR` | Disable CLI semantic colors and battery reporter color. |
@@ -2100,6 +2122,7 @@ These are part of the as-built specification:
 - non-loopback product listeners can bind but reject every TCP frame peer;
 - product text WebSocket frames are accepted as protocol bytes;
 - product-frame and chain outbound queues are unbounded;
+- browser bridge binary messages use JSON number arrays, so memory cost exceeds payload size; transport budgets are tracked in [#847](https://github.com/paritytech/host-rust-core/issues/847);
 - unknown chain genesis hashes fall back to People;
 - interactive child ANSI styling is stripped rather than parsed; and
 - pairing and signing state are local plaintext test state.

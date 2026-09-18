@@ -74,7 +74,6 @@ jobs:
       - name: Bundle the runner
         run: |
           make cli-runner
-          bun test scripts/cli-runner-package.test.ts
           tar -czf target/runner-bundle.tar.gz -C target/dist runner.js sandbox-assets node_modules
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

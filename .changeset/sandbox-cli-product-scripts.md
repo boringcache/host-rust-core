@@ -1,5 +1,7 @@
 ---
-"@parity/truapi": patch
+"@parity/truapi": minor
 ---
 
-Run CLI product scripts in a sandboxed browser by default, authorize each fetch's initial URL through Rust, and package the matching browser driver and script compiler. Share one authorization across CORS preflights and native redirects. Add explicit browser installation and keep host diagnostics available through `TRUAPI_SCRIPT_MODE=trusted`.
+Change the default execution of CLI product scripts to a sandboxed browser. Scripts using Node modules, `process`, `Bun` or filesystem access must explicitly use `--trusted-script` with `--script`. Sandboxed scripts require Chromium installed through `truapi-host install-browser`.
+
+Authorize fetch, asynchronous XHR and WebSocket operations through Rust, including each new redirect host. Permission prompts identify the destination and preserve Allow once, Allow always and Deny. Package the shared `js/container` bundle, browser SDK, matching browser driver and script compiler alongside the CLI runner.

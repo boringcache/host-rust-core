@@ -308,15 +308,17 @@ test("XHR preserves request headers and body and native binary response metadata
 
 test("script rejection is reported even if browser cleanup fails", async () => {
   const launch = chromium.launch.bind(chromium);
-  const mocked = spyOn(chromium, "launch").mockImplementation(async (options) => {
-    const browser = await launch(options);
-    const close = browser.close.bind(browser);
-    browser.close = async () => {
-      await close();
-      throw new Error("browser cleanup failed");
-    };
-    return browser;
-  });
+  const mocked = spyOn(chromium, "launch").mockImplementation(
+    async (options) => {
+      const browser = await launch(options);
+      const close = browser.close.bind(browser);
+      browser.close = async () => {
+        await close();
+        throw new Error("browser cleanup failed");
+      };
+      return browser;
+    },
+  );
   try {
     await expect(
       runBrowserScript({

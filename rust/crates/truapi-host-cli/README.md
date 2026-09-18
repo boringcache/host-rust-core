@@ -496,11 +496,17 @@ so its pairing runs only for the current process and `/devices` is unavailable.
 A product script is top-level JavaScript or TypeScript run as a browser ES
 module. The CLI uses the same `js/container` code as the native iOS host and
 the shared Rust Remote permission policy. In the CLI, the trusted launcher asks
-Rust to authorize the initial destination host when Chromium intercepts an outgoing fetch or XHR.
-It uses the product's existing connection and consumes a one-use grant only
-once, including requests with CORS preflights. Native requests follow redirects
-without asking about each destination. XHR supports asynchronous requests with native
+Rust to authorize each destination host when Chromium intercepts an outgoing fetch or XHR.
+It uses the product's existing connection and consumes a one-use grant once per
+host in that operation, including CORS preflights and same-host redirects.
+A redirect to a different host requires its own authorization. XHR supports asynchronous requests with native
 headers and response types; synchronous XHR is unavailable. Browser CORS rules still apply.
+
+Permission prompts name the requested domains or capability and offer Allow once,
+Allow always and Deny. A domain grant covers every port on that host, including
+local services. Chromium's local-network permission is enabled for the synthetic
+product origin so approved local requests work; the launcher still checks their
+destination through Rust.
 
 Remote WebSockets use the same domain permission. The trusted launcher opens each
 connection only after Rust approval and forwards text/binary messages and subprotocols.
@@ -558,12 +564,13 @@ is awaited. Host diagnostics that need files, subprocesses, or environment
 variables must explicitly select trusted mode:
 
 ```bash
-TRUAPI_SCRIPT_MODE=trusted truapi-host pairing-host --script ./diagnostic.ts
+truapi-host pairing-host --trusted-script --script ./diagnostic.ts
 ```
 
 Trusted mode imports the script into Bun with the launcher's capabilities and
 prints that choice. Use it for trusted automation, not product isolation tests.
-An unset `TRUAPI_SCRIPT_MODE`, or the value `sandboxed`, selects the browser.
+`--trusted-script` requires `--script` and applies only to that invocation.
+Interactive `/script` commands use the browser.
 
 `--product-id` (a dotNS name ending in `.dot`, `.paseo` or `.testnet`, or a
 `localhost` identifier; default
@@ -653,7 +660,7 @@ Scripts under `js/scripts/` include:
 
   ```bash
   # Terminal 1
-  TRUAPI_SCRIPT_MODE=trusted cargo run -p truapi-host-cli -- pairing-host \
+  cargo run -p truapi-host-cli -- pairing-host --trusted-script \
     --product-id truapi-playground.dot \
     --script rust/crates/truapi-host-cli/js/scripts/battery.ts \
     --auto-accept
@@ -702,13 +709,13 @@ happens.
 
 Both hosts take `--auto-accept`. Without it, confirmations a web/iOS host would
 show as a modal (sign requests, permission prompts, and cross-product Ring-VRF
-requests) are rendered prominently in the signing-host transcript and answered
-directly with `y` or `n` (typed `yes`/`no` plus Enter also works). Approval
+requests) are rendered prominently in the signing-host transcript. Actions use
+`y` to approve and `n` to reject. Permissions use `o` for Allow once, `a` for
+Allow always and `n` for Deny. Typed answers plus Enter also work. Approval
 cards summarize and redact signing payloads rather than dumping debug objects.
-The current command draft is
-restored afterward; Esc safely rejects. Concurrent approvals are serialized.
-In non-interactive `exec` mode, a TTY gets a plain yes/no prompt and non-TTY
-stdin safely rejects instead of hanging. Same-product Ring-VRF requests do not
+The current command draft is restored afterward; Esc rejects. Concurrent
+approvals are serialized. Plain mode offers the same choices when stdin is a
+TTY; non-TTY stdin rejects instead of hanging. Same-product Ring-VRF requests do not
 prompt, matching the iOS signing host. Pass `--auto-accept` for unattended
 runs; every auto-approved decision is still printed.
 

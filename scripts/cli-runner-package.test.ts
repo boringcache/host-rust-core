@@ -2,6 +2,15 @@ import { afterAll, beforeAll, expect, it } from "bun:test";
 import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  decodeWireMessage,
+  encodeWireMessage,
+  MESSAGE_TYPE_RESPONSE,
+  scale,
+  VersionedRemotePermissionRequest,
+  VersionedRemotePermissionResponse,
+  VersionedRemotePermissionError,
+} from "@parity/truapi";
 import { buildBrowserAssets } from "../rust/crates/truapi-host-cli/js/browser-assets.ts";
 
 const repository = resolve(import.meta.dir, "..");
@@ -79,6 +88,112 @@ it("resolves the packaged runner without a source checkout", async () => {
     });
   }
 });
+
+it("authorizes a WebSocket round trip through the packaged browser runner", async () => {
+  const authorizations: unknown[] = [];
+  const server = Bun.serve<{ frames: boolean }>({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request, server) {
+      if (
+        server.upgrade(request, {
+          data: { frames: new URL(request.url).pathname === "/frames" },
+        })
+      )
+        return;
+      return new Response(null, { status: 400 });
+    },
+    websocket: {
+      message(socket, message) {
+        if (!socket.data.frames) {
+          socket.send(message);
+          return;
+        }
+        const request = decodeWireMessage(
+          new Uint8Array(message as Buffer),
+        )._unsafeUnwrap();
+        authorizations.push(
+          VersionedRemotePermissionRequest.dec(request.payload.value),
+        );
+        socket.send(
+          encodeWireMessage({
+            ...request,
+            payload: {
+              ...request.payload,
+              messageType: MESSAGE_TYPE_RESPONSE,
+              value: scale
+                .Result(
+                  VersionedRemotePermissionResponse,
+                  scale.CallError(VersionedRemotePermissionError),
+                )
+                .enc({
+                  success: true,
+                  value: { tag: "V1", value: { granted: true } },
+                }),
+            },
+          })._unsafeUnwrap(),
+        );
+      },
+    },
+  });
+  const script = join(directory, "websocket-product.ts");
+  await writeFile(
+    script,
+    `
+    assert(typeof process === 'undefined' && typeof Bun === 'undefined');
+    await new Promise((resolve, reject) => {
+      const socket = new WebSocket('ws://127.0.0.1:${server.port}/echo');
+      socket.onopen = () => socket.send('packaged-websocket-ok');
+      socket.onmessage = ({ data }) => {
+        if (data !== 'packaged-websocket-ok') return reject(new Error('Unexpected reply'));
+        socket.close();
+        console.log(data);
+        resolve();
+      };
+      socket.onerror = () => reject(new Error('WebSocket failed'));
+    });
+  `,
+  );
+  const child = Bun.spawn(["bun", join(directory, "runner.js")], {
+    cwd: tmpdir(),
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH,
+      PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH,
+      TRUAPI_FRAME_URL: `ws://127.0.0.1:${server.port}/frames`,
+      TRUAPI_PRODUCT_ID: "package-test.dot",
+      TRUAPI_SCRIPT: script,
+      TRUAPI_SCRIPT_MODE: "trusted",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const timeout = setTimeout(() => child.kill(), 15_000);
+  try {
+    const [status, output, error] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect({ status, output, authorizations }, error).toEqual({
+      status: 0,
+      output: "packaged-websocket-ok\n",
+      authorizations: [
+        {
+          tag: "V1",
+          value: {
+            permission: { tag: "Remote", value: { domains: ["127.0.0.1"] } },
+          },
+        },
+      ],
+    });
+  } finally {
+    clearTimeout(timeout);
+    child.kill();
+    server.stop(true);
+  }
+}, 20_000);
 
 it("ships a runnable browser installer with its dynamic dependencies", () => {
   const result = Bun.spawnSync(
