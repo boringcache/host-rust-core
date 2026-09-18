@@ -273,6 +273,16 @@ Signing uses canonical request and result types. Product-scoped VRF requests use
 `ProductRequest<P>` to attach the caller to a canonical payload. Both product and
 SSO signing encode `with_signed_transaction` with the one-byte `OptionBool` codec.
 
+When a device finishes pairing, the signing host reports it to the embedder's
+[`DevicePairingObserver`](src/runtime/signing_host/sso_responder.rs), installed
+once through `SigningHostRuntime::set_device_pairing_observer`. It carries the
+`PairedSsoPeer` that pairing produced, which is also what `resume_pairing` and
+`disconnect_paired_host` take, and it fires only once the handshake answer has
+reached the Statement Store, so a host is never told about a session that did
+not open. Resuming a stored pairing reports nothing, because the device is not
+new. The core has no chat of its own, so announcing a new device to the user's
+existing contacts belongs to the embedder.
+
 The `host_logic::sso::messages::v1::RemoteMessage` enum owns the SCALE wire
 contract. Its response variants wrap named result payloads in `Response<P>`,
 which carries `responding_to` once. Macros generate request/response pairing
