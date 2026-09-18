@@ -1459,6 +1459,72 @@ a public testnet or on anyone else's enrolment.
 What this repo does not provide is the node: the `people-next` runtime is not
 vendored here, so standing one up is the cost of this route.
 
+## 32. Chopsticks: how far it gets, and the exact wall
+
+Tried, and it works further than expected. The allowance path now runs to the
+chain's cryptographic verification, which is the first time anything past the
+membership proof has executed in a browser at all.
+
+### The recipe
+
+Two forks, both reporting the live genesis hashes, so the fixture needs only new
+URLs:
+
+```
+npx chopsticks --endpoint wss://paseo-asset-hub-next-rpc.polkadot.io --port 9944
+npx chopsticks --endpoint wss://paseo-people-next-system-rpc.polkadot.io \
+               --port 9945 --allow-unresolved-imports
+```
+
+`--allow-unresolved-imports` is not optional for the People chain: its runtime
+imports `ext_statement_store_remove_by_version_1`, which chopsticks' executor
+does not provide, and without the flag every runtime call -- including
+`state_getMetadata` -- fails. Asset Hub needs no flag.
+
+Then make the test account a ring member by editing storage. Three things have
+to line up, and each one cost a wrong attempt:
+
+1. **The member key is derived, not raw.** `reserved_person_collection_candidates`
+   uses `derive_lite_person_ring_vrf_entropy(root_entropy, network_suffix)`, so
+   the key to insert is `member_key(derive_lite_person_ring_vrf_entropy(entropy,
+   "paseo"))`, not `member_key(entropy)`. Inserting the raw-entropy key changes
+   nothing and looks identical to doing nothing.
+2. **Append to `Members.RingKeys[(id, current_index, 0)]`**, where the current
+   index comes from `Members.CurrentRingIndex[id]` (31 on LitePeople at the time
+   of writing; `People` is absent, which is why that collection always reports
+   no membership on this chain).
+3. **Bump `Members.RingKeysStatus[(id, index)]`.** `read_ring_members_at`
+   truncates the member list to `status.included`, so a key appended past that
+   count is sliced off before the `contains` check. Both `total` and `included`
+   are `u32` LE at offsets 0 and 4.
+
+### Where it stops
+
+With all three in place the allocation finds membership, picks a slot, builds
+the ring-VRF proof, submits the extrinsic, and the chain answers:
+
+```
+author_submitAndWatchExtrinsic: {"invalid":{"badProof":null}} (1010)
+```
+
+That is the expected wall. `Members.Root[(id, ring_index)]` still commits to the
+ring as it was, so a proof over a member list with one key appended cannot
+verify. The proof is well-formed; it is over the wrong set.
+
+Going further means recomputing the ring root from the modified member list with
+the `verifiable` crate's commitment machinery and writing that too. That is
+possible in principle -- the crate is already a dependency -- but it is real
+cryptographic work rather than another storage poke, and it is where this route
+stops being cheap.
+
+### What it proves regardless
+
+Everything between the membership gate and on-chain verification now
+demonstrably runs in the browser: slot selection, proof construction and
+extrinsic submission, none of which had ever executed there. The wasm allowance
+port is exercised end to end, and `badProof` from a real chain is a far better
+place to stand than `NativeOnly` from a stub.
+
 ## Working notes
 
 - **A fresh checkout does not compile.** `rust/crates/truapi-server/src/generated/` is
