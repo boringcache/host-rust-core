@@ -29,7 +29,6 @@ import type {
   HostChatPostMessageResponse,
   HostChatRegisterBotRequest,
   HostLocaleSubscribeItem,
-  HostPushNotificationRequest,
   HostThemeSubscribeItem,
   Result,
   ThemeVariant,
@@ -95,6 +94,29 @@ export interface MockFaults {
 
 /** Which prompt surface a permission decision came from. */
 export type PermissionKind = "device" | "remote";
+
+/**
+ * One notification the product pushed, recorded for assertions.
+ *
+ * Field names follow `@parity/host-api-test-sdk`'s `NotificationLogEntry` so a
+ * migrating suite's assertions keep working. The entry outlives the request:
+ * `cancelled` flips in place when the product cancels by id, which is what a
+ * suite asserts on rather than a separate cancellation list.
+ */
+export interface NotificationLogEntry {
+  /** Host-assigned id, the same one `cancelNotification` takes. */
+  id: number;
+  /** Notification text. */
+  text: string;
+  /** Optional URL to open on tap. */
+  deeplink: string | undefined;
+  /** Delivery time in epoch-ms, or undefined for immediate. */
+  scheduledAt: bigint | undefined;
+  /** Set once the product cancels this notification. */
+  cancelled: boolean;
+  /** When the mock recorded it. */
+  timestamp: number;
+}
 
 /**
  * One permission answer the mock gave, recorded for assertions.
@@ -237,7 +259,7 @@ export interface MockHost {
   /** URLs the core asked the host to open, in order. */
   getNavigationLog(): string[];
   /** Notifications the core asked the host to show, in order. */
-  getNotificationLog(): HostPushNotificationRequest[];
+  getNotificationLog(): NotificationLogEntry[];
   /** Raw JSON-RPC the core sent over the chain connection, in order. */
   sentRpc(): string[];
   /** Auth-state transitions the core emitted, in order. */
@@ -516,7 +538,7 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   const storage = new Map<string, Uint8Array>();
   const preimages = new Map<string, Uint8Array>();
   const navigations: string[] = [];
-  const pushedNotifications: HostPushNotificationRequest[] = [];
+  const pushedNotifications: NotificationLogEntry[] = [];
   const sentRpc: string[] = [];
   const authStates: AuthState[] = [];
   const reviews: UserConfirmationReview[] = [];
@@ -526,7 +548,10 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   const chatRooms = new Map<string, ChatRoom>();
   const chatBots = new Map<string, HostChatRegisterBotRequest>();
   const chatMessages: ChatMessageRecord[] = [];
-  let nextNotificationId = 0;
+  // Ids start at 1, not 0: the id is what the product cancels by, and a
+  // product that treats 0 as "no id" cannot cancel the first notification it
+  // ever schedules.
+  let nextNotificationId = 1;
   let nextChatMessageId = 0;
   let devicePermissions = devicePermissionsInitial;
   let remotePermissions = remotePermissionsInitial;
@@ -632,11 +657,21 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
 
     notifications: {
       async pushNotification(notification) {
-        pushedNotifications.push(notification);
-        return { id: nextNotificationId++ };
+        const id = nextNotificationId++;
+        pushedNotifications.push({
+          id,
+          text: notification.text,
+          deeplink: notification.deeplink,
+          scheduledAt: notification.scheduledAt,
+          cancelled: false,
+          timestamp: Date.now(),
+        });
+        return { id };
       },
       async cancelNotification(id) {
         cancelledNotifications.push(id);
+        const entry = pushedNotifications.find((n) => n.id === id);
+        if (entry) entry.cancelled = true;
       },
     },
 
@@ -808,7 +843,7 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   return {
     callbacks,
     getNavigationLog: () => [...navigations],
-    getNotificationLog: () => [...pushedNotifications],
+    getNotificationLog: () => pushedNotifications.map((n) => ({ ...n })),
     sentRpc: () => [...sentRpc],
     authStates: () => [...authStates],
     reviews: () => [...reviews],
@@ -926,7 +961,7 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
       currentTheme = theme;
       chainStatus = "Idle";
       enforcePermissions = false;
-      nextNotificationId = 0;
+      nextNotificationId = 1;
       nextChatMessageId = 0;
       hostCallCount = 0;
     },

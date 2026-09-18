@@ -83,7 +83,7 @@ describe("createMockHost callbacks", () => {
     const second = await host.callbacks.notifications.pushNotification({
       text: "two",
     });
-    expect([first.id, second.id]).toEqual([0, 1]);
+    expect([first.id, second.id]).toEqual([1, 2]);
     expect(host.getNotificationLog().length).toBe(2);
   });
 
@@ -432,5 +432,57 @@ describe("createMockHost TestHostAPI parity", () => {
     host.dispose();
     expect(host.getNavigationLog()).toEqual([]);
     expect(host.getConnectionStatus()).toBe("Idle");
+  });
+});
+
+describe("the notification log", () => {
+  it("records an entry per push and flips cancelled by id", async () => {
+    const host = createMockHost();
+    const { callbacks } = host;
+
+    const first = await callbacks.notifications.pushNotification({
+      text: "one",
+      scheduledAt: 1_700_000_000_000n,
+    });
+    const second = await callbacks.notifications.pushNotification({
+      text: "two",
+      deeplink: "https://example.test/x",
+    });
+    // Ids are what the product cancels by, so they have to be distinct -- and
+    // positive, since a product that reads 0 as "no id" cannot cancel by it.
+    expect(first.id).not.toBe(second.id);
+    expect(first.id).toBeGreaterThan(0);
+
+    const scheduled = host.getNotificationLog();
+    expect(scheduled).toHaveLength(2);
+    expect(scheduled[0]).toMatchObject({
+      id: first.id,
+      text: "one",
+      scheduledAt: 1_700_000_000_000n,
+      cancelled: false,
+    });
+    expect(scheduled[1]).toMatchObject({
+      id: second.id,
+      deeplink: "https://example.test/x",
+      cancelled: false,
+    });
+
+    await callbacks.notifications.cancelNotification(first.id);
+
+    const afterCancel = host.getNotificationLog();
+    // The cancelled one flips in place; the other is untouched. Asserting both
+    // is what catches a cancel that marks the whole log.
+    expect(afterCancel.find((n) => n.id === first.id)?.cancelled).toBe(true);
+    expect(afterCancel.find((n) => n.id === second.id)?.cancelled).toBe(false);
+  });
+
+  it("hands out copies, so a caller cannot mutate the host's log", async () => {
+    const host = createMockHost();
+    const { callbacks } = host;
+    await callbacks.notifications.pushNotification({ text: "one" });
+
+    host.getNotificationLog()[0]!.cancelled = true;
+
+    expect(host.getNotificationLog()[0]!.cancelled).toBe(false);
   });
 });
