@@ -704,16 +704,16 @@ flag wins over it.
 truapi-host dev --debugger ws://127.0.0.1:9231 -- yarn dev
 ```
 
-The switch is meaningful only on the commands that serve frames — `pairing-host`,
+The switch is meaningful only on the commands that serve frames: `pairing-host`,
 `dev` and `signing-host`. A URL that is not loopback fails startup rather than
 warning, since a host that runs on without the debugger it was asked for looks,
 from the debugger's side, exactly like a host nobody switched on. Starting the
 debugger after the host is fine: the sink dials lazily and reconnects.
 
-Every run says which way it went — `Streaming wire frames to a debugger`, naming
-the endpoint and the switch that supplied it, or `Wire debugger off`. That report
-is the reason the flag needs no build gate: a stale exported `TRUAPI_DEBUGGER_URL`
-cannot tap a session quietly.
+Every run says which way it went, either `Streaming wire frames to a debugger`,
+naming the endpoint and the switch clap read it from, or `Wire debugger off`.
+That report is the reason the flag needs no build gate: a stale exported
+`TRUAPI_DEBUGGER_URL` cannot tap a session quietly.
 
 Frames are forwarded whole and the debugger decodes all of them, so a tapped
 signing host puts its payloads on that socket. Point it at a debugger you are

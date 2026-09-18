@@ -42,7 +42,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::parser::ValueSource;
+use clap::{ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use futures::future::BoxFuture;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -508,7 +509,12 @@ async fn main() -> Result<()> {
     // rustls 0.23 panics without a process-level default provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    let debugger = cli.debugger.take().map(|url| DebuggerSwitch {
+        url,
+        source: debugger_url_source(&matches),
+    });
     let base_path = command_base_path(&cli.command);
     let (saved_log_level, saved_log_level_error) = match load_log_level(&base_path) {
         Ok(level) => (level, None),
@@ -554,7 +560,7 @@ async fn main() -> Result<()> {
         tokio::spawn(update::run_background_check())
     });
 
-    let outcome = dispatch(cli.command, log_filter, log_controller, cli.debugger).await;
+    let outcome = dispatch(cli.command, log_filter, log_controller, debugger).await;
 
     if let Some(check) = check {
         update::finish_background_check(check).await;
@@ -570,7 +576,7 @@ async fn dispatch(
     command: Command,
     log_filter: String,
     log_controller: LogController,
-    debugger: Option<String>,
+    debugger: Option<DebuggerSwitch>,
 ) -> Result<()> {
     // The switch is global but resolved per command, by the three arms that build
     // a frame server and still before they bind a port. `update`,
@@ -1060,27 +1066,46 @@ fn platform_info() -> PlatformInfo {
     }
 }
 
-/// A resolved `--debugger` switch: the sink to install, and where the URL came
-/// from, carried so the dial can be announced after the terminal UI exists.
-struct DebuggerDial {
-    sink: Arc<dyn DebugSink>,
+/// A `--debugger` switch as clap resolved it: the URL in play, and the spelling
+/// clap took it from.
+struct DebuggerSwitch {
     url: String,
     source: &'static str,
 }
 
-/// Open a wire-debugger sink for `url`.
+/// A resolved `--debugger` switch with its sink, carried so the dial can be
+/// announced after the terminal UI exists.
+struct DebuggerDial {
+    sink: Arc<dyn DebugSink>,
+    switch: DebuggerSwitch,
+}
+
+/// Name the switch clap read `--debugger` from.
+///
+/// §9 requires a host that dials to name the source it read, so a developer
+/// looking at a host that streams knows which spelling to clear. clap folds the
+/// flag and the variable into one value, and `value_source` is the only thing
+/// that still knows which of the two it took.
+fn debugger_url_source(matches: &ArgMatches) -> &'static str {
+    match matches.value_source("debugger") {
+        Some(ValueSource::EnvVariable) => "TRUAPI_DEBUGGER_URL",
+        _ => "--debugger",
+    }
+}
+
+/// Open a wire-debugger sink for `switch`.
 ///
 /// A URL that is not a loopback `ws://` target aborts startup rather than
 /// warning. The caller explicitly asked for a debugger, and a host that runs on
 /// without one is indistinguishable, from the debugger's side, from a host that
 /// is simply idle. Success does not mean the debugger is listening: the sink
 /// dials lazily and reconnects, so it can be started either side of the host.
-fn connect_debugger(url: String) -> Result<DebuggerDial> {
-    let source = debugger_url_source(&url);
-    let sink = WsDebugSink::connect(&url).with_context(|| {
+fn connect_debugger(switch: DebuggerSwitch) -> Result<DebuggerDial> {
+    let DebuggerSwitch { url, source } = &switch;
+    let sink = WsDebugSink::connect(url).with_context(|| {
         format!("{source} {url} must be a ws:// URL on 127.0.0.1, localhost, or [::1]")
     })?;
-    Ok(DebuggerDial { sink, url, source })
+    Ok(DebuggerDial { sink, switch })
 }
 
 /// Say once whether this host streams frames, and to where.
@@ -1094,56 +1119,10 @@ fn connect_debugger(url: String) -> Result<DebuggerDial> {
 fn report_debugger(dial: Option<&DebuggerDial>) {
     match dial {
         Some(dial) => terminal_ui::output_event(SystemEvent::DebuggerDialling {
-            url: dial.url.clone(),
-            source: dial.source.to_string(),
+            url: dial.switch.url.clone(),
+            source: dial.switch.source.to_string(),
         }),
         None => terminal_ui::output_event(SystemEvent::DebuggerOff),
-    }
-}
-
-/// Name the switch that supplied `url`.
-///
-/// §9 requires a host that dials to name the source it read, so a developer who
-/// forgot an exported `TRUAPI_DEBUGGER_URL` can tell which switch is in play.
-/// `clap` folds the flag and the variable into one value without saying which
-/// won. It resolves an explicit flag over the variable, so the variable can only
-/// be the source when it is the only thing set; when both hold the same string
-/// either label is true.
-fn debugger_url_source(url: &str) -> &'static str {
-    debugger_url_source_from(url, std::env::var("TRUAPI_DEBUGGER_URL").ok().as_deref())
-}
-
-/// The rule behind [`debugger_url_source`], split from the read so it is testable
-/// without mutating the process environment.
-pub(crate) fn debugger_url_source_from(url: &str, from_env: Option<&str>) -> &'static str {
-    match from_env {
-        Some(value) if value == url => "TRUAPI_DEBUGGER_URL",
-        _ => "--debugger",
-    }
-}
-
-#[cfg(test)]
-mod debugger_switch_tests {
-    use super::debugger_url_source_from;
-
-    #[test]
-    fn the_dial_report_names_the_switch_that_supplied_the_url() {
-        // Only the variable is set, so clap read it from there.
-        assert_eq!(
-            debugger_url_source_from("ws://127.0.0.1:9231", Some("ws://127.0.0.1:9231")),
-            "TRUAPI_DEBUGGER_URL"
-        );
-        // clap prefers an explicit flag, so a variable holding something else
-        // lost - naming it would send a developer after the wrong switch.
-        assert_eq!(
-            debugger_url_source_from("ws://127.0.0.1:9231", Some("ws://127.0.0.1:9300")),
-            "--debugger"
-        );
-        // No variable at all leaves only the flag.
-        assert_eq!(
-            debugger_url_source_from("ws://127.0.0.1:9231", None),
-            "--debugger"
-        );
     }
 }
 
@@ -1159,11 +1138,54 @@ fn tap_for_debugger(
     }
 }
 
+#[cfg(test)]
+mod debugger_tap_tests {
+    use super::*;
+    use truapi_server::{DebugEvent, FrameSink, ProductContext, ProductRuntime};
+
+    struct SilentSink;
+
+    impl DebugSink for SilentSink {
+        fn emit(&self, _event: DebugEvent) {}
+    }
+
+    struct UnusedFactory;
+
+    impl frame_server::ProductRuntimeFactory for UnusedFactory {
+        fn product_runtime(
+            &self,
+            _product: ProductContext,
+            _sink: Arc<dyn FrameSink>,
+        ) -> ProductRuntime {
+            panic!("this test observes the wrapping decision only")
+        }
+    }
+
+    /// What `DebugTappedRuntime` does once installed is covered next to it. This
+    /// covers whether it is installed at all: a `tap_for_debugger` that returned
+    /// `factory` in both arms leaves a host that accepts `--debugger`, announces
+    /// the dial, and streams nothing.
+    #[test]
+    fn the_tap_wraps_the_factory_exactly_when_a_sink_was_opened() {
+        let factory: Arc<dyn frame_server::ProductRuntimeFactory> = Arc::new(UnusedFactory);
+        let tapped = tap_for_debugger(factory.clone(), Some(Arc::new(SilentSink)));
+        let untapped = tap_for_debugger(factory.clone(), None);
+
+        assert_eq!(
+            (
+                Arc::ptr_eq(&factory, &tapped),
+                Arc::ptr_eq(&factory, &untapped)
+            ),
+            (false, true)
+        );
+    }
+}
+
 async fn run_pairing_host(
     args: PairingHostArgs,
     initial_log_filter: String,
     log_controller: LogController,
-    debugger: Option<String>,
+    debugger: Option<DebuggerSwitch>,
 ) -> Result<()> {
     let interactive = args.script.is_none();
     if interactive && !terminal_ui::is_interactive_terminal() {
@@ -1272,7 +1294,7 @@ async fn run_signing_host(
     initial_log_filter: String,
     log_controller: LogController,
     dev_command: Option<Vec<String>>,
-    debugger: Option<String>,
+    debugger: Option<DebuggerSwitch>,
 ) -> Result<()> {
     if let Err(error) = validate_signing_args(&args) {
         invalid_invocation(error);
@@ -2048,7 +2070,7 @@ async fn run_dev(
     args: DevArgs,
     initial_log_filter: String,
     log_controller: LogController,
-    debugger: Option<String>,
+    debugger: Option<DebuggerSwitch>,
 ) -> Result<()> {
     let product_id = args
         .product_id

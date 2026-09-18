@@ -3775,10 +3775,11 @@ mod tests {
     }
 
     /// §9 requires both arms of the dial report, and requires them where a
-    /// developer sees them. `human()` is the non-interactive rendering and
-    /// `handle_system_event` the interactive one; asserting both is what keeps
-    /// the report from regressing back to a `tracing` line, which the alternate
-    /// screen covers for the rest of the run.
+    /// developer sees them. Both halves below run the one renderer: `human()`
+    /// builds an `App`, hands it the event, and returns that transcript. What
+    /// they pin is that each arm puts copy in the transcript at all, which is
+    /// what a report written as a `tracing` line would not do, since the
+    /// alternate screen covers stderr for the rest of the run.
     #[test]
     fn both_arms_of_the_debugger_report_render_in_either_mode() {
         let dialling = SystemEvent::DebuggerDialling {
