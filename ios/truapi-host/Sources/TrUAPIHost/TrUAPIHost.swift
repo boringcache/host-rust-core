@@ -308,7 +308,7 @@ public protocol HostBridge: AnyObject, Sendable {
     /// Defaults to `.unknownBackend`, so an app that registers no backends
     /// leaves these calls refused.
     func backendRequest(productId: String, request: HostBackendRequest) async throws
-        -> HostBackendResponse
+        -> NativeBackendResponse
 
     /// Identifiers `backendRequest` accepts for `productId`. Defaults to none.
     func backendList(productId: String) async throws -> [String]
@@ -473,7 +473,7 @@ public extension HostBridge {
     func devicePermissionStatus(request: HostDevicePermissionRequest) async throws
         -> NativeDevicePermissionStatus { .notApplicable }
     func backendRequest(productId _: String, request _: HostBackendRequest) async throws
-        -> HostBackendResponse { throw HostBackendRejection.UnknownBackend }
+        -> NativeBackendResponse { throw HostBackendRejection.UnknownBackend }
     func backendList(productId _: String) async throws -> [String] { [] }
 }
 
@@ -606,7 +606,7 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
     }
 
     func backendRequest(productId: String, request: HostBackendRequest) async throws
-        -> HostBackendResponse
+        -> NativeBackendResponse
     {
         do {
             return try await bridge.backendRequest(productId: productId, request: request)

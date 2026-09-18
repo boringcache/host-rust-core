@@ -116,6 +116,50 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for HostRejection {
     }
 }
 
+/// One response header a native host passes back.
+///
+/// The canonical [`v01::BackendHeader`] cannot cross here: UniFFI cannot lower a
+/// record defined in another crate out of an async callback return, so the
+/// response leg carries this boundary mirror and the adapter converts.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct NativeBackendHeader {
+    /// Header name, lowercased.
+    pub name: String,
+    /// Header value.
+    pub value: String,
+}
+
+/// What a backend answered, as a native host reports it.
+///
+/// Mirrors [`v01::HostBackendResponse`] for the reason [`NativeBackendHeader`]
+/// gives.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct NativeBackendResponse {
+    /// HTTP status the backend returned.
+    pub status: u16,
+    /// Allowlisted response headers, lowercased.
+    pub headers: Vec<NativeBackendHeader>,
+    /// Response body as received.
+    pub body: Vec<u8>,
+}
+
+impl From<NativeBackendResponse> for v01::HostBackendResponse {
+    fn from(response: NativeBackendResponse) -> Self {
+        Self {
+            status: response.status,
+            headers: response
+                .headers
+                .into_iter()
+                .map(|header| v01::BackendHeader {
+                    name: header.name,
+                    value: header.value,
+                })
+                .collect(),
+            body: response.body,
+        }
+    }
+}
+
 /// Backend failure reported by a native host: the subset of
 /// `HostBackendError` a host can raise, in the shape [`uniffi::Error`] requires.
 #[derive(Debug, Clone, thiserror::Error, uniffi::Error)]
@@ -552,7 +596,7 @@ pub trait HostCallbacks: Send + Sync {
         &self,
         product_id: String,
         request: v01::HostBackendRequest,
-    ) -> Result<v01::HostBackendResponse, HostBackendRejection>;
+    ) -> Result<NativeBackendResponse, HostBackendRejection>;
 
     /// Identifiers `backend_request` accepts for `product_id`.
     async fn backend_list(&self, product_id: String) -> Result<Vec<String>, HostBackendRejection>;
@@ -1790,6 +1834,7 @@ impl truapi_platform::BackendHost for CallbackPlatform {
         self.callbacks
             .backend_request(product.product_id.clone(), request)
             .await
+            .map(v01::HostBackendResponse::from)
             .map_err(v01::HostBackendError::from)
     }
 
@@ -2610,7 +2655,7 @@ mod tests {
             &self,
             _product_id: String,
             _request: v01::HostBackendRequest,
-        ) -> Result<v01::HostBackendResponse, HostBackendRejection> {
+        ) -> Result<NativeBackendResponse, HostBackendRejection> {
             Err(HostBackendRejection::UnknownBackend)
         }
         async fn backend_list(
@@ -3933,7 +3978,7 @@ mod tests {
                 &self,
                 _product_id: String,
                 _request: v01::HostBackendRequest,
-            ) -> Result<v01::HostBackendResponse, HostBackendRejection> {
+            ) -> Result<NativeBackendResponse, HostBackendRejection> {
                 Err(HostBackendRejection::UnknownBackend)
             }
             async fn backend_list(
@@ -4093,7 +4138,7 @@ mod tests {
                 &self,
                 _product_id: String,
                 _request: v01::HostBackendRequest,
-            ) -> Result<v01::HostBackendResponse, HostBackendRejection> {
+            ) -> Result<NativeBackendResponse, HostBackendRejection> {
                 Err(HostBackendRejection::UnknownBackend)
             }
             async fn backend_list(

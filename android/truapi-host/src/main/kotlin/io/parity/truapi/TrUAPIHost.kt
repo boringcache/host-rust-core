@@ -36,6 +36,7 @@ import uniffi.truapi.ChatBotRegistrationStatus
 import uniffi.truapi.ChatMessageContent
 import uniffi.truapi.ChatRoom
 import uniffi.truapi.ChatRoomRegistrationStatus
+import uniffi.truapi.HostBackendRequest
 import uniffi.truapi.HostChatActionSubscribeItem
 import uniffi.truapi.HostDevicePermissionRequest
 import uniffi.truapi.HostFeatureSupportedRequest
@@ -57,6 +58,8 @@ import uniffi.truapi_platform.HostChainSet
 import uniffi.truapi_platform.PermissionAuthorizationRequest
 import uniffi.truapi_platform.PermissionAuthorizationStatus
 import uniffi.truapi_platform.UserConfirmationReview
+import uniffi.truapi_server.HostBackendRejection
+import uniffi.truapi_server.NativeBackendResponse
 import uniffi.truapi_server.HostCallbacks
 import uniffi.truapi_server.NativeChatCallbacks
 import uniffi.truapi_server.NativePocketCallbacks
@@ -313,7 +316,7 @@ interface HostBridge {
     suspend fun backendRequest(
         productId: String,
         request: HostBackendRequest,
-    ): HostBackendResponse = throw HostBackendRejection.UnknownBackend()
+    ): NativeBackendResponse = throw HostBackendRejection.UnknownBackend()
 
     /**
      * Identifiers [backendRequest] accepts for [productId]. Defaults to none.
@@ -536,7 +539,7 @@ private class HostCallbackAdapter(private val bridge: HostBridge) : HostCallback
     override suspend fun backendRequest(
         productId: String,
         request: HostBackendRequest,
-    ): HostBackendResponse =
+    ): NativeBackendResponse =
         try {
             bridge.backendRequest(productId, request)
         } catch (error: HostBackendRejection) {
