@@ -100,6 +100,7 @@ export interface WorkerPairingHostRuntime {
     status: PermissionAuthorizationStatus,
   ): Promise<void>;
   getSessionChatIdentityKey(): Promise<Uint8Array | undefined>;
+  getDeviceStatementKey(): Promise<Uint8Array | undefined>;
   getDeviceEncryptionKey(): Promise<Uint8Array>;
   getProductSubtreePublicKey(
     productId: string,
@@ -196,6 +197,13 @@ interface RuntimeState {
       reject: (error: Error) => void;
     }
   >;
+  pendingDeviceStatementKeys: Map<
+    number,
+    {
+      resolve: (key: Uint8Array | undefined) => void;
+      reject: (error: Error) => void;
+    }
+  >;
   pendingDeviceEncryptionKeys: Map<
     number,
     { resolve: (key: Uint8Array) => void; reject: (error: Error) => void }
@@ -231,6 +239,7 @@ function debugLoggingEnabled(state: RuntimeState): boolean {
 let nextDisconnectRequestId = 0;
 let nextPermissionAuthorizationRequestId = 0;
 let nextSessionChatIdentityKeyRequestId = 0;
+let nextDeviceStatementKeyRequestId = 0;
 let nextDeviceEncryptionKeyRequestId = 0;
 let nextProductSubtreePublicKeyRequestId = 0;
 let nextSessionActivationRequestId = 0;
@@ -665,6 +674,19 @@ function handleSessionChatIdentityKeyResponse(
   );
 }
 
+function handleDeviceStatementKeyResponse(
+  state: RuntimeState,
+  msg:
+    | { requestId: number; ok: true; key: Uint8Array | undefined }
+    | { requestId: number; ok: false; error: string },
+): void {
+  settlePending(
+    state.pendingDeviceStatementKeys,
+    msg.requestId,
+    msg.ok ? { ok: true, value: msg.key } : { ok: false, error: msg.error },
+  );
+}
+
 function handleProductSubtreePublicKeyResponse(
   state: RuntimeState,
   msg:
@@ -698,6 +720,7 @@ function rejectPendingRuntimeRequests(state: RuntimeState, error: Error): void {
   rejectAll(state.pendingPermissionAuthorizationStatusBatches, error);
   rejectAll(state.pendingSetPermissionAuthorizationStatuses, error);
   rejectAll(state.pendingSessionChatIdentityKeys, error);
+  rejectAll(state.pendingDeviceStatementKeys, error);
   rejectAll(state.pendingDeviceEncryptionKeys, error);
   rejectAll(state.pendingProductSubtreePublicKeys, error);
   rejectAll(state.pendingActions, error);
@@ -841,6 +864,7 @@ export function createWebWorkerPairingHostRuntime(
       pendingSetPermissionAuthorizationStatuses: new Map(),
       pendingSessionChatIdentityKeys: new Map(),
       pendingProductSubtreePublicKeys: new Map(),
+      pendingDeviceStatementKeys: new Map(),
       pendingDeviceEncryptionKeys: new Map(),
       pendingActions: new Map(),
       renders: new Map(),
@@ -907,6 +931,9 @@ export function createWebWorkerPairingHostRuntime(
           break;
         case "sessionChatIdentityKeyResponse":
           handleSessionChatIdentityKeyResponse(state, msg);
+          break;
+        case "deviceStatementKeyResponse":
+          handleDeviceStatementKeyResponse(state, msg);
           break;
         case "deviceEncryptionKeyResponse":
           handleDeviceEncryptionKeyResponse(state, msg);
@@ -1174,6 +1201,15 @@ function buildRuntime(state: RuntimeState): WorkerPairingHostRuntime {
         () => ++nextSessionChatIdentityKeyRequestId,
         undefined,
         (requestId) => ({ kind: "getSessionChatIdentityKey", requestId }),
+      );
+    },
+    getDeviceStatementKey(): Promise<Uint8Array | undefined> {
+      return sendWorkerRequest<Uint8Array | undefined>(
+        state,
+        state.pendingDeviceStatementKeys,
+        () => ++nextDeviceStatementKeyRequestId,
+        undefined,
+        (requestId) => ({ kind: "getDeviceStatementKey", requestId }),
       );
     },
     getDeviceEncryptionKey(): Promise<Uint8Array> {
@@ -1474,6 +1510,10 @@ function buildProvider(
       if (core.disposed) return undefined;
       const key = await runtime.getSessionChatIdentityKey();
       return key && bytesToHex(key);
+    },
+    async getDeviceStatementKey(): Promise<Uint8Array | undefined> {
+      if (core.disposed) return undefined;
+      return runtime.getDeviceStatementKey();
     },
     async getDeviceEncryptionKey(): Promise<Bytes32> {
       if (core.disposed) {
