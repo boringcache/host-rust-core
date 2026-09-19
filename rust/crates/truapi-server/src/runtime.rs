@@ -42,7 +42,8 @@ mod statement_store_rpc;
 
 use core::future::Future;
 use core::time::Duration;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
@@ -261,6 +262,27 @@ pub struct ProductRuntimeHost {
     chat: Arc<ActionChannel<HostChatActionSubscribeItem>>,
     renderer: Arc<ActionChannel<HostRendererActionSubscribeItem>>,
     pocket_platform: Option<Arc<dyn truapi_platform::PocketPlatform>>,
+    /// Host-assigned ids of this connection's open pending operations, each
+    /// holding one worker reference until it ends or the connection is torn
+    /// down.
+    ///
+    /// Scoped to the connection rather than the product, which holds because
+    /// only a Worker execution reaches `begin_operation`/`end_operation` and a
+    /// product has one of those at a time.
+    ///
+    /// The set is unbounded here. Whether a product may hold a thousand open
+    /// operations is the host's call, made in `begin_operation`, since the
+    /// host is what the operations keep running.
+    open_operations: Mutex<HashSet<u32>>,
+}
+
+/// A connection that goes away without ending its operations still owes the
+/// ledger their references, so the host is told to stop rather than keeping a
+/// worker alive for a product that is gone.
+impl Drop for ProductRuntimeHost {
+    fn drop(&mut self) {
+        self.release_open_operations();
+    }
 }
 
 impl ProductRuntimeHost {
@@ -284,6 +306,7 @@ impl ProductRuntimeHost {
             chat: adapters.chat,
             renderer: adapters.renderer,
             pocket_platform: adapters.pocket_platform,
+            open_operations: Mutex::new(HashSet::new()),
         }
     }
 
@@ -409,6 +432,7 @@ impl ProductRuntimeHost {
             chat,
             renderer,
             pocket_platform: None,
+            open_operations: Mutex::new(HashSet::new()),
         };
         (host, pairing_host)
     }
@@ -1054,6 +1078,97 @@ impl ProductRuntimeHost {
         self.services
             .worker_ledger
             .release(&self.product.product_id);
+    }
+
+    /// Begin a pending operation with the host, on a task this dispatch's
+    /// cancellation cannot reach.
+    ///
+    /// A cancelled dispatch drops whatever it is awaiting, and dropping the
+    /// host's call mid-answer would leave the host holding an operation the
+    /// core never counted and the product never learned the id of, which
+    /// nothing could then end. The call runs to completion either way, and
+    /// ends the operation itself when nobody is left to receive it.
+    pub(crate) async fn begin_operation_with_host(
+        &self,
+        label: String,
+    ) -> Result<v01::HostWorkerBeginOperationResponse, v01::HostWorkerOperationError> {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let platform = self.platform.clone();
+        let product = self.product.clone();
+        (self.services.spawner)(Box::pin(async move {
+            let begun = platform.begin_operation(&product, label).await;
+            if let Err(Ok(response)) = tx.send(begun) {
+                let _ = platform.end_operation(&product, response.id).await;
+            }
+        }));
+        rx.await.unwrap_or_else(|_| {
+            Err(v01::HostWorkerOperationError::Unknown {
+                reason: "the host did not answer".to_string(),
+            })
+        })
+    }
+
+    /// Record a pending operation and take the worker reference it holds, so
+    /// an operation outliving the product's surface still reads as demand.
+    pub(crate) fn hold_worker_for_operation(&self, id: u32) {
+        if self
+            .open_operations
+            .lock()
+            .expect("open operations mutex poisoned")
+            .insert(id)
+        {
+            self.acquire_worker_reference();
+        }
+    }
+
+    /// Drop every worker reference this connection's open operations hold.
+    ///
+    /// Teardown calls this rather than leaving it to `Drop`: a disposed
+    /// connection can outlive its last `Arc` holder, and a reference kept past
+    /// dispose would leave the host running a worker for a connection that is
+    /// gone.
+    ///
+    /// Telling the host runs on the spawner, so a spawner whose runtime is
+    /// already gone drops that work. The references are still released, and
+    /// the host is shutting down with its own records anyway.
+    pub(crate) fn release_open_operations(&self) {
+        let open = core::mem::take(
+            &mut *self
+                .open_operations
+                .lock()
+                .expect("open operations mutex poisoned"),
+        );
+        if open.is_empty() {
+            return;
+        }
+        for _ in &open {
+            self.release_worker_reference();
+        }
+        // The host holds its own record of each operation, and nothing else
+        // ever ends one for a connection that is gone: left alone they
+        // accumulate against whatever limit the host puts on a product's open
+        // operations. Ending them reaches the host, so it runs off this
+        // thread.
+        let platform = self.platform.clone();
+        let product = self.product.clone();
+        (self.services.spawner)(Box::pin(async move {
+            for id in open {
+                let _ = platform.end_operation(&product, id).await;
+            }
+        }));
+    }
+
+    /// Drop the worker reference a pending operation held. An id that is not
+    /// open releases nothing, which is what keeps `end_operation` idempotent.
+    pub(crate) fn release_worker_for_operation(&self, id: u32) {
+        if self
+            .open_operations
+            .lock()
+            .expect("open operations mutex poisoned")
+            .remove(&id)
+        {
+            self.release_worker_reference();
+        }
     }
 
     /// End the renderer action stream this connection's product is reading.
