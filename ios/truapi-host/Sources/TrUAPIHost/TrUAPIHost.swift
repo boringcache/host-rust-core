@@ -341,6 +341,14 @@ public protocol HostBridge: AnyObject, Sendable {
     /// runs no workers.
     func workerDemandChanged(productId: String, transition: WorkerTransition)
 
+    /// Begin a pending operation, whose id keeps the product's worker alive
+    /// until it ends. `label` is a log/UI hint, empty when the product gave none.
+    func beginOperation(productId: String, label: String) async throws -> UInt32
+
+    /// End a pending operation. Idempotent: an unknown or already-ended id
+    /// succeeds, so a retry after an ambiguous failure is safe.
+    func endOperation(productId: String, id: UInt32) async throws
+
     /// Scoped key-value storage for the Rust core.
     var storage: HostStorageBackend { get }
 
@@ -436,7 +444,36 @@ public extension HostBridge {
     func workerDemandChanged(productId: String, transition: WorkerTransition) {}
     func devicePermissionStatus(request: HostDevicePermissionRequest) async throws
         -> NativeDevicePermissionStatus { .notApplicable }
+    /// Defaults opt out of worker keep-alive; override to run background work
+    /// past the product's surface. The id is still distinct per call, because
+    /// an `OperationId` names one operation: a host overriding only
+    /// `endOperation`, and the core's own demand accounting, both end the
+    /// wrong ones when every operation shares an id.
+    func beginOperation(productId: String, label: String) async throws -> UInt32 {
+        defaultOperationIds.take()
+    }
+
+    func endOperation(productId: String, id: UInt32) async throws {}
 }
+
+/// Ids handed out by the default `beginOperation`, distinct for the life of
+/// the process.
+private final class DefaultOperationIds: @unchecked Sendable {
+    private let lock = NSLock()
+    private var nextId: UInt32 = 1
+
+    func take() -> UInt32 {
+        lock.lock()
+        defer { lock.unlock() }
+        let id = nextId
+        // Never zero, and never traps: an id is only ever compared, so wrapping
+        // back to one costs nothing.
+        nextId = nextId == UInt32.max ? 1 : nextId + 1
+        return id
+    }
+}
+
+private let defaultOperationIds = DefaultOperationIds()
 
 /// Adapter that bridges the public `ChatHostBridge` to the generated UniFFI
 /// `NativeChatCallbacks` protocol.
@@ -679,6 +716,18 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
     func localStorageClear(key: String) throws {
         try withStorageError {
             try bridge.storage.clear(key: key)
+        }
+    }
+
+    func beginOperation(productId: String, label: String) async throws -> UInt32 {
+        try await withHostRejection {
+            try await bridge.beginOperation(productId: productId, label: label)
+        }
+    }
+
+    func endOperation(productId: String, id: UInt32) async throws {
+        try await withHostRejection {
+            try await bridge.endOperation(productId: productId, id: id)
         }
     }
 
@@ -970,6 +1019,7 @@ public protocol TrUAPIProductExecutionProtocol: AnyObject, Sendable {
     ) throws
     func notifyThemeChanged(theme: HostThemeSubscribeItem)
     func notifyLocaleChanged(locale: HostLocaleSubscribeItem)
+    func notifyStorageChanged(key: String, value: Data?)
     func notifyPreimageChanged(key: Data, value: Data?)
     func notifyChainResponse(connectionId: UInt32, json: String)
     func notifyChainClosed(connectionId: UInt32)
@@ -1053,6 +1103,16 @@ public final class TrUAPIProductExecution: TrUAPIProductExecutionProtocol, @unch
 
     public func notifyLocaleChanged(locale: HostLocaleSubscribeItem) {
         inner.notifyLocaleChanged(locale: locale)
+    }
+
+    /// Push a host storage change to active TrUAPI storage subscriptions,
+    /// across every execution of the product; `nil` means cleared.
+    ///
+    /// Only for changes the host makes itself. A write a product made through
+    /// TrUAPI already reaches its subscribers, so reporting one here delivers
+    /// it twice.
+    public func notifyStorageChanged(key: String, value: Data?) {
+        inner.notifyStorageChanged(key: key, value: value)
     }
 
     public func notifyPreimageChanged(key: Data, value: Data?) {
