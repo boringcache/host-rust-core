@@ -27,6 +27,7 @@ package io.parity.truapi
 
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -221,6 +222,9 @@ interface HostCoreStorage {
     fun clear(key: ByteArray)
 }
 
+/** Ids handed out by the default [HostBridge.beginOperation], distinct for the life of the process. */
+private val defaultOperationIds = AtomicInteger(0)
+
 /**
  * Host-side callback bundle that the Rust core invokes for capabilities the
  * native shell owns. The interface mirrors the underlying UniFFI surface but
@@ -382,6 +386,24 @@ interface HostBridge {
      * thread from inside it.
      */
     fun workerDemandChanged(productId: String, transition: WorkerTransition) {}
+
+    /**
+     * Begin a pending operation. [label] is a log/UI hint, empty when the
+     * product gave none. Leave unimplemented to opt out of worker keep-alive;
+     * override to run background work past the product's surface.
+     *
+     * The default id is still distinct per call, because an operation id names
+     * one operation: a host overriding only [endOperation], and the core's own
+     * demand accounting, both end the wrong ones when every operation shares an
+     * id.
+     */
+    @Throws(HostRejection::class)
+    suspend fun beginOperation(productId: String, label: String): UInt =
+        defaultOperationIds.incrementAndGet().toUInt()
+
+    /** End a pending operation. Idempotent, so a retry after an ambiguous failure is safe. */
+    @Throws(HostRejection::class)
+    suspend fun endOperation(productId: String, id: UInt) {}
 
     /** Product-scoped key-value storage for the Rust core. */
     val storage: HostStorage
@@ -564,6 +586,12 @@ private class HostCallbackAdapter(private val bridge: HostBridge) : HostCallback
 
     override fun localStorageClear(key: String) =
         withStorageException { bridge.storage.clear(key) }
+
+    override suspend fun beginOperation(productId: String, label: String): UInt =
+        withHostRejection { bridge.beginOperation(productId, label) }
+
+    override suspend fun endOperation(productId: String, id: UInt) =
+        withHostRejection { bridge.endOperation(productId, id) }
 }
 
 // A host that throws an exception type its callback does not declare crosses
@@ -1066,6 +1094,18 @@ class TrUAPIProductExecution internal constructor(
     /** Push a host locale update to active TrUAPI locale subscriptions. */
     fun notifyLocaleChanged(locale: HostLocaleSubscribeItem) {
         inner.notifyLocaleChanged(locale)
+    }
+
+    /**
+     * Push a host storage change to active TrUAPI storage subscriptions, across
+     * every execution of the product; a null [value] means cleared.
+     *
+     * Only for changes the host makes itself. A write a product made through
+     * TrUAPI already reaches its subscribers, so reporting one here delivers it
+     * twice.
+     */
+    fun notifyStorageChanged(key: String, value: ByteArray?) {
+        inner.notifyStorageChanged(key, value)
     }
 
     /** Push a preimage lookup update to active subscriptions for [key]. */

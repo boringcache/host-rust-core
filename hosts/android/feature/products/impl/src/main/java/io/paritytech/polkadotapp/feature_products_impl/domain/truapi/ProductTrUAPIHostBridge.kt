@@ -28,6 +28,7 @@ import io.paritytech.polkadotapp.feature_products_impl.domain.hostApi.ThemeVaria
 import io.paritytech.polkadotapp.feature_products_impl.domain.hostApi.navigation.NavigationPolicy
 import io.paritytech.polkadotapp.feature_products_impl.domain.notifications.NotificationId
 import io.paritytech.polkadotapp.feature_products_impl.domain.permissions.models.DeviceCapabilityType
+import io.paritytech.polkadotapp.feature_products_impl.domain.permissions.models.PermissionDecision
 import io.paritytech.polkadotapp.feature_products_impl.domain.permissions.models.RemotePermissionRequest
 import io.paritytech.polkadotapp.feature_products_impl.domain.pocket.PocketCardStore
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +53,7 @@ import uniffi.truapi_server.HostRejection
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Instant
 import uniffi.truapi.ThemeVariant as NativeThemeVariant
+import uniffi.truapi_platform.PermissionDecision as TrUAPIPermissionDecision
 
 /**
  * Native platform callbacks ([io.parity.truapi.HostBridge]) for one product
@@ -150,7 +152,7 @@ class ProductTrUAPIHostBridge @AssistedInject constructor(
 
         override suspend fun pushNotification(request: HostPushNotificationRequest): UInt =
             hostApiInteractor
-                .publishNotification(
+                .publishNotificationAuthorized(
                     callingProductId = callingProductId,
                     text = request.text,
                     deeplink = request.deeplink,
@@ -165,7 +167,7 @@ class ProductTrUAPIHostBridge @AssistedInject constructor(
             // suspending scheduler; hand it to the session scope instead.
             scope.launch {
                 hostApiInteractor
-                    .cancelNotification(callingProductId, NotificationId(id.toInt()))
+                    .cancelNotificationAuthorized(callingProductId, NotificationId(id.toInt()))
                     .logFailure("truapi.cancel_notification: $id")
             }
         }
@@ -184,15 +186,17 @@ class ProductTrUAPIHostBridge @AssistedInject constructor(
         override suspend fun confirmUserAction(review: UserConfirmationReview): Boolean =
             confirmationLauncher.decide(review, requesterFallback = callingProductId.value)
 
-        override suspend fun devicePermission(request: HostDevicePermissionRequest): Boolean =
+        override suspend fun devicePermission(request: HostDevicePermissionRequest): TrUAPIPermissionDecision =
             hostApiInteractor
-                .requestDevicePermission(callingProductId, request.toCapability())
-                .getOrDefault(false)
+                .requestDevicePermissionDecision(callingProductId, request.toCapability())
+                .getOrElse { throw it }
+                .toNative()
 
-        override suspend fun remotePermission(request: RemotePermission): Boolean =
+        override suspend fun remotePermission(request: RemotePermission): TrUAPIPermissionDecision =
             hostApiInteractor
-                .requestRemotePermissions(callingProductId, listOf(request.toDomain()))
-                .getOrDefault(false)
+                .requestRemotePermissionDecision(callingProductId, request.toDomain())
+                .getOrElse { throw it }
+                .toNative()
 
         /**
          * Answered from the same snapshot [chainConnect] dials rather than the
@@ -360,6 +364,12 @@ private fun RemotePermission.toDomain(): RemotePermissionRequest = when (this) {
     RemotePermission.ChainSubmit -> RemotePermissionRequest.ChainSubmit
     RemotePermission.PreimageSubmit -> RemotePermissionRequest.PreimageSubmit
     RemotePermission.StatementSubmit -> RemotePermissionRequest.StatementSubmit
+}
+
+private fun PermissionDecision.toNative(): TrUAPIPermissionDecision = when (this) {
+    PermissionDecision.AllowOnce -> TrUAPIPermissionDecision.ALLOW_ONCE
+    PermissionDecision.AllowAlways -> TrUAPIPermissionDecision.ALLOW_ALWAYS
+    PermissionDecision.Deny -> TrUAPIPermissionDecision.DENY
 }
 
 internal fun AuthState.marker(): String = when (this) {
