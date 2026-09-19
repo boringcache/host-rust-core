@@ -900,10 +900,14 @@ public final class TrUAPIHostRuntime: @unchecked Sendable {
     /// Answer a pairing host's handshake deeplink, without serving the session
     /// it opens.
     ///
-    /// The peer's device statement account must already be a tracked renewal
-    /// target, since the answer is submitted under its allowance; read it from
-    /// the deeplink with ``parsePairingDeeplink(deeplink:)``. A pairing that
-    /// fails after that leaves the target to untrack again.
+    /// The answer is signed by this host's own SSO statement identity, so the
+    /// `.walletSso` renewal target has to be allocated for it to reach the
+    /// Statement Store at all. The peer's device statement account is the
+    /// other tracked target, since this host allocates the allowance the peer
+    /// authors its own session statements under; read it from the deeplink
+    /// with ``parsePairingDeeplink(deeplink:)``. A pairing that fails after
+    /// that leaves the peer's target to untrack again, unless the device was
+    /// already paired and the target still carries a live pairing.
     ///
     /// A device that pairs here reaches ``HostBridge/devicePaired(device:)``.
     /// Serving the session is ``resumePairing(peer:)``, called with the peer

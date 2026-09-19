@@ -422,10 +422,11 @@ pub fn parse_navigate(input: String) -> NavigateDecision {
 ///
 /// A host needs the peer's `statement_account_id` before it answers: the
 /// peer's device statement account has to be a tracked renewal target by the
-/// time the answer is submitted, or the answer has no allowance to go out
-/// under. It is also what a failed pairing untracks again. Neither the
-/// notice, the answer, nor [`HostCallbacks::device_paired`] yields it in time
-/// for that, so the host reads it here first.
+/// time the session opens, or the peer has no allowance to author its own
+/// session statements under. It is also what a failed pairing untracks again,
+/// unless the device was already paired. Neither the notice, the answer, nor
+/// [`HostCallbacks::device_paired`] yields it in time for that, so the host
+/// reads it here first.
 ///
 /// Pure and stateless, and the same decoder the responder itself runs, so a
 /// deeplink this rejects is one no pairing call would have accepted either.
@@ -1108,10 +1109,14 @@ impl NativeTrUApiHostRuntime {
     /// Answer a pairing host's handshake deeplink, without serving the session
     /// it opens.
     ///
-    /// The peer's device statement account must already be a tracked renewal
-    /// target, since the answer is submitted under its allowance; read it from
-    /// the deeplink with [`parse_pairing_deeplink`]. A pairing that fails
-    /// after that leaves the target to untrack again.
+    /// The answer is signed by this host's own SSO statement identity, so the
+    /// `WalletSso` renewal target has to be allocated for it to reach the
+    /// Statement Store at all. The peer's device statement account is the
+    /// other tracked target, since this host allocates the allowance the peer
+    /// authors its own session statements under; read it from the deeplink
+    /// with [`parse_pairing_deeplink`]. A pairing that fails after that leaves
+    /// the peer's target to untrack again, unless the device was already
+    /// paired and the target still carries a live pairing.
     ///
     /// A device that pairs here is reported to
     /// [`HostCallbacks::device_paired`]. Serving the session is

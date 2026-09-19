@@ -289,10 +289,12 @@ separate calls rather than one `respond_to_pairing`, because the host persists
 the peer between them and it is the host's stored record that `resume_pairing`
 is called with afterwards.
 
-Two steps around those calls are the host's. The answer is submitted under the
-peer's own device statement allowance, so the peer has to be a tracked renewal
-target before `establish_pairing` runs: `parse_pairing_deeplink` reads it out
-of the deeplink, and a pairing that then fails untracks it again. And
+Two steps around those calls are the host's. The answer is signed by this
+host's own SSO statement identity, so the `WalletSso` target has to be
+allocated before `establish_pairing` runs, and the peer's device statement
+account has to be tracked alongside it for the peer to author into the session:
+`parse_pairing_deeplink` reads that account out of the deeplink, and a pairing
+that then fails untracks it again unless the device was already paired. And
 `disconnect_paired_host` submits the notice and nothing more, so ending a
 pairing also means cancelling that peer's `resume_pairing` task and untracking
 its renewal account. `truapi-host-cli` runs both sequences.

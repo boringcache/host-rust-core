@@ -246,11 +246,13 @@ own task, and `disconnectPairedHost(peer:)` ends it. Only
 pairing. The host persists the peer between answering and serving, which is why
 those are separate calls.
 
-Two steps around them are the host's. `establishPairing` submits its answer
-under the peer's own device statement allowance, so track that account as a
-renewal target first: `parsePairingDeeplink(deeplink:)` reads the peer out of
-the deeplink before any notice goes out, and a pairing that then fails untracks
-it again. `disconnectPairedHost` submits the notice and nothing more, so ending
+Two steps around them are the host's. `establishPairing` signs its answer with
+this host's own SSO statement identity, so `.walletSso` has to be allocated
+before it runs, and the peer's device statement account has to be tracked
+alongside it for the peer to author into the session:
+`parsePairingDeeplink(deeplink:)` reads that account out of the deeplink before
+any notice goes out, and a pairing that then fails untracks it again unless the
+device was already paired. `disconnectPairedHost` submits the notice and nothing more, so ending
 a pairing also means cancelling that peer's `resumePairing` task and untracking
 its renewal account; dropping the stored pairing alone leaves both running.
 
