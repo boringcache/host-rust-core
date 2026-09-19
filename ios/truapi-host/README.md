@@ -246,6 +246,14 @@ own task, and `disconnectPairedHost(peer:)` ends it. Only
 pairing. The host persists the peer between answering and serving, which is why
 those are separate calls.
 
+Two steps around them are the host's. `establishPairing` submits its answer
+under the peer's own device statement allowance, so track that account as a
+renewal target first: `parsePairingDeeplink(deeplink:)` reads the peer out of
+the deeplink before any notice goes out, and a pairing that then fails untracks
+it again. `disconnectPairedHost` submits the notice and nothing more, so ending
+a pairing also means cancelling that peer's `resumePairing` task and untracking
+its renewal account; dropping the stored pairing alone leaves both running.
+
 `devicePaired` on the runtime bridge reports a device that finished pairing
 with this signing host, carrying the `PairedSsoPeer` the pairing produced. The
 core has no chat of its own, so announcing the new device to the user's

@@ -871,9 +871,13 @@ public final class TrUAPIHostRuntime: @unchecked Sendable {
     /// under way, so it leaves its QR screen while the allocation runs.
     ///
     /// Answering needs this host's own statement-store allowance, so register
-    /// the `WalletSso` renewal target first. The returned handle is owed a
-    /// ``notifyPairingFailed(announced:reason:)`` if pairing then fails: the
-    /// peer has dropped its QR and waits without a deadline of its own.
+    /// the `WalletSso` renewal target first. The peer's own device statement
+    /// account is the other target, read with ``parsePairingDeeplink(deeplink:)``
+    /// and tracked before ``establishPairing(deeplink:)`` runs; the allocation
+    /// this notice covers is what that call waits on. The returned handle is
+    /// owed a ``notifyPairingFailed(announced:reason:)`` if pairing then
+    /// fails: the peer has dropped its QR and waits without a deadline of its
+    /// own, and the handle holds the responder secret until it is released.
     public func notifyPairingAllowanceAllocation(
         deeplink: String
     ) async throws -> NativeAnnouncedPairing {
@@ -896,6 +900,11 @@ public final class TrUAPIHostRuntime: @unchecked Sendable {
     /// Answer a pairing host's handshake deeplink, without serving the session
     /// it opens.
     ///
+    /// The peer's device statement account must already be a tracked renewal
+    /// target, since the answer is submitted under its allowance; read it from
+    /// the deeplink with ``parsePairingDeeplink(deeplink:)``. A pairing that
+    /// fails after that leaves the target to untrack again.
+    ///
     /// A device that pairs here reaches ``HostBridge/devicePaired(device:)``.
     /// Serving the session is ``resumePairing(peer:)``, called with the peer
     /// this host persisted.
@@ -914,6 +923,13 @@ public final class TrUAPIHostRuntime: @unchecked Sendable {
     }
 
     /// Tell a paired host this signing host is ending their SSO session.
+    ///
+    /// Submits the disconnect notice and nothing else. The local side is the
+    /// caller's: cancel that peer's ``resumePairing(peer:)`` task, which
+    /// otherwise keeps answering a host this one no longer considers paired,
+    /// and untrack its device statement account, which otherwise keeps being
+    /// renewed every period. Dropping the stored pairing alone leaves both
+    /// running.
     public func disconnectPairedHost(peer: PairedSsoPeer) async throws {
         try await inner.disconnectPairedHost(peer: peer)
     }

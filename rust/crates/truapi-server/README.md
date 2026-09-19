@@ -289,6 +289,14 @@ separate calls rather than one `respond_to_pairing`, because the host persists
 the peer between them and it is the host's stored record that `resume_pairing`
 is called with afterwards.
 
+Two steps around those calls are the host's. The answer is submitted under the
+peer's own device statement allowance, so the peer has to be a tracked renewal
+target before `establish_pairing` runs: `parse_pairing_deeplink` reads it out
+of the deeplink, and a pairing that then fails untracks it again. And
+`disconnect_paired_host` submits the notice and nothing more, so ending a
+pairing also means cancelling that peer's `resume_pairing` task and untracking
+its renewal account. `truapi-host-cli` runs both sequences.
+
 The report fires once the handshake answer is on the Statement Store, which is
 the earliest point the peer could read it. It is not proof that the peer did:
 a pairing host races cancellation against the answer arriving and gives up
