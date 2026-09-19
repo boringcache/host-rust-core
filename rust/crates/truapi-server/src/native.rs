@@ -5082,6 +5082,7 @@ mod tests {
                         ..EventCallbacks::new()
                     }),
                     events: Arc::default(),
+                    storage_events: Arc::default(),
                 };
                 let review = UserConfirmationReview::IdentityDisclosure(
                     truapi_platform::IdentityDisclosureReview {
