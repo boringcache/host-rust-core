@@ -147,6 +147,24 @@ describe("mock host surface agreement", () => {
     ).toEqual([]);
   });
 
+  it("maps each Rust method to a distinct JS name", () => {
+    // Both checks above compare against a set of mapped names. Two Rust
+    // methods sharing one JS name -- an alias colliding with another method's
+    // natural camelCase, say -- would both be satisfied by that single JS
+    // member, so either Rust method could then be renamed or dropped with
+    // nothing here failing.
+    const mapped = rustControlSurface().map(jsName);
+    const collisions = [
+      ...new Set(mapped.filter((name, at) => mapped.indexOf(name) !== at)),
+    ];
+
+    expect(
+      collisions,
+      `two Rust MockPlatform methods map to the same JS name: ` +
+        `${collisions.join(", ")}. Rename one, or give it its own alias.`,
+    ).toEqual([]);
+  });
+
   it("reads a whole Rust surface, so the check cannot pass vacuously", () => {
     // A regex that silently matched nothing, or a block slice that stopped
     // early, would make the checks above green forever. Pin a floor plus the
