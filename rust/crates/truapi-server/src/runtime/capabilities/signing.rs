@@ -41,11 +41,15 @@ impl Signing for ProductRuntimeHost {
                 v01::HostSignPayloadError::PermissionDenied,
             ))
         })?;
-        if !self.is_product_account_valid_for_caller(&inner.account.dot_ns_identifier) {
+        let Some(owner) = self
+            .authorized_product_account(&inner.account.dot_ns_identifier, cx)
+            .await
+        else {
             return Err(CallError::Domain(HostSignPayloadError::V1(
                 v01::HostSignPayloadError::PermissionDenied,
             )));
-        }
+        };
+        inner.account.dot_ns_identifier = owner;
         self.require_chain_submit(HostSignPayloadError::V1(
             v01::HostSignPayloadError::PermissionDenied,
         ))
@@ -124,11 +128,15 @@ impl Signing for ProductRuntimeHost {
                 v01::HostCreateTransactionError::PermissionDenied,
             ))
         })?;
-        if !self.is_product_account_valid_for_caller(&inner.signer.dot_ns_identifier) {
+        let Some(owner) = self
+            .authorized_product_account(&inner.signer.dot_ns_identifier, cx)
+            .await
+        else {
             return Err(CallError::Domain(HostCreateTransactionError::V1(
                 v01::HostCreateTransactionError::PermissionDenied,
             )));
-        }
+        };
+        inner.signer.dot_ns_identifier = owner;
         self.require_chain_submit(HostCreateTransactionError::V1(
             v01::HostCreateTransactionError::PermissionDenied,
         ))
@@ -378,11 +386,15 @@ impl ProductRuntimeHost {
                 v01::HostSignPayloadError::PermissionDenied,
             ))
         })?;
-        if !self.is_product_account_valid_for_caller(&inner.account.dot_ns_identifier) {
+        let Some(owner) = self
+            .authorized_product_account(&inner.account.dot_ns_identifier, cx)
+            .await
+        else {
             return Err(CallError::Domain(HostSignRawError::V1(
                 v01::HostSignPayloadError::PermissionDenied,
             )));
-        }
+        };
+        inner.account.dot_ns_identifier = owner;
         self.require_chain_submit(HostSignRawError::V1(
             v01::HostSignPayloadError::PermissionDenied,
         ))

@@ -66,11 +66,15 @@ impl StatementStore for ProductRuntimeHost {
                     latest::RemoteStatementStoreCreateProofError::UnknownAccount,
                 ))
             })?;
-        if !self.is_product_account_valid_for_caller(&inner.product_account_id.dot_ns_identifier) {
+        let Some(owner) = self
+            .authorized_product_account(&inner.product_account_id.dot_ns_identifier, cx)
+            .await
+        else {
             return Err(CallError::Domain(RemoteStatementStoreCreateProofError::V1(
                 latest::RemoteStatementStoreCreateProofError::UnknownAccount,
             )));
-        }
+        };
+        inner.product_account_id.dot_ns_identifier = owner;
         let proof = self
             .create_product_statement_proof(cx, inner.product_account_id, inner.statement)
             .await
