@@ -263,8 +263,9 @@ reaches it through a development-only `<script>` tag:
 ```
 
 The host serves that script itself, so the page needs no package, no imports,
-and no environment variables. It installs the same `window.__HOST_API_PORT__`
-that native webview hosts inject, and the SDK adopts it unchanged. TCP frame
+and no environment variables. It is the same script native webview hosts inject,
+so it installs the same `window.__HOST_API_PORT__`, the SDK adopts it unchanged,
+and a page whose socket dies gets a fresh port rather than needing a reload. TCP frame
 connections are accepted only from loopback peers, and browser WebSocket
 origins must also name localhost or a loopback IP. WebSocket is not subject to
 CORS, and confirmations here are auto-approved.

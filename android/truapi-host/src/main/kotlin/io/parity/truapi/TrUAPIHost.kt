@@ -69,6 +69,7 @@ import uniffi.truapi_server.ProductRuntimeException
 import uniffi.truapi_server.HostNavigateRejection
 import uniffi.truapi_server.HostRejection
 import uniffi.truapi_server.HostStorageException
+import uniffi.truapi_server.localhostBridgeBootstrapScript
 import uniffi.truapi_platform.ProductExecutionKind as UniFfiProductExecutionKind
 import uniffi.truapi_server.NativeRenewalTargetException
 import uniffi.truapi_server.NativeRuntimeConfigException
@@ -658,10 +659,13 @@ object LocalhostBridgeBootstrap {
     /**
      * Returns a `<script>`-injectable snippet that publishes the endpoint
      * metadata on `window.__truapi_localhost`, the pre-resolved permission
-     * decisions on `window.__truapi_policy__`, exposes the legacy
-     * `window.__HOST_API_PORT__` webview transport shape, and fires a
-     * `truapi-native-ready` event. Inject at document start (before the product
-     * page scripts run) so the page can dial the bridge immediately.
+     * decisions on `window.__truapi_policy__`, the `window.__HOST_API_PORT__`
+     * webview transport the SDK adopts, and the `window.__pauseConnections__` /
+     * `window.__resumeConnections__` lifecycle hooks. It fires
+     * `truapi-native-ready` on every port it publishes, including the
+     * replacements it issues when the bridge socket dies. Inject at document
+     * start (before the product page scripts run) so the page can dial the
+     * bridge immediately.
      *
      * [webRtcAllowed] must come from `permissionAuthorizationStatus` for
      * `RemotePermission.Remote.WebRtc` — a peek, never a prompt. It is baked in
@@ -679,127 +683,17 @@ object LocalhostBridgeBootstrap {
      * core and pass what it returns. A type that only a
      * [PermissionAuthorizationStatus] could produce would make the mistake
      * unrepresentable; it is deliberately deferred until Android enforces the
-     * decision at all (see the container note where the policy is published).
+     * decision at all.
+     *
+     * The policy is a value, not an enforcement point. Only the lockdown
+     * container enforces it, and Android does not inject the container, so on
+     * Android nothing reads it and WebRTC stays reachable whatever is passed.
+     * It is published anyway so the bootstrap contract matches iOS, where the
+     * container is injected and does enforce it. Android enforcement is tracked
+     * separately (#334 scopes the gate to iOS).
      */
-    fun script(port: UShort, token: String, webRtcAllowed: Boolean): String {
-        val url = "ws://127.0.0.1:$port/?t=$token"
-        val safeUrl = jsStringLiteral(url)
-        val safeToken = jsStringLiteral(token)
-        // Published for the lockdown container to read, but Android does not
-        // inject the container, so on Android nothing reads it and WebRTC stays
-        // reachable regardless of the decision. This is a policy value, not an
-        // enforcement point: it is here so the bootstrap contract matches iOS,
-        // where the container is injected and does enforce it. Android
-        // enforcement is tracked separately (#334 scopes the gate to iOS).
-        val safeWebRtc = if (webRtcAllowed) "true" else "false"
-        return """
-        (function() {
-          var endpoint = { url: $safeUrl, token: $safeToken };
-
-          function createWebSocketMessagePort(url) {
-            var socket = null;
-            var started = false;
-            var queue = [];
-
-            var port = {
-              onmessage: null,
-              onmessageerror: null,
-
-              postMessage: function(message) {
-                if (socket && socket.readyState === WebSocket.OPEN) {
-                  socket.send(message);
-                } else {
-                  queue.push(message);
-                }
-              },
-
-              start: function() {
-                if (started) return;
-                started = true;
-
-                socket = new WebSocket(url);
-                socket.binaryType = "arraybuffer";
-
-                socket.onopen = function() {
-                  var pending = queue;
-                  queue = [];
-                  pending.forEach(function(message) {
-                    socket.send(message);
-                  });
-                };
-
-                socket.onmessage = function(event) {
-                  if (typeof port.onmessage === "function") {
-                    port.onmessage({ data: new Uint8Array(event.data) });
-                  }
-                };
-
-                socket.onerror = function() {
-                  if (typeof port.onmessageerror === "function") {
-                    port.onmessageerror();
-                  }
-                };
-
-                socket.onclose = function() {
-                  if (typeof port.onmessageerror === "function") {
-                    port.onmessageerror();
-                  }
-                };
-              },
-
-              close: function() {
-                queue = [];
-                if (socket) {
-                  socket.close();
-                }
-              }
-            };
-
-            return port;
-          }
-
-          window.__truapi_localhost = endpoint;
-          window.__truapi_policy__ = { webRtcAllowed: $safeWebRtc };
-          window.__HOST_WEBVIEW_MARK__ = true;
-          window.__HOST_API_PORT__ = createWebSocketMessagePort(endpoint.url);
-          window.dispatchEvent(new Event('truapi-native-ready'));
-        })();
-        """.trimIndent()
-    }
-
-    /**
-     * Encodes [value] as a complete double-quoted JavaScript string literal,
-     * safe to embed inside a `<script>` body. Escapes quotes, backslashes,
-     * control characters, `/` (closing `</script` tags), and the U+2028 /
-     * U+2029 line terminators that JS treats as newlines.
-     */
-    private fun jsStringLiteral(value: String): String {
-        val sb = StringBuilder(value.length + 2)
-        sb.append('"')
-        for (ch in value) {
-            when (ch.code) {
-                '"'.code -> sb.append("\\\"")
-                '\\'.code -> sb.append("\\\\")
-                '/'.code -> sb.append("\\/")
-                0x0A -> sb.append("\\n")
-                0x0D -> sb.append("\\r")
-                0x09 -> sb.append("\\t")
-                0x08 -> sb.append("\\b")
-                0x0C -> sb.append("\\f")
-                0x2028 -> sb.append("\\u2028")
-                0x2029 -> sb.append("\\u2029")
-                else ->
-                    if (ch.code < 0x20) {
-                        sb.append("\\u")
-                        sb.append(ch.code.toString(16).padStart(4, '0'))
-                    } else {
-                        sb.append(ch)
-                    }
-            }
-        }
-        sb.append('"')
-        return sb.toString()
-    }
+    fun script(port: UShort, token: String, webRtcAllowed: Boolean): String =
+        localhostBridgeBootstrapScript(port = port, token = token, webRtcAllowed = webRtcAllowed)
 }
 
 /**

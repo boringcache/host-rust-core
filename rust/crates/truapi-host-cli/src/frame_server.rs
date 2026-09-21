@@ -851,10 +851,10 @@ mod tests {
         assert!(script.starts_with("HTTP/1.1 200 OK"), "{script}");
         assert!(script.contains("application/javascript"));
         assert!(
-            script.contains(&format!(r#"var url = "{endpoint}";"#)),
+            script.contains(&format!(r#"{{ url: "{endpoint}", token: "" }}"#)),
             "{script}"
         );
-        assert!(script.contains("window.__HOST_API_PORT__ = channel.port1;"));
+        assert!(script.contains("window.__HOST_API_PORT__ = live.port;"));
 
         let missing = fetch("/nope", endpoint).await?;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"), "{missing}");
@@ -881,7 +881,7 @@ mod tests {
 
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
         assert!(
-            response.contains(&format!(r#"var url = "ws://{address}";"#)),
+            response.contains(&format!(r#"{{ url: "ws://{address}", token: "" }}"#)),
             "{response}"
         );
         Ok(())

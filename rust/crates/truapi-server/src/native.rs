@@ -415,6 +415,26 @@ pub fn parse_navigate(input: String) -> NavigateDecision {
     dotns::parse_navigate(&input)
 }
 
+/// The bridge script a host injects into a product's web view, for the `port`
+/// and `token` a `WsBridgeEndpoint` carries.
+///
+/// Inject it at document start, before the product's own scripts and before the
+/// lockdown container, which reads the endpoint this publishes. `web_rtc_allowed`
+/// must come from a permission peek, never a prompt; see
+/// [`bootstrap::script`](crate::bootstrap::script).
+#[uniffi::export]
+pub fn localhost_bridge_bootstrap_script(
+    port: u16,
+    token: String,
+    web_rtc_allowed: bool,
+) -> String {
+    crate::bootstrap::script(
+        &format!("ws://127.0.0.1:{port}/?t={token}"),
+        &token,
+        web_rtc_allowed,
+    )
+}
+
 /// Whether `product_id` is a first-party product the host grants every
 /// [`truapi::latest::RemotePermission`] without prompting.
 ///

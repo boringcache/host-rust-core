@@ -6,52 +6,15 @@ pub const PATH: &str = "/bootstrap.js";
 /// JavaScript that connects a plain browser tab to this host's frame socket.
 ///
 /// The page ends up with the same `window.__HOST_API_PORT__` a native webview
-/// host injects, so the SDK's sandbox bootstrap adopts it without knowing the
-/// transport underneath is a loopback WebSocket. Products reference this from
-/// a development-only `<script>` tag and need no other host-specific code.
+/// host injects, because it is the same script: [`truapi_server::bootstrap`]
+/// renders it for every host. Products reference this from a development-only
+/// `<script>` tag and need no other host-specific code.
+///
+/// The frame socket carries no session token, and a plain browser tab has no
+/// lockdown container to read the WebRTC policy, so both are rendered empty and
+/// permissive.
 pub fn script(frame_url: &str) -> String {
-    let url = serde_json::to_string(frame_url).expect("a string always serializes");
-    format!(
-        r#"(function () {{
-  var url = {url};
-  if (window.__HOST_API_PORT__) return;
-
-  var channel = new MessageChannel();
-  var socket = new WebSocket(url);
-  socket.binaryType = "arraybuffer";
-  // Frames the product posts before the socket opens. The SDK queues nothing
-  // once it holds a port, so the queue has to live on this side.
-  var pending = [];
-
-  channel.port2.onmessage = function (event) {{
-    if (socket.readyState === WebSocket.OPEN) socket.send(event.data);
-    else pending.push(event.data);
-  }};
-  channel.port2.start();
-
-  socket.onopen = function () {{
-    for (var i = 0; i < pending.length; i++) socket.send(pending[i]);
-    pending.length = 0;
-  }};
-  // The SDK's provider only accepts Uint8Array, never a bare ArrayBuffer.
-  socket.onmessage = function (event) {{
-    channel.port2.postMessage(new Uint8Array(event.data));
-  }};
-  // Nothing can be signalled down a MessagePort, so a closed socket looks like
-  // an app that has hung. Say so instead.
-  socket.onclose = function () {{
-    console.warn("[truapi-host] frame socket closed; reload once the host is back");
-  }};
-  socket.onerror = function () {{
-    console.error("[truapi-host] cannot reach " + url + " - is truapi-host running?");
-  }};
-
-  window.__HOST_API_PORT__ = channel.port1;
-  window.__HOST_WEBVIEW_MARK__ = true;
-  window.dispatchEvent(new Event("truapi-native-ready"));
-}})();
-"#
-    )
+    truapi_server::bootstrap::script(frame_url, "", true)
 }
 
 /// HTTP URL the bridge script is served from, for a frame endpoint that has
@@ -78,7 +41,10 @@ mod tests {
     #[test]
     fn script_embeds_the_endpoint_as_a_string_literal() {
         let script = script("ws://127.0.0.1:9955");
-        assert!(script.contains(r#"var url = "ws://127.0.0.1:9955";"#));
+        assert!(
+            script.contains(r#"{ url: "ws://127.0.0.1:9955", token: "" }"#),
+            "{script}"
+        );
     }
 
     /// The endpoint reaches this from a command-line flag, so a quote in it
@@ -88,9 +54,12 @@ mod tests {
         let script = script(r#"ws://x";alert(1);//"#);
         let declaration = script
             .lines()
-            .find(|line| line.trim_start().starts_with("var url ="))
+            .find(|line| line.trim_start().starts_with("var endpoint ="))
             .expect("the script declares the endpoint");
 
-        assert_eq!(declaration.trim(), r#"var url = "ws://x\";alert(1);//";"#);
+        assert_eq!(
+            declaration.trim(),
+            r#"var endpoint = { url: "ws://x\";alert(1);//", token: "" };"#
+        );
     }
 }

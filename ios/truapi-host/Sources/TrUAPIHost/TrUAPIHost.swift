@@ -111,9 +111,11 @@ public struct ProductExecutionConfig: Sendable, Equatable {
 public enum LocalhostBridgeBootstrap {
     /// Returns a `<script>`-injectable snippet that publishes the endpoint
     /// metadata on `window.__truapi_localhost`, the pre-resolved permission
-    /// decisions on `window.__truapi_policy__`, exposes the legacy
-    /// `window.__HOST_API_PORT__` webview transport shape, and fires a
-    /// `truapi-native-ready` event.
+    /// decisions on `window.__truapi_policy__`, the `window.__HOST_API_PORT__`
+    /// webview transport the SDK adopts, and the `window.__pauseConnections__` /
+    /// `window.__resumeConnections__` lifecycle hooks. It fires
+    /// `truapi-native-ready` on every port it publishes, including the
+    /// replacements it issues when the bridge socket dies.
     ///
     /// `webRtcAllowed` must come from `permissionAuthorizationStatus` for
     /// `RemotePermission.remote(.webRtc)` — a peek, never a prompt. It is baked
@@ -124,104 +126,7 @@ public enum LocalhostBridgeBootstrap {
     /// The consequence is that a fresh grant only takes effect once the web
     /// view reloads.
     public static func script(port: UInt16, token: String, webRtcAllowed: Bool) -> String {
-        let url = "ws://127.0.0.1:\(port)/?t=\(token)"
-        let safeUrl = jsStringLiteral(url)
-        let safeToken = jsStringLiteral(token)
-        let safeWebRtc = webRtcAllowed ? "true" : "false"
-        return """
-        (function() {
-          var endpoint = { url: \(safeUrl), token: \(safeToken) };
-
-          function createWebSocketMessagePort(url) {
-            var socket = null;
-            var started = false;
-            var queue = [];
-
-            var port = {
-              onmessage: null,
-              onmessageerror: null,
-
-              postMessage: function(message) {
-                if (!started) {
-                  port.start();
-                }
-
-                if (socket && socket.readyState === WebSocket.OPEN) {
-                  socket.send(message);
-                } else {
-                  queue.push(message);
-                }
-              },
-
-              start: function() {
-                if (started) return;
-                started = true;
-
-                socket = new WebSocket(url);
-                socket.binaryType = "arraybuffer";
-
-                socket.onopen = function() {
-                  var pending = queue;
-                  queue = [];
-                  pending.forEach(function(message) {
-                    socket.send(message);
-                  });
-                };
-
-                socket.onmessage = function(event) {
-                  if (typeof port.onmessage === "function") {
-                    port.onmessage({ data: new Uint8Array(event.data) });
-                  }
-                };
-
-                socket.onerror = function() {
-                  if (typeof port.onmessageerror === "function") {
-                    port.onmessageerror();
-                  }
-                };
-
-                socket.onclose = function() {
-                  if (typeof port.onmessageerror === "function") {
-                    port.onmessageerror();
-                  }
-                };
-              },
-
-              close: function() {
-                queue = [];
-                if (socket) {
-                  socket.close();
-                }
-              }
-            };
-
-            return port;
-          }
-
-          window.__truapi_localhost = endpoint;
-          window.__truapi_policy__ = { webRtcAllowed: \(safeWebRtc) };
-          window.__HOST_WEBVIEW_MARK__ = true;
-          window.__HOST_API_PORT__ = createWebSocketMessagePort(endpoint.url);
-          window.dispatchEvent(new Event('truapi-native-ready'));
-        })();
-        """
-    }
-
-    /// Encodes `value` as a complete double-quoted JavaScript string literal,
-    /// safe to embed inside a `<script>` body. `JSONEncoder` escapes quotes,
-    /// backslashes, control characters, and forward slashes (closing `</script`
-    /// tags); U+2028 / U+2029 are escaped explicitly because JSON leaves them
-    /// raw while JS treats them as line terminators. Falls back to an empty
-    /// literal if encoding ever fails.
-    private static func jsStringLiteral(_ value: String) -> String {
-        guard let data = try? JSONEncoder().encode(value),
-              let encoded = String(data: data, encoding: .utf8)
-        else {
-            return "\"\""
-        }
-        return encoded
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        localhostBridgeBootstrapScript(port: port, token: token, webRtcAllowed: webRtcAllowed)
     }
 }
 
