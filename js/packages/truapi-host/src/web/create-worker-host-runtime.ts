@@ -351,8 +351,8 @@ function debuggerBuildAllows(): boolean {
 /**
  * Which of the two production verdicts applies. Pure, and exported for the same
  * reason {@link resolveDebuggerEnablement} is: the caller reads
- * `import.meta.env`, whose build value a bundler substitutes and a test runner
- * cannot, so the build half cannot be varied from a test.
+ * `import.meta.env`, which a bundler substitutes and a test runner cannot, so
+ * neither the build value nor the DEV gate can be varied from a test.
  *
  * The build half is the one that matters and the one that is easy to drop. The
  * env var is substituted at build time, so it is still readable in a production
@@ -391,8 +391,9 @@ function readDebuggerEnablement(
 
 /**
  * Resolve the dev-build switches into one verdict. Pure, and exported so the
- * precedence can be asserted against a build value, which a bundler substitutes
- * and a test runner cannot supply.
+ * precedence is testable: the caller reads `import.meta.env.DEV`, which a
+ * bundler substitutes and `bun test` leaves undefined with no way to set it, so
+ * the live path cannot reach this branch under test at all.
  *
  * `fromOption` is `undefined` when the embedder said nothing, and a URL when it
  * asked for one. Anything else, `null` and `""` included, is an explicit refusal.
