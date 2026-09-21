@@ -961,6 +961,12 @@ export interface AuthPresenter {
  * host that cannot keep a credential from its own users — anything running as
  * script in a browser — registers no backends.
  *
+ * A request may also carry a credential of the product's own, for a backend
+ * that answers per person rather than per product. The two never meet: the
+ * product's is what the backend reads as `Authorization`, the host's is what
+ * tells the backend which host it is talking to, and neither substitutes for
+ * the other.
+ *
  * The core screens the request first: `path` is absolute within the backend
  * and carries no dot segments, empty segments, percent escapes or
  * protocol-relative prefix. Percent-encoding the query names and values when
@@ -984,7 +990,14 @@ export interface AuthPresenter {
  *   the `x-ratelimit-*` trio, which the core re-screens. Keep no cookie jar.
  * - **Forward the caller as `X-Polkadot-Product`**, overwriting any header of
  *   that name. It is host-attested, not cryptographic.
- * - **Keep the credential out of anything the product can name.**
+ * - **Send your own credential as `X-Polkadot-Host-Authorization`**,
+ *   overwriting any header of that name, and never as `Authorization`.
+ * - **Send `request.bearer` as `Authorization: Bearer <bearer>`** when it is
+ *   present, and send that header for no other reason. It is the product's
+ *   credential for a backend that answers per person; the core has screened
+ *   it to `token68`, so it cannot fold a second header into the request.
+ * - **Keep both credentials out of logs**, and the host's out of anything the
+ *   product can name or read back.
  */
 export interface BackendHost {
   /**

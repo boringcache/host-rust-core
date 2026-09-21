@@ -309,6 +309,11 @@ interface HostBridge {
      * concatenating, do not follow redirects, cap the response, return only the
      * allowlisted headers, and forward [productId] as `X-Polkadot-Product`.
      *
+     * Two credentials, two headers: send this host's own as
+     * `X-Polkadot-Host-Authorization`, and `request.bearer` — the product's
+     * own, when it has one — as `Authorization: Bearer`. Never the host's in
+     * `Authorization`, and neither in a log.
+     *
      * Defaults to [HostBackendRejection.UnknownBackend], so an app that
      * registers no backends leaves these calls refused.
      */

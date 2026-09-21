@@ -4848,6 +4848,7 @@ fn backend_request(path: &str) -> truapi::versioned::backend::HostBackendRequest
         path: path.to_string(),
         query: Vec::new(),
         body: None,
+        bearer: None,
     })
 }
 
@@ -4949,5 +4950,54 @@ fn a_refused_request_never_reaches_the_host() {
             .expect("backend call list mutex poisoned")
             .is_empty(),
         "a refused request must not reach the tunnel"
+    );
+}
+
+#[test]
+fn a_bearer_reaches_the_host_and_a_malformed_one_does_not() {
+    let backend = Arc::new(StubBackendHost::default());
+    let host = ProductRuntimeHost::new_compat(stub_platform(), test_spawner())
+        .with_backend_host(backend.clone());
+
+    let truapi::versioned::backend::HostBackendRequest::V1(mut inner) = backend_request("/a");
+    inner.bearer = Some("session.token.value".to_string());
+    futures::executor::block_on(truapi::api::Backend::request(
+        &host,
+        &CallContext::default(),
+        truapi::versioned::backend::HostBackendRequest::V1(inner.clone()),
+    ))
+    .expect("a screened bearer is forwarded");
+    assert_eq!(
+        backend
+            .calls
+            .lock()
+            .expect("backend call list mutex poisoned")[0]
+            .1
+            .bearer
+            .as_deref(),
+        Some("session.token.value")
+    );
+
+    // A header the product could fold in two never reaches the host that would
+    // write it out.
+    inner.bearer = Some("token\r\nX-Admin: 1".to_string());
+    let error = futures::executor::block_on(truapi::api::Backend::request(
+        &host,
+        &CallContext::default(),
+        truapi::versioned::backend::HostBackendRequest::V1(inner),
+    ))
+    .expect_err("a bearer that is not token68 is refused");
+    assert!(
+        matches!(error, CallError::Domain(_)),
+        "expected a domain error, got {error:?}"
+    );
+    assert_eq!(
+        backend
+            .calls
+            .lock()
+            .expect("backend call list mutex poisoned")
+            .len(),
+        1,
+        "the refused call must not reach the tunnel"
     );
 }

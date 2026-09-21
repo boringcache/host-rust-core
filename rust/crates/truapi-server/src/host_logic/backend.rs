@@ -25,6 +25,11 @@ const MAX_QUERY_BYTES: usize = 4096;
 /// Largest request body the core forwards.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
+/// Longest product-supplied bearer credential the core forwards. A JWT with a
+/// few claims sits well under this, and a header line much past it is refused
+/// by common servers anyway.
+const MAX_BEARER_BYTES: usize = 4096;
+
 /// Largest response body the core accepts back from a host.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
@@ -58,6 +63,7 @@ pub fn screen_request(request: &HostBackendRequest) -> Result<(), HostBackendErr
     screen_backend(&request.backend)?;
     screen_path(&request.path)?;
     screen_query(&request.query)?;
+    screen_bearer(request.bearer.as_deref())?;
     screen_body(request.method, request.body.as_ref())
 }
 
@@ -181,6 +187,38 @@ fn screen_query_item(item: &BackendQueryItem) -> Result<(), HostBackendError> {
     Ok(())
 }
 
+/// The product's own credential for the backend, which the host puts in
+/// `Authorization: Bearer`. Screened to [RFC 7235] `token68` — the charset a
+/// bearer credential is already spelled in — so it can hold a JWT, a hex or
+/// base64 string and an opaque handle, and cannot hold the `\r\n` that would
+/// make it a second header, a space that would make it a second parameter, or
+/// a non-ASCII byte a header encoder would have to decide about.
+///
+/// [RFC 7235]: https://www.rfc-editor.org/rfc/rfc7235#section-2.1
+fn screen_bearer(bearer: Option<&str>) -> Result<(), HostBackendError> {
+    let Some(bearer) = bearer else {
+        return Ok(());
+    };
+    if bearer.len() > MAX_BEARER_BYTES {
+        return Err(HostBackendError::RequestTooLarge);
+    }
+    // `token68` is a run of the charset with any `=` padding at the end, and an
+    // empty one is not a credential — `Authorization: Bearer` with nothing
+    // after it is what a host would send.
+    let unpadded = bearer.trim_end_matches('=');
+    if unpadded.is_empty() {
+        return Err(invalid("bearer must not be empty"));
+    }
+    if !unpadded.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/')
+    }) {
+        return Err(invalid(
+            "bearer must be RFC 7235 token68: alphanumeric, '-', '.', '_', '~', '+', '/', '=' padding",
+        ));
+    }
+    Ok(())
+}
+
 fn screen_body(
     method: truapi::latest::BackendHttpMethod,
     body: Option<&BackendBody>,
@@ -219,6 +257,7 @@ mod tests {
             path: path.to_owned(),
             query: Vec::new(),
             body: None,
+            bearer: None,
         }
     }
 
@@ -504,6 +543,57 @@ mod tests {
             }],
         });
         assert!(screen_request(&form).is_err());
+    }
+
+    #[test]
+    fn a_bearer_credential_may_be_spelled_the_ways_bearer_credentials_are() {
+        for bearer in [
+            // A JWT, which is what a handshake hands a product.
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIweGFiIn0.c2ln-_bytes",
+            "0123456789abcdef",
+            "dGhpcyBpcyBwYWRkZWQ=",
+            "b3BhcXVl==",
+            "a",
+        ] {
+            let mut with_bearer = request("x", "/a");
+            with_bearer.bearer = Some(bearer.to_owned());
+            assert_eq!(screen_request(&with_bearer), Ok(()), "bearer {bearer}");
+        }
+    }
+
+    #[test]
+    fn a_bearer_cannot_carry_a_second_header_or_parameter() {
+        for bearer in [
+            "token\r\nX-Admin: 1",
+            "token\nX-Admin: 1",
+            "token with spaces",
+            "Bearer token",
+            "token\0",
+            "tökén",
+            "",
+            "=",
+            "==",
+            // Padding is a suffix, not a separator.
+            "a=b",
+        ] {
+            let mut with_bearer = request("x", "/a");
+            with_bearer.bearer = Some(bearer.to_owned());
+            let error = screen_request(&with_bearer).expect_err("should be refused");
+            assert!(
+                matches!(error, HostBackendError::InvalidRequest { .. }),
+                "bearer {bearer:?} gave {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_oversized_bearer_is_refused() {
+        let mut with_bearer = request("x", "/a");
+        with_bearer.bearer = Some("a".repeat(MAX_BEARER_BYTES + 1));
+        assert_eq!(
+            screen_request(&with_bearer),
+            Err(HostBackendError::RequestTooLarge)
+        );
     }
 
     #[test]

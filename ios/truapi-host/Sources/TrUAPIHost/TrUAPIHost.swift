@@ -305,6 +305,10 @@ public protocol HostBridge: AnyObject, Sendable {
     /// Resolve the identifier, set the path on the parsed base rather than
     /// concatenating, do not follow redirects, cap the response, return only
     /// the allowlisted headers, and forward `productId` as `X-Polkadot-Product`.
+    /// Two credentials, two headers: send this host's own as
+    /// `X-Polkadot-Host-Authorization`, and `request.bearer` — the product's
+    /// own, when it has one — as `Authorization: Bearer`. Never the host's in
+    /// `Authorization`, and neither in a log.
     /// Defaults to `.unknownBackend`, so an app that registers no backends
     /// leaves these calls refused.
     func backendRequest(productId: String, request: HostBackendRequest) async throws

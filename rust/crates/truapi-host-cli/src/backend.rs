@@ -4,6 +4,11 @@
 //! separated by `;`. With nothing configured the host starts a loopback echo
 //! server and registers it as `echo`, so the generated example and the battery
 //! have a backend to call headlessly.
+//!
+//! Two credentials can be on one request and they do not share a header. The
+//! registry token authenticates this host to the backend and travels in
+//! `X-Polkadot-Host-Authorization`; the product's own credential, if it has
+//! one, travels in `Authorization`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -29,6 +34,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Header naming the calling product to the backend.
 const PRODUCT_HEADER: &str = "X-Polkadot-Product";
+
+/// Header carrying this host's own credential to the backend.
+///
+/// Not `Authorization`, which belongs to the product's credential when it has
+/// one: a backend that authenticates a person reads the standard header with
+/// its framework's own machinery, and a hop credential is a hop header. Not
+/// `Proxy-Authorization` either, which an intermediary is entitled to consume.
+const HOST_AUTH_HEADER: &str = "X-Polkadot-Host-Authorization";
 
 /// Response headers this host passes back.
 const ALLOWED_RESPONSE_HEADERS: &[&str] = &[
@@ -159,7 +172,13 @@ impl BackendHost for CliBackendHost {
             .header(PRODUCT_HEADER, product.product_id.clone());
 
         if let Some(token) = &entry.token {
-            call = call.bearer_auth(token);
+            call = call.header(HOST_AUTH_HEADER, format!("Bearer {token}"));
+        }
+
+        // Screened to `token68` by the core, so it cannot fold a second header
+        // into the request. Left to the product whether to send one at all.
+        if let Some(bearer) = &request.bearer {
+            call = call.header(reqwest::header::AUTHORIZATION, format!("Bearer {bearer}"));
         }
 
         call = match request.body {
@@ -227,7 +246,26 @@ impl BackendHost for CliBackendHost {
     }
 }
 
+/// Read one header's value out of a raw request head, case-insensitively.
+fn header_of(head: &str, name: &str) -> Option<String> {
+    head.lines()
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
+}
+
 /// Start a loopback backend that echoes the request line back.
+///
+/// It reports the product header and the product's own `Authorization`, which
+/// is how the battery sees that a bearer arrived. It never reports
+/// `X-Polkadot-Host-Authorization`: handing a host credential to the product
+/// is what keeps `TRACE` off [`BackendHttpMethod`], and a fixture is no place
+/// to make an exception.
 fn spawn_echo_backend() -> Option<Url> {
     // Bound synchronously so a host can be built outside async context.
     let handle = tokio::runtime::Handle::try_current().ok()?;
@@ -244,7 +282,16 @@ fn spawn_echo_backend() -> Option<Url> {
                 let read = stream.read(&mut buffer).await.unwrap_or(0);
                 let head = String::from_utf8_lossy(&buffer[..read]);
                 let request_line = head.lines().next().unwrap_or_default().to_string();
-                let body = format!("{{\"echo\":\"{}\"}}", request_line.replace('"', "'"));
+                let quoted = |value: Option<String>| match value {
+                    Some(value) => format!("\"{}\"", value.replace('"', "'")),
+                    None => "null".to_string(),
+                };
+                let body = format!(
+                    "{{\"echo\":\"{}\",\"product\":{},\"authorization\":{}}}",
+                    request_line.replace('"', "'"),
+                    quoted(header_of(&head, PRODUCT_HEADER)),
+                    quoted(header_of(&head, "authorization")),
+                );
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -268,6 +315,7 @@ mod tests {
             path: path.to_string(),
             query: Vec::new(),
             body: None,
+            bearer: None,
         }
     }
 
@@ -295,6 +343,114 @@ mod tests {
             CliBackendHost::url_for(&entry, &request("/providers")).as_str(),
             "https://example.com/v1/providers"
         );
+    }
+
+    /// A loopback backend that reports the whole request head it was sent,
+    /// which the shipped echo deliberately does not.
+    async fn spawn_recorder() -> (Url, tokio::sync::oneshot::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let address = listener.local_addr().expect("has an address");
+        let (send, receive) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accepts");
+            let mut buffer = [0u8; 8192];
+            let read = stream.read(&mut buffer).await.unwrap_or(0);
+            let _ = send.send(String::from_utf8_lossy(&buffer[..read]).to_string());
+            let _ = stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await;
+            let _ = stream.shutdown().await;
+        });
+        (
+            Url::parse(&format!("http://{address}/")).expect("parses"),
+            receive,
+        )
+    }
+
+    #[tokio::test]
+    async fn the_two_credentials_travel_in_headers_of_their_own() {
+        let (base, head) = spawn_recorder().await;
+        let host = CliBackendHost {
+            registry: BTreeMap::from([(
+                "recorder".to_string(),
+                BackendEntry {
+                    base,
+                    token: Some("host-credential".to_string()),
+                },
+            )]),
+            client: reqwest::Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .expect("builds"),
+        };
+
+        let mut call = request("/a");
+        call.backend = "recorder".to_string();
+        call.bearer = Some("product-session-jwt".to_string());
+        let product = ProductContext::new("onramp.dot".to_string()).expect("valid product id");
+        let _ = host.backend_request(&product, call).await;
+
+        let head = head.await.expect("the recorder saw the request");
+        assert_eq!(
+            header_of(&head, "authorization").as_deref(),
+            Some("Bearer product-session-jwt"),
+            "the product's credential belongs in the standard header: {head}"
+        );
+        assert_eq!(
+            header_of(&head, HOST_AUTH_HEADER).as_deref(),
+            Some("Bearer host-credential"),
+            "the host's credential belongs in its own: {head}"
+        );
+        assert_eq!(
+            header_of(&head, PRODUCT_HEADER).as_deref(),
+            Some("onramp.dot")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_product_without_a_credential_leaves_the_header_off() {
+        let (base, head) = spawn_recorder().await;
+        let host = CliBackendHost {
+            registry: BTreeMap::from([(
+                "recorder".to_string(),
+                BackendEntry { base, token: None },
+            )]),
+            client: reqwest::Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .expect("builds"),
+        };
+
+        let mut call = request("/a");
+        call.backend = "recorder".to_string();
+        let product = ProductContext::new("onramp.dot".to_string()).expect("valid product id");
+        let _ = host.backend_request(&product, call).await;
+
+        let head = head.await.expect("the recorder saw the request");
+        assert_eq!(header_of(&head, "authorization"), None, "head: {head}");
+        assert_eq!(header_of(&head, HOST_AUTH_HEADER), None, "head: {head}");
+    }
+
+    /// What the generated `Backend/request` example asserts on, so the example
+    /// and the fixture it runs against cannot drift apart.
+    #[tokio::test]
+    async fn the_echo_backend_reports_the_product_and_its_bearer() {
+        let host = CliBackendHost::from_env();
+        let mut call = request("/ok");
+        call.bearer = Some("session-token-the-backend-issued".to_string());
+        let product = ProductContext::new("onramp.dot".to_string()).expect("valid product id");
+
+        let response = host
+            .backend_request(&product, call)
+            .await
+            .expect("the echo backend answers");
+        let body = String::from_utf8(response.body).expect("the echo body is text");
+
+        assert!(
+            body.contains(r#""authorization":"Bearer session-token-the-backend-issued""#),
+            "body: {body}"
+        );
+        assert!(body.contains(r#""product":"onramp.dot""#), "body: {body}");
     }
 
     #[test]
