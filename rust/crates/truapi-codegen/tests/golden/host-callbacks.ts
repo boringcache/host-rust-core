@@ -33,17 +33,17 @@ import type {
   HostChatPostMessageResponse,
   HostChatRegisterBotRequest,
   HostChatRegisterBotResponse,
-  HostDevicePermissionResponse,
   HostFeatureSupportedRequest,
   HostFeatureSupportedResponse,
+  HostLocalStorageChangeItem,
   HostLocaleSubscribeItem,
   HostPocketListSubscribeItem,
   HostPocketRemoveCardRequest,
   HostPushNotificationRequest,
   HostPushNotificationResponse,
   HostThemeSubscribeItem,
+  HostWorkerBeginOperationResponse,
   NotificationId,
-  RemotePermissionResponse,
   Result,
 } from "@parity/truapi";
 
@@ -329,13 +329,18 @@ export type PermissionAuthorizationRequest =
 /**
  * Authorization status for a permission request.
  *
- * `NotDetermined` means the core has no persisted answer and will prompt the
+ * `NotDetermined` means the core has no saved or one-use answer and will prompt the
  * host the next time the product requests this permission.
  */
 export type PermissionAuthorizationStatus =
   | "NotDetermined"
   | "Denied"
   | "Authorized";
+
+/**
+ * User decision including how long an authorization should last.
+ */
+export type PermissionDecision = "AllowOnce" | "AllowAlways" | "Deny";
 
 /**
  * Review shown before a preimage is submitted.
@@ -775,7 +780,7 @@ export const PermissionAuthorizationRequest: S.Codec<PermissionAuthorizationRequ
 /**
  * Authorization status for a permission request.
  *
- * `NotDetermined` means the core has no persisted answer and will prompt the
+ * `NotDetermined` means the core has no saved or one-use answer and will prompt the
  * host the next time the product requests this permission.
  */
 export const PermissionAuthorizationStatus: S.Codec<PermissionAuthorizationStatus> =
@@ -783,6 +788,14 @@ export const PermissionAuthorizationStatus: S.Codec<PermissionAuthorizationStatu
     (): S.Codec<PermissionAuthorizationStatus> =>
       S.Status("NotDetermined", "Denied", "Authorized"),
   );
+
+/**
+ * User decision including how long an authorization should last.
+ */
+export const PermissionDecision: S.Codec<PermissionDecision> = S.lazy(
+  (): S.Codec<PermissionDecision> =>
+    S.Status("AllowOnce", "AllowAlways", "Deny"),
+);
 
 /**
  * Review shown before a preimage is submitted.
@@ -1310,14 +1323,14 @@ export interface Permissions {
    */
   devicePermission(
     request: HostDevicePermissionRequest,
-  ): Promise<HostDevicePermissionResponse>;
+  ): Promise<PermissionDecision>;
 
   /**
    * Prompt the user for a remote (product-scoped) permission bundle.
    */
   remotePermission(
     request: RemotePermissionRequest,
-  ): Promise<RemotePermissionResponse>;
+  ): Promise<PermissionDecision>;
 }
 
 /**
@@ -1361,6 +1374,34 @@ export interface PreimageHost {
 }
 
 /**
+ * Host store for a product's pending operations, which the host uses to keep
+ * the product's worker runtime alive. Reached only through the `Worker`
+ * protocol trait, so non-worker products never call these.
+ */
+export interface ProductOperations {
+  /**
+   * Record a pending operation. `label` is a host log and UI hint, empty
+   * when the product gave none.
+   *
+   * The returned id must be unique among this product's open operations.
+   * The core keys the worker reference an operation holds by that id, so an
+   * id already open for the product records nothing the second time, and
+   * ending it once drops the demand both were holding. Ids may repeat
+   * across products, and may be reused once an operation has ended.
+   */
+  beginOperation(
+    product: ProductContext,
+    label: string,
+  ): Promise<HostWorkerBeginOperationResponse>;
+
+  /**
+   * Remove a pending operation. Idempotent: an unknown or already-ended id
+   * returns `Ok`, so a retry after an ambiguous failure is safe.
+   */
+  endOperation(product: ProductContext, id: number): Promise<void>;
+}
+
+/**
  * Product-scoped key-value storage.
  *
  * The core namespaces product keys before calling this trait. Host
@@ -1391,6 +1432,19 @@ export interface ProductStorage {
    * Clear a value at a key.
    */
   clear(key: string): Promise<void>;
+
+  /**
+   * Emit `key`'s current value, then each later change from any of the
+   * product's runtimes. `key` is namespaced exactly as `Self::read` takes
+   * it.
+   *
+   * Reporting a write that left the bytes unchanged is allowed: the core
+   * drops an item repeating the value it last delivered, so the product
+   * sees only real changes whether or not a host filters them itself.
+   */
+  subscribeStorage(
+    key: string,
+  ): AsyncIterable<Result<HostLocalStorageChangeItem, GenericError>>;
 }
 
 /**
@@ -1408,6 +1462,13 @@ export interface ThemeHost {
  * Local user confirmation UI for sensitive core-owned operations.
  */
 export interface UserConfirmation {
+  /**
+   * Preserve the lifetime of consent for identity and account disclosures.
+   */
+  confirmPermission?(
+    review: UserConfirmationReview,
+  ): Promise<PermissionDecision>;
+
   /**
    * Confirm a reviewed action before the core continues.
    */
@@ -1432,6 +1493,7 @@ export interface HostCallbacks {
   theme: ThemeHost;
   locale: LocaleHost;
   preimage: PreimageHost;
+  productOperations: ProductOperations;
   chat?: ChatPlatform;
   permissionStatus?: PermissionStatusHost;
   pocket?: PocketPlatform;
@@ -1450,6 +1512,7 @@ export interface RequiredHostCallbacks {
   theme: Required<ThemeHost>;
   locale: Required<LocaleHost>;
   preimage: Required<PreimageHost>;
+  productOperations: Required<ProductOperations>;
   chat?: Required<ChatPlatform>;
   permissionStatus?: Required<PermissionStatusHost>;
   pocket?: Required<PocketPlatform>;

@@ -38,8 +38,9 @@ use truapi::latest;
 use crate::async_trait;
 use crate::{
     AuthPresenter, AuthState, ChainProvider, ChatPlatform, CoreStorage, CoreStorageKey, Features,
-    JsonRpcConnection, LocaleHost, Navigation, Notifications, Permissions, PreimageHost,
-    ProductContext, ProductStorage, ThemeHost, UserConfirmation, UserConfirmationReview,
+    JsonRpcConnection, LocaleHost, Navigation, Notifications, PermissionDecision, Permissions,
+    PreimageHost, ProductContext, ProductOperations, ProductStorage, ThemeHost, UserConfirmation,
+    UserConfirmationReview,
 };
 
 /// How the mock answers a permission prompt for one capability.
@@ -119,9 +120,20 @@ pub enum PermissionKind {
     Remote,
 }
 
+/// One operation a product began and has not ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenOperation {
+    /// Product that began it.
+    pub product_id: String,
+    /// Id the mock handed back, unique among this product's open operations.
+    pub id: u32,
+    /// Label the product gave, empty when it gave none.
+    pub label: String,
+}
+
 /// One permission answer the mock gave, recorded for assertions.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PermissionDecision {
+pub struct PermissionLogEntry {
     /// The permission's `Display` form, the same key `grant_permission` takes.
     pub tag: String,
     /// What the mock answered.
@@ -267,7 +279,7 @@ pub struct MockPlatform {
     /// When set, a permission with no explicit answer is denied instead of
     /// falling back to the config policy.
     enforce_permissions: Arc<AtomicBool>,
-    permission_log: Arc<Mutex<Vec<PermissionDecision>>>,
+    permission_log: Arc<Mutex<Vec<PermissionLogEntry>>>,
     chat_rooms: Arc<Mutex<BTreeMap<String, latest::ChatRoom>>>,
     chat_bots: Arc<Mutex<BTreeMap<String, latest::HostChatRegisterBotRequest>>>,
     chat_messages: Arc<Mutex<Vec<ChatMessageRecord>>>,
@@ -275,9 +287,13 @@ pub struct MockPlatform {
     chat_room_subscribers:
         Arc<Mutex<Vec<mpsc::UnboundedSender<latest::HostChatListSubscribeItem>>>>,
     next_chat_message_id: Arc<AtomicU32>,
+    next_operation_id: Arc<AtomicU32>,
+    open_operations: Arc<Mutex<Vec<OpenOperation>>>,
     /// Current theme. Seeded from the config and replaced by `set_theme`.
     theme: Arc<Mutex<latest::ThemeVariant>>,
     theme_subscribers: Arc<Mutex<Vec<mpsc::UnboundedSender<latest::HostThemeSubscribeItem>>>>,
+    storage_subscribers:
+        Arc<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<latest::HostLocalStorageChangeItem>>>>>,
     chain_status: Arc<Mutex<ChainStatus>>,
     /// One per live connection; sending ends that connection's response stream.
     chain_disconnectors: Arc<Mutex<Vec<mpsc::UnboundedSender<()>>>>,
@@ -318,8 +334,11 @@ impl MockPlatform {
             chat_messages: Arc::new(Mutex::new(Vec::new())),
             chat_room_subscribers: Arc::new(Mutex::new(Vec::new())),
             next_chat_message_id: Arc::new(AtomicU32::new(0)),
+            next_operation_id: Arc::new(AtomicU32::new(0)),
+            open_operations: Arc::new(Mutex::new(Vec::new())),
             theme: Arc::new(Mutex::new(theme)),
             theme_subscribers: Arc::new(Mutex::new(Vec::new())),
+            storage_subscribers: Arc::new(Mutex::new(HashMap::new())),
             chain_status: Arc::new(Mutex::new(ChainStatus::Idle)),
             chain_disconnectors: Arc::new(Mutex::new(Vec::new())),
         }
@@ -372,7 +391,7 @@ impl MockPlatform {
     }
 
     /// Permission answers the mock gave, in order.
-    pub fn permission_log(&self) -> Vec<PermissionDecision> {
+    pub fn permission_log(&self) -> Vec<PermissionLogEntry> {
         self.permission_log
             .lock()
             .expect("permission log poisoned")
@@ -444,12 +463,20 @@ impl MockPlatform {
         self.permission_log
             .lock()
             .expect("permission log poisoned")
-            .push(PermissionDecision {
+            .push(PermissionLogEntry {
                 tag: permission,
                 approved: granted,
                 kind,
             });
         granted
+    }
+
+    /// Operations a product began and has not ended, in the order they began.
+    pub fn open_operations(&self) -> Vec<OpenOperation> {
+        self.open_operations
+            .lock()
+            .expect("open operations poisoned")
+            .clone()
     }
 
     /// Auth state transitions the core emitted, in order.
@@ -768,6 +795,24 @@ fn preimage_key(value: &[u8]) -> Vec<u8> {
     sp_crypto_hashing::blake2_256(value).to_vec()
 }
 
+impl MockPlatform {
+    /// Push a product key's new value to every live subscriber of that key.
+    fn publish_storage(&self, key: &str, value: Option<Vec<u8>>) {
+        let item = latest::HostLocalStorageChangeItem { value };
+        let mut subscribers = self
+            .storage_subscribers
+            .lock()
+            .expect("storage subscribers poisoned");
+        let Some(senders) = subscribers.get_mut(key) else {
+            return;
+        };
+        senders.retain(|sender| sender.unbounded_send(item.clone()).is_ok());
+        if senders.is_empty() {
+            subscribers.remove(key);
+        }
+    }
+}
+
 #[async_trait]
 impl ProductStorage for MockPlatform {
     async fn read(
@@ -800,7 +845,8 @@ impl ProductStorage for MockPlatform {
         self.storage
             .lock()
             .expect("storage poisoned")
-            .insert(product_key(&key), value);
+            .insert(product_key(&key), value.clone());
+        self.publish_storage(&key, Some(value));
         Ok(())
     }
 
@@ -814,7 +860,34 @@ impl ProductStorage for MockPlatform {
             .lock()
             .expect("storage poisoned")
             .remove(&product_key(&key));
+        self.publish_storage(&key, None);
         Ok(())
+    }
+
+    fn subscribe_storage(
+        &self,
+        key: String,
+    ) -> BoxStream<'static, Result<latest::HostLocalStorageChangeItem, latest::GenericError>> {
+        let (sender, receiver) = mpsc::unbounded();
+        // Seed the current value before registering, so a subscriber that never
+        // sees a write still sees what it subscribed to.
+        sender
+            .unbounded_send(latest::HostLocalStorageChangeItem {
+                value: self
+                    .storage
+                    .lock()
+                    .expect("storage poisoned")
+                    .get(&product_key(&key))
+                    .cloned(),
+            })
+            .expect("a fresh receiver is open");
+        self.storage_subscribers
+            .lock()
+            .expect("storage subscribers poisoned")
+            .entry(key)
+            .or_default()
+            .push(sender);
+        Box::pin(receiver.map(Ok))
     }
 }
 
@@ -915,42 +988,48 @@ impl Notifications for MockPlatform {
     }
 }
 
+/// A mock policy is two-valued, so a grant is durable and a refusal is durable.
+/// `AllowOnce` is a host answer the mock has no knob to ask for.
+fn decision(granted: bool) -> PermissionDecision {
+    if granted {
+        PermissionDecision::AllowAlways
+    } else {
+        PermissionDecision::Deny
+    }
+}
+
 #[async_trait]
 impl Permissions for MockPlatform {
     async fn device_permission(
         &self,
         request: latest::HostDevicePermissionRequest,
-    ) -> Result<latest::HostDevicePermissionResponse, latest::GenericError> {
+    ) -> Result<PermissionDecision, latest::GenericError> {
         if let Some(reason) = &self.config.faults.permission_error {
             return Err(latest::GenericError {
                 reason: reason.clone(),
             });
         }
-        Ok(latest::HostDevicePermissionResponse {
-            granted: self.decide_permission(
-                PermissionKind::Device,
-                request.to_string(),
-                self.config.device_permissions,
-            ),
-        })
+        Ok(decision(self.decide_permission(
+            PermissionKind::Device,
+            request.to_string(),
+            self.config.device_permissions,
+        )))
     }
 
     async fn remote_permission(
         &self,
         request: latest::RemotePermissionRequest,
-    ) -> Result<latest::RemotePermissionResponse, latest::GenericError> {
+    ) -> Result<PermissionDecision, latest::GenericError> {
         if let Some(reason) = &self.config.faults.permission_error {
             return Err(latest::GenericError {
                 reason: reason.clone(),
             });
         }
-        Ok(latest::RemotePermissionResponse {
-            granted: self.decide_permission(
-                PermissionKind::Remote,
-                request.permission.to_string(),
-                self.config.remote_permissions,
-            ),
-        })
+        Ok(decision(self.decide_permission(
+            PermissionKind::Remote,
+            request.permission.to_string(),
+            self.config.remote_permissions,
+        )))
     }
 }
 
@@ -1135,6 +1214,39 @@ impl PreimageHost for MockPlatform {
                 Result<Option<Vec<u8>>, latest::GenericError>,
             >()),
         )
+    }
+}
+
+#[async_trait]
+impl ProductOperations for MockPlatform {
+    async fn begin_operation(
+        &self,
+        product: &ProductContext,
+        label: String,
+    ) -> Result<latest::HostWorkerBeginOperationResponse, latest::HostWorkerOperationError> {
+        let id = self.next_operation_id.fetch_add(1, Ordering::SeqCst);
+        self.open_operations
+            .lock()
+            .expect("open operations poisoned")
+            .push(OpenOperation {
+                product_id: product.product_id.clone(),
+                id,
+                label,
+            });
+        Ok(latest::HostWorkerBeginOperationResponse { id })
+    }
+
+    async fn end_operation(
+        &self,
+        product: &ProductContext,
+        id: u32,
+    ) -> Result<(), latest::HostWorkerOperationError> {
+        // Idempotent by contract, so an unknown or already-ended id is `Ok`.
+        self.open_operations
+            .lock()
+            .expect("open operations poisoned")
+            .retain(|open| open.id != id || open.product_id != product.product_id);
+        Ok(())
     }
 }
 
@@ -1327,17 +1439,17 @@ mod tests {
             remote_permissions: PermissionPolicy::DenyAll,
             ..Default::default()
         });
-        assert!(
-            !block_on(p.device_permission(latest::HostDevicePermissionRequest::Notifications))
-                .unwrap()
-                .granted
+        assert_eq!(
+            block_on(p.device_permission(latest::HostDevicePermissionRequest::Notifications))
+                .unwrap(),
+            PermissionDecision::Deny
         );
-        assert!(
-            !block_on(p.remote_permission(latest::RemotePermissionRequest {
+        assert_eq!(
+            block_on(p.remote_permission(latest::RemotePermissionRequest {
                 permission: latest::RemotePermission::WebRtc
             }))
-            .unwrap()
-            .granted
+            .unwrap(),
+            PermissionDecision::Deny
         );
     }
 
@@ -1348,17 +1460,17 @@ mod tests {
             remote_permissions: PermissionPolicy::DenyAll,
             ..Default::default()
         });
-        assert!(
+        assert_eq!(
             block_on(p.device_permission(latest::HostDevicePermissionRequest::Notifications))
-                .unwrap()
-                .granted
+                .unwrap(),
+            PermissionDecision::AllowAlways
         );
-        assert!(
-            !block_on(p.remote_permission(latest::RemotePermissionRequest {
+        assert_eq!(
+            block_on(p.remote_permission(latest::RemotePermissionRequest {
                 permission: latest::RemotePermission::WebRtc
             }))
-            .unwrap()
-            .granted
+            .unwrap(),
+            PermissionDecision::Deny
         );
     }
 
@@ -1368,12 +1480,12 @@ mod tests {
             remote_permissions: PermissionPolicy::AllowAll,
             ..Default::default()
         });
-        assert!(
+        assert_eq!(
             block_on(p.remote_permission(latest::RemotePermissionRequest {
                 permission: latest::RemotePermission::WebRtc
             }))
-            .unwrap()
-            .granted
+            .unwrap(),
+            PermissionDecision::AllowAlways
         );
     }
 
@@ -1425,6 +1537,88 @@ mod tests {
             scheduled_at: None,
         };
         assert!(block_on(p.push_notification(request)).is_err());
+    }
+
+    #[test]
+    fn a_storage_subscription_sees_the_current_value_and_later_writes() {
+        let p = MockPlatform::new();
+        block_on(p.write("k".into(), vec![1])).expect("seed write succeeds");
+
+        // `now_or_never`, not `block_on`: the fan-out is a synchronous send, so
+        // an item that is not already there is never coming, and awaiting one
+        // would hang this test instead of failing it.
+        let mut stream = p.subscribe_storage("k".into());
+        assert_eq!(next_value(&mut stream), Some(Some(vec![1])), "seeded value");
+
+        block_on(p.write("k".into(), vec![2])).expect("write succeeds");
+        assert_eq!(
+            next_value(&mut stream),
+            Some(Some(vec![2])),
+            "write reaches"
+        );
+
+        block_on(p.clear("k".into())).expect("clear succeeds");
+        assert_eq!(next_value(&mut stream), Some(None), "clear reaches");
+    }
+
+    /// The next item already queued on a storage subscription, or `None` when
+    /// nothing is queued. The outer `Option` is arrival, the inner is the value.
+    fn next_value(
+        stream: &mut BoxStream<
+            'static,
+            Result<latest::HostLocalStorageChangeItem, latest::GenericError>,
+        >,
+    ) -> Option<Option<Vec<u8>>> {
+        stream
+            .next()
+            .now_or_never()
+            .flatten()
+            .map(|item| item.expect("a mock subscription never errors").value)
+    }
+
+    #[test]
+    fn a_storage_subscription_hears_nothing_from_another_key() {
+        // Per-key, not a single broadcast: a subscriber woken by every write
+        // would make a test asserting "no change" pass for the wrong reason.
+        let p = MockPlatform::new();
+        let mut stream = p.subscribe_storage("watched".into());
+        assert_eq!(next_value(&mut stream), Some(None), "seeded value");
+
+        block_on(p.write("other".into(), vec![9])).expect("write succeeds");
+        assert_eq!(
+            next_value(&mut stream),
+            None,
+            "a write to another key woke this subscription"
+        );
+    }
+
+    #[test]
+    fn an_operation_is_open_until_its_own_product_ends_it() {
+        let p = MockPlatform::new();
+        let mine = chat_product();
+        let theirs = ProductContext::new("other.dot".to_string()).expect("product id is valid");
+
+        let id = block_on(p.begin_operation(&mine, "sync".into()))
+            .expect("begin succeeds")
+            .id;
+        assert_eq!(
+            p.open_operations(),
+            vec![OpenOperation {
+                product_id: "mock.dot".to_string(),
+                id,
+                label: "sync".to_string(),
+            }]
+        );
+
+        // Ending is per product: another product holding the same id must not
+        // drop this one's demand.
+        block_on(p.end_operation(&theirs, id)).expect("a foreign end is Ok");
+        assert_eq!(p.open_operations().len(), 1);
+
+        block_on(p.end_operation(&mine, id)).expect("end succeeds");
+        assert!(p.open_operations().is_empty());
+        // Idempotent by contract.
+        block_on(p.end_operation(&mine, id)).expect("a repeat end is Ok");
     }
 
     #[test]
@@ -1588,15 +1782,14 @@ mod tests {
     }
 
     fn device_request(p: &MockPlatform, request: latest::HostDevicePermissionRequest) -> bool {
-        block_on(p.device_permission(request))
-            .expect("device permission answers")
-            .granted
+        block_on(p.device_permission(request)).expect("device permission answers")
+            == PermissionDecision::AllowAlways
     }
 
     fn remote_request(p: &MockPlatform, permission: latest::RemotePermission) -> bool {
         block_on(p.remote_permission(latest::RemotePermissionRequest { permission }))
             .expect("remote permission answers")
-            .granted
+            == PermissionDecision::AllowAlways
     }
 
     #[test]
@@ -1691,12 +1884,12 @@ mod tests {
         assert_eq!(
             p.permission_log(),
             vec![
-                PermissionDecision {
+                PermissionLogEntry {
                     tag: latest::HostDevicePermissionRequest::Camera.to_string(),
                     approved: false,
                     kind: PermissionKind::Device,
                 },
-                PermissionDecision {
+                PermissionLogEntry {
                     tag: latest::RemotePermission::ChainSubmit.to_string(),
                     approved: true,
                     kind: PermissionKind::Remote,

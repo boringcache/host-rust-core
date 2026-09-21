@@ -6,8 +6,8 @@
 // simply have no signing host in it.
 import { describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { wasmIsBuilt } from "./require-wasm.js";
@@ -28,6 +28,13 @@ const suite = wasmIsBuilt(
 )
   ? describe
   : describe.skip;
+
+/** Only a release `dist` carries the `.gz`/`.br` sidecars to exclude. */
+const sidecarsBuilt = existsSync(
+  join(packageRoot, "dist/wasm/web/truapi_server_bg.wasm.gz"),
+)
+  ? it
+  : it.skip;
 
 suite("testing wasm bundle", () => {
   it("carries a signing host", () => {
@@ -57,7 +64,10 @@ suite("testing wasm bundle", () => {
     );
   });
 
-  it("publishes the wasm without its precompressed sidecars", () => {
+  // Only a release build writes the sidecars, so on a dev-profile `dist` there
+  // is nothing for the exclusion to exclude and a green result would prove
+  // nothing. Skipping says that; passing would not.
+  sidecarsBuilt("publishes the wasm without its precompressed sidecars", () => {
     // `.wasm.gz` and `.wasm.br` are for a host app's static server to serve.
     // Nothing in the package resolves them and no bundler reads them, so in
     // the tarball they were 23MB every consumer downloaded and never opened.
@@ -72,10 +82,11 @@ suite("testing wasm bundle", () => {
     )[0].files;
     const paths = listed.map((file) => file.path);
 
-    expect(paths.filter((path) => /\.wasm\.(gz|br)$/.test(path))).toEqual([]);
     // The bundles themselves must still ship, so an exclusion widened to
     // `*.wasm*` is a failure here rather than a package that loads nothing.
     expect(paths).toContain("dist/wasm/testing/truapi_server_bg.wasm");
     expect(paths).toContain("dist/wasm/web/truapi_server_bg.wasm");
+
+    expect(paths.filter((path) => /\.wasm\.(gz|br)$/.test(path))).toEqual([]);
   });
 });

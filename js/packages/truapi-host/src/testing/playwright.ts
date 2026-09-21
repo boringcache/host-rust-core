@@ -16,7 +16,7 @@ import type {
   ChatMessageRecord,
   MockHostConfig,
   NotificationLogEntry,
-  PermissionDecision,
+  PermissionLogEntry,
   PermissionPolicy,
   SigningLogEntry,
 } from "../web/create-mock-host.js";
@@ -43,7 +43,7 @@ export type { DevAccount, DevAccountName } from "./dev-accounts.js";
 export type {
   ChatMessageRecord as ChatMessageLogEntry,
   NotificationLogEntry,
-  PermissionDecision as PermissionLogEntry,
+  PermissionLogEntry,
   PermissionPolicy as PermissionBehavior,
   SigningLogEntry,
 } from "../web/create-mock-host.js";
@@ -174,7 +174,7 @@ export interface TestHost {
   clearNotificationLog(): Promise<void>;
   getSigningLog(): Promise<SigningLogEntry[]>;
   clearSigningLog(): Promise<void>;
-  getPermissionLog(): Promise<PermissionDecision[]>;
+  getPermissionLog(): Promise<PermissionLogEntry[]>;
   clearPermissionLog(): Promise<void>;
   getGrantedPermissions(): Promise<string[]>;
   grantPermission(permission: string): Promise<void>;

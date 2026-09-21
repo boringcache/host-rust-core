@@ -61,16 +61,16 @@ pub mod latest {
         HostAccountCreateProofRequest, HostAccountGetAliasRequest,
         HostAccountListRingVrfKeysRequest, HostAccountRegisterRingVrfKeyRequest,
         HostAccountRingVrfSignRequest, HostAccountSignVrfError, HostAccountSignVrfRequest,
-        HostPlatform, HostSignPayloadData, ImageFit, ImageProps, ImageSource, Modifier,
-        NotificationId, OperationStartedResult, PocketCard, ProductAccountId, ProductProofContext,
-        RawPayload, RegisteredRingVrfKey, RemotePermission, RemoteStatementStoreCreateProofError,
-        RemoteStatementStoreCreateProofRequest, RemoteStatementStoreCreateProofResponse,
-        RemoteStatementStoreSubscribeItem, RemoteStatementStoreSubscribeRequest, RenderContext,
-        RendererNode, RingLocation, RingVrfKeyDisclosure, RingVrfPublicKey, RowProps, RuntimeApi,
-        RuntimeSpec, RuntimeType, Shape, SignedStatement, Size, Statement, StatementProof,
-        StorageQueryItem, StorageQueryType, StorageResultItem, TextFieldProps, TextProps,
-        ThemeName, ThemeVariant, TxPayloadExtension, TypographyStyle, VerticalAlignment,
-        VrfSignature,
+        HostPlatform, HostSignPayloadData, HostWorkerOperationError, ImageFit, ImageProps,
+        ImageSource, Modifier, NotificationId, OperationId, OperationStartedResult, PocketCard,
+        ProductAccountId, ProductProofContext, RawPayload, RegisteredRingVrfKey, RemotePermission,
+        RemoteStatementStoreCreateProofError, RemoteStatementStoreCreateProofRequest,
+        RemoteStatementStoreCreateProofResponse, RemoteStatementStoreSubscribeItem,
+        RemoteStatementStoreSubscribeRequest, RenderContext, RendererNode, RingLocation,
+        RingVrfKeyDisclosure, RingVrfPublicKey, RowProps, RuntimeApi, RuntimeSpec, RuntimeType,
+        Shape, SignedStatement, Size, Statement, StatementProof, StorageQueryItem,
+        StorageQueryType, StorageResultItem, TextFieldProps, TextProps, ThemeName, ThemeVariant,
+        TxPayloadExtension, TypographyStyle, VerticalAlignment, VrfSignature,
     };
 
     /// Latest payload type of a versioned envelope.
@@ -141,6 +141,9 @@ pub mod latest {
     /// Product context bound to the current host runtime.
     pub type HostGetProductContextResponse =
         LatestOf<versioned::system::HostGetProductContextResponse>;
+    /// Storage key change pushed to a subscriber.
+    pub type HostLocalStorageChangeItem =
+        LatestOf<versioned::local_storage::HostLocalStorageChangeItem>;
     /// Local storage operation error.
     pub type HostLocalStorageReadError =
         LatestOf<versioned::local_storage::HostLocalStorageReadError>;
@@ -184,6 +187,9 @@ pub mod latest {
         LatestOf<versioned::signing::HostSignRawWithLegacyAccountRequest>;
     /// Current host theme pushed to subscribers.
     pub type HostThemeSubscribeItem = LatestOf<versioned::theme::HostThemeSubscribeItem>;
+    /// Result of beginning a worker pending operation.
+    pub type HostWorkerBeginOperationResponse =
+        LatestOf<versioned::worker::HostWorkerBeginOperationResponse>;
     /// Transaction creation payload for a legacy account.
     pub type LegacyAccountTxPayload =
         LatestOf<versioned::signing::HostCreateTransactionWithLegacyAccountRequest>;

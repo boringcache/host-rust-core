@@ -47,15 +47,13 @@ describe("createMockHost callbacks", () => {
       remotePermissions: "deny-all",
     });
     expect(
-      (await callbacks.permissions.devicePermission("Notifications")).granted,
-    ).toBe(true);
+      await callbacks.permissions.devicePermission("Notifications"),
+    ).toBe("AllowAlways");
     expect(
-      (
-        await callbacks.permissions.remotePermission({
-          permission: { tag: "WebRtc" },
-        })
-      ).granted,
-    ).toBe(false);
+      await callbacks.permissions.remotePermission({
+        permission: { tag: "WebRtc" },
+      }),
+    ).toBe("Deny");
   });
 
   it("feature support and theme reflect config", async () => {
@@ -178,15 +176,13 @@ describe("createMockHost callbacks", () => {
       remotePermissions: "allow-all",
     });
     expect(
-      (await callbacks.permissions.devicePermission("Notifications")).granted,
-    ).toBe(false);
+      await callbacks.permissions.devicePermission("Notifications"),
+    ).toBe("Deny");
     expect(
-      (
-        await callbacks.permissions.remotePermission({
-          permission: { tag: "WebRtc" },
-        })
-      ).granted,
-    ).toBe(true);
+      await callbacks.permissions.remotePermission({
+        permission: { tag: "WebRtc" },
+      }),
+    ).toBe("AllowAlways");
   });
 
   it("records auth-state transitions in order", () => {
@@ -308,29 +304,29 @@ describe("createMockHost control surface", () => {
     const host = createMockHost({ devicePermissions: "deny-all" });
     const ask = () => host.callbacks.permissions.devicePermission("Camera");
 
-    expect((await ask()).granted).toBe(false);
+    expect(await ask()).toBe("Deny");
     host.grantPermission("Camera");
-    expect((await ask()).granted).toBe(true);
+    expect(await ask()).toBe("AllowAlways");
     // Per permission, not a policy flip.
     expect(
-      (await host.callbacks.permissions.devicePermission("Microphone")).granted,
-    ).toBe(false);
+      await host.callbacks.permissions.devicePermission("Microphone"),
+    ).toBe("Deny");
     expect(host.getGrantedPermissions()).toEqual(["Camera"]);
 
     host.resetPermission("Camera");
-    expect((await ask()).granted).toBe(false);
+    expect(await ask()).toBe("Deny");
   });
 
   it("denies whatever was not explicitly granted when enforcing", async () => {
     const host = createMockHost();
     host.setEnforcePermissions(true);
     expect(
-      (await host.callbacks.permissions.devicePermission("Camera")).granted,
-    ).toBe(false);
+      await host.callbacks.permissions.devicePermission("Camera"),
+    ).toBe("Deny");
     host.grantPermission("Camera");
     expect(
-      (await host.callbacks.permissions.devicePermission("Camera")).granted,
-    ).toBe(true);
+      await host.callbacks.permissions.devicePermission("Camera"),
+    ).toBe("AllowAlways");
   });
 
   it("records the surface, key and answer of every permission prompt", async () => {
@@ -377,8 +373,8 @@ describe("createMockHost control surface", () => {
     expect(host.getPreimages()).toEqual([]);
     expect(host.getTheme()).toBe("Dark");
     expect(
-      (await host.callbacks.permissions.devicePermission("Camera")).granted,
-    ).toBe(true);
+      await host.callbacks.permissions.devicePermission("Camera"),
+    ).toBe("AllowAlways");
   });
 });
 
@@ -421,20 +417,18 @@ describe("createMockHost TestHostAPI parity", () => {
     const host = createMockHost();
     host.setPermissionBehavior("deny-all");
     expect(
-      (await host.callbacks.permissions.devicePermission("Camera")).granted,
-    ).toBe(false);
+      await host.callbacks.permissions.devicePermission("Camera"),
+    ).toBe("Deny");
     expect(
-      (
-        await host.callbacks.permissions.remotePermission({
-          permission: { tag: "ChainSubmit" },
-        })
-      ).granted,
-    ).toBe(false);
+      await host.callbacks.permissions.remotePermission({
+        permission: { tag: "ChainSubmit" },
+      }),
+    ).toBe("Deny");
     // An explicit grant still wins over the policy.
     host.grantPermission("Camera");
     expect(
-      (await host.callbacks.permissions.devicePermission("Camera")).granted,
-    ).toBe(true);
+      await host.callbacks.permissions.devicePermission("Camera"),
+    ).toBe("AllowAlways");
   });
 
   it("getConnectionStatus and dispose track and release state", async () => {

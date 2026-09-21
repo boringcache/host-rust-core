@@ -41,6 +41,7 @@ const ALIASES: Record<string, string> = {
   clear_reviews: "clearSigningLog",
   theme: "getTheme",
   chain_status: "getChainStatus",
+  open_operations: "getOpenOperations",
   chat_rooms: "getChatRooms",
   chat_bots: "getChatBots",
   posted_chat_messages: "getChatMessageLog",

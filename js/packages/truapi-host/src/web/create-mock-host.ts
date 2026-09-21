@@ -22,6 +22,8 @@
 import { blake2b } from "@noble/hashes/blake2.js";
 import { ok } from "neverthrow";
 
+import { scale } from "@parity/truapi";
+
 import type {
   ChatMessageContent,
   ChatRoom,
@@ -30,6 +32,7 @@ import type {
   HostChatPostMessageResponse,
   HostChatRegisterBotRequest,
   HostLocaleSubscribeItem,
+  HostLocalStorageChangeItem,
   HostThemeSubscribeItem,
   Result,
   ThemeVariant,
@@ -40,6 +43,7 @@ import type {
   CoreStorageKey,
   HostChainSet,
   JsonRpcConnection,
+  PermissionDecision,
   RequiredHostCallbacks,
   UserConfirmationReview,
 } from "../generated/host-callbacks.js";
@@ -131,13 +135,23 @@ export interface NotificationLogEntry {
   timestamp: number;
 }
 
+/** One operation a product began and has not ended. */
+export interface OpenOperation {
+  /** Product that began it. */
+  productId: string;
+  /** Id the mock handed back, unique among this product's open operations. */
+  id: number;
+  /** Label the product gave, empty when it gave none. */
+  label: string;
+}
+
 /**
  * One permission answer the mock gave, recorded for assertions.
  *
  * Field names are `@parity/host-api-test-sdk`'s `PermissionLogEntry`, so an
  * assertion written against that shape reads this one.
  */
-export interface PermissionDecision {
+export interface PermissionLogEntry {
   /** The request's tag, the same key `grantPermission` takes. */
   tag: string;
   /** The full request, for a permission that carries one. */
@@ -340,7 +354,9 @@ export interface MockHost {
   /** Release the mock's state. Equivalent to {@link MockHost.reset} here. */
   dispose(): void;
   /** Permission answers the mock gave, in order. */
-  getPermissionLog(): PermissionDecision[];
+  getPermissionLog(): PermissionLogEntry[];
+  /** Operations a product began and has not ended, in the order they began. */
+  getOpenOperations(): OpenOperation[];
   /** Permissions with an explicit grant, in key order. */
   getGrantedPermissions(): string[];
   /** Answer `permission` with a grant, whatever the configured policy says. */
@@ -642,7 +658,9 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   const authStates: AuthState[] = [];
   const reviews: UserConfirmationReview[] = [];
   const cancelledNotifications: number[] = [];
-  const permissionLog: PermissionDecision[] = [];
+  const permissionLog: PermissionLogEntry[] = [];
+  const openOperations: OpenOperation[] = [];
+  let nextOperationId = 0;
   const permissionDecisions = new Map<string, boolean>();
   const chatRooms = new Map<string, ChatRoom>();
   const chatBots = new Map<string, HostChatRegisterBotRequest>();
@@ -702,6 +720,20 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
       ? `core:permission:${key.value.productId}:${JSON.stringify(key.value.request)}`
       : `core:${key.tag}`;
   const granted = (policy: PermissionPolicy): boolean => policy === "allow-all";
+  // A mock policy is two-valued, so a grant is durable and a refusal is
+  // durable. `AllowOnce` is a host answer the mock has no knob to ask for.
+  const decision = (approved: boolean): PermissionDecision =>
+    approved ? "AllowAlways" : "Deny";
+  // Per key, not one broadcast: a subscriber woken by every write would make a
+  // test asserting "no change" pass for the wrong reason.
+  const storageSubscribers = new Map<
+    string,
+    Set<(item: HostLocalStorageChangeItem) => void>
+  >();
+  const publishStorage = (key: string, value?: Uint8Array): void => {
+    const item = { value: value && scale.bytesToHex(value) };
+    for (const push of storageSubscribers.get(key) ?? []) push(item);
+  };
 
   let hostCallCount = 0;
 
@@ -736,10 +768,60 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
       async write(key, value) {
         if (faults.storageError) throw new Error(faults.storageError);
         storage.set(productKey(key), value);
+        publishStorage(key, value);
       },
       async clear(key) {
         if (faults.storageError) throw new Error(faults.storageError);
         storage.delete(productKey(key));
+        publishStorage(key, undefined);
+      },
+      async *subscribeStorage(key): AsyncGenerator<
+        Result<HostLocalStorageChangeItem, GenericError>
+      > {
+        // Seed the current value before registering, so a subscriber that never
+        // sees a write still sees what it subscribed to.
+        const current = storage.get(productKey(key));
+        yield ok({ value: current && scale.bytesToHex(current) });
+        const pending: HostLocalStorageChangeItem[] = [];
+        let wake: (() => void) | undefined;
+        const push = (item: HostLocalStorageChangeItem) => {
+          pending.push(item);
+          wake?.();
+          wake = undefined;
+        };
+        const subscribers =
+          storageSubscribers.get(key) ??
+          new Set<(item: HostLocalStorageChangeItem) => void>();
+        storageSubscribers.set(key, subscribers);
+        subscribers.add(push);
+        try {
+          for (;;) {
+            while (pending.length > 0) yield ok(pending.shift()!);
+            await new Promise<void>((resolve) => {
+              wake = resolve;
+            });
+          }
+        } finally {
+          subscribers.delete(push);
+          if (subscribers.size === 0) storageSubscribers.delete(key);
+        }
+      },
+    },
+
+    productOperations: {
+      async beginOperation(product, label) {
+        const id = nextOperationId++;
+        openOperations.push({ productId: product.productId, id, label });
+        return { id };
+      },
+      async endOperation(product, id) {
+        // Idempotent by contract, so an unknown or already-ended id is fine.
+        // Per product too: another product holding the same id must not drop
+        // this one's demand.
+        const at = openOperations.findIndex(
+          (open) => open.id === id && open.productId === product.productId,
+        );
+        if (at !== -1) openOperations.splice(at, 1);
       },
     },
 
@@ -789,25 +871,20 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     permissions: {
       async devicePermission(request) {
         if (faults.permissionError) throw new Error(faults.permissionError);
-        return {
-          granted: decidePermission(
-            "device",
-            request,
-            request,
-            devicePermissions,
-          ),
-        };
+        return decision(
+          decidePermission("device", request, request, devicePermissions),
+        );
       },
       async remotePermission(request) {
         if (faults.permissionError) throw new Error(faults.permissionError);
-        return {
-          granted: decidePermission(
+        return decision(
+          decidePermission(
             "remote",
             request.permission.tag,
             request.permission,
             remotePermissions,
           ),
-        };
+        );
       },
     },
 
@@ -881,6 +958,13 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
         reviews.push(review);
         if (faults.confirmationError) throw new Error(faults.confirmationError);
         return confirmUserActions;
+      },
+      // The Rust trait answers this from `confirm_user_action` by default, so
+      // a review is recorded here too and one knob still answers both.
+      async confirmPermission(review) {
+        reviews.push(review);
+        if (faults.confirmationError) throw new Error(faults.confirmationError);
+        return decision(confirmUserActions);
       },
     },
 
@@ -1113,6 +1197,7 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     simulateReconnect: () => {
       chainStatus = "Idle";
     },
+    getOpenOperations: () => [...openOperations],
     getChatRooms: () => [...chatRooms.values()],
     getChatBots: () => [...chatBots.values()],
     getChatMessageLog: () => [...chatMessages],

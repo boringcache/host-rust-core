@@ -11,7 +11,7 @@ export type {
   MockFaults,
   MockHost,
   MockHostConfig,
-  PermissionDecision,
+  PermissionLogEntry,
   PermissionKind,
   PermissionPolicy,
   SigningLogEntry,
