@@ -42,7 +42,6 @@ on:
 
 env:
   MAIN_BRANCH: main
-  CI_FAILURE_TELEGRAM_CHAT_IDS: "-1002068063370"
   # Safetynet ships as a separate app (`.safety` suffix, see Configs/base.safetynet.xcconfig),
   # so it has its own App Store Connect record, Match profiles and Firebase app. Every other
   # configuration builds the production app. The identity follows the configuration, not the
@@ -356,15 +355,7 @@ jobs:
     name: Send Failure Notification
     runs-on: ubuntu-latest
     needs: [prepare_build_metadata, check_and_build, check_build_result]
-    # Held until the notification relay exists. This one is given a Telegram
-    # chat id, hardcoded above, but no bot endpoint or token, so it retries and
-    # then reports a failure of its own on top of whatever it was announcing.
-    # The chat it names is not ours either, so restoring this means repointing
-    # it as well.
-    #
-    # The condition this replaces:
-    # if: failure()
-    if: false
+    if: failure()
     steps:
       - name: Send failure notification
         uses: novasamatech/github-actions/send-notification@8c20aeac07cb19b3c2ce1310d1ef2947a373ca5e # v5
@@ -379,4 +370,4 @@ jobs:
             <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a>
           bot_url: ${{ secrets.NOTIFICATION_BOT_URL }}
           bot_api_token: ${{ secrets.NOTIFICATION_BOT_TOKEN }}
-          telegram_chat_ids: ${{ env.CI_FAILURE_TELEGRAM_CHAT_IDS }}
+          matrix_room_ids: ${{ secrets.CI_MATRIX_ROOM_IDS }}
