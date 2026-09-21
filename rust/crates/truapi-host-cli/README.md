@@ -152,8 +152,7 @@ itself:
 
 That script installs the SDK bridge and the shared `js/container` sandbox
 synchronously. Keep it before application scripts, without `async` or `defer`.
-The SDK and sandbox use separate WebSockets attached to one Rust product
-execution, so they share temporary permissions. Each page load gets its own execution.
+The SDK and sandbox share one host WebSocket and its temporary permissions.
 `/script` uses the same fetch and WebSocket permission checks in Bun, and the
 XHR wrapper when that API is available. Dev keeps automatic approvals, and the
 app server handles assets and hot reload. `--app-port` names the development

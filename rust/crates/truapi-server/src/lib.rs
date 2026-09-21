@@ -58,8 +58,7 @@ pub mod native_debug;
 
 pub use host_core::{
     ChannelId, DebugEvent, DebugSink, FrameDirection, FrameSink, HostAdmin, PairingHostRuntime,
-    ProductExecution, ProductRuntime, ProductRuntimeControl, ProductRuntimeError,
-    SigningHostRuntime,
+    ProductRuntime, ProductRuntimeControl, ProductRuntimeError, SigningHostRuntime,
 };
 pub use host_logic::session::{
     ExternalPairedSession, SsoSessionInfo, decode_persisted_session, encode_external_paired_session,

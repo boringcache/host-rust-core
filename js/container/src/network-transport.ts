@@ -57,15 +57,26 @@ export function createPermissionAuthorization(
 } {
   const bootstrap = win as unknown as {
     __truapi_network_port__?: NetworkPort;
+    __truapi_host_channel__?: MessageChannel;
     __truapi_localhost?: { url?: string };
   };
   const port = bootstrap.__truapi_network_port__;
   freezeAndDelete(win, '__truapi_network_port__');
+  const channel = bootstrap.__truapi_host_channel__;
+  freezeAndDelete(win, '__truapi_host_channel__');
+  const publicPort = channel?.port1;
+  const hostPort = channel?.port2;
+  const postMessage = hostPort?.postMessage;
+  const startPort = hostPort?.start;
+  const closePort = hostPort?.close;
+  const dispatch = publicPort?.dispatchEvent;
   const endpoint = bootstrap.__truapi_localhost?.url;
   const apply = Reflect.apply;
   const descriptor = Object.getOwnPropertyDescriptor;
   const hasOwn = Object.prototype.hasOwnProperty;
   const NativeBytes = win.Uint8Array;
+  const NativeEvent = win.Event;
+  const NativeError = win.Error;
   const bytesPrototype = Object.getPrototypeOf(NativeBytes.prototype);
   const bytesLength = descriptor(bytesPrototype, 'length')!.get!;
   const bytesBuffer = descriptor(bytesPrototype, 'buffer')!.get!;
@@ -85,9 +96,10 @@ export function createPermissionAuthorization(
   const indexOf = String.prototype.indexOf;
 
   // Codecs run before product code can replace the primitives they use.
-  const requestId = '0000000000000000';
+  const requestId = '~0000000000000000';
+  const privatePrefix = requestId.charCodeAt(0);
   const idLength = scale.str.enc(requestId).length;
-  const idOffset = idLength - requestId.length;
+  const idOffset = idLength - requestId.length + 1;
   function template(
     ids: MethodIds,
     messageType: number,
@@ -183,27 +195,54 @@ export function createPermissionAuthorization(
     } catch {
       /* already disconnected */
     }
+    if (hostPort && publicPort) {
+      apply(dispatch!, publicPort, [new NativeEvent('messageerror')]);
+      apply(closePort!, hostPort, []);
+      apply(closePort!, publicPort, []);
+    }
+  }
+
+  function messageBytes(event: MessageEvent): Uint8Array {
+    let data: unknown;
+    try {
+      data = apply(messageData, event, []);
+    } catch {
+      const field = descriptor(event, 'data');
+      if (field && apply(hasOwn, field, ['value'])) data = field.value;
+    }
+    try {
+      const length = apply(bufferLength, data, []);
+      return new NativeBytes(data as ArrayBuffer, 0, length);
+    } catch {
+      const buffer = apply(bytesBuffer, data, []);
+      apply(bufferLength, buffer, []);
+      return new NativeBytes(
+        buffer,
+        apply(bytesOffset, data, []),
+        apply(bytesLength, data, []),
+      );
+    }
+  }
+
+  function isPrivate(bytes: Uint8Array): boolean {
+    const size = apply(bytesLength, bytes, []);
+    const width = 1 << (bytes[0]! & 3);
+    if (width > 4 || size < width) throw new NativeError('Invalid TrUAPI frame');
+    let compact = 0;
+    for (let index = 0; index < width; index++)
+      compact += bytes[index]! * 2 ** (index * 8);
+    const length = compact >>> 2;
+    if (size < width + length + 3) throw new NativeError('Truncated TrUAPI frame');
+    return length > 0 && bytes[width] === privatePrefix;
   }
 
   function receive(event: MessageEvent): void {
+    if (closed) return;
     try {
-      let data: unknown;
-      try {
-        data = apply(messageData, event, []);
-      } catch {
-        const field = descriptor(event, 'data');
-        if (field && apply(hasOwn, field, ['value'])) data = field.value;
-      }
-      let bytes: Uint8Array;
-      try {
-        const length = apply(bufferLength, data, []);
-        bytes = new NativeBytes(data as ArrayBuffer, 0, length);
-      } catch {
-        bytes = new NativeBytes(
-          apply(bytesBuffer, data, []),
-          apply(bytesOffset, data, []),
-          apply(bytesLength, data, []),
-        );
+      const bytes = messageBytes(event);
+      if (hostPort && !isPrivate(bytes)) {
+        apply(postMessage!, hostPort, [bytes]);
+        return;
       }
       const length = apply(bytesLength, bytes, []);
       for (let entry = pending; entry; entry = entry.next) {
@@ -248,13 +287,29 @@ export function createPermissionAuthorization(
       apply(listen, socket, ['message', receive]);
       apply(listen, socket, ['error', disconnect]);
       apply(listen, socket, ['close', disconnect]);
+      if (hostPort) win.addEventListener('pagehide', disconnect, { once: true });
       apply(listen, socket, [
         'open',
         () => {
+          if (closed) return;
           open = true;
           try {
             for (let entry = pending; entry; entry = entry.next)
               send!(entry.frame);
+            if (hostPort) {
+              apply(listen, hostPort, ['message', (event: MessageEvent) => {
+                if (closed) return;
+                try {
+                  const bytes = messageBytes(event);
+                  if (isPrivate(bytes)) throw new NativeError('Reserved TrUAPI request ID');
+                  send!(bytes);
+                } catch {
+                  disconnect();
+                }
+              }]);
+              apply(listen, hostPort, ['messageerror', disconnect]);
+              apply(startPort!, hostPort, []);
+            }
           } catch {
             disconnect();
           }

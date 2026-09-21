@@ -4242,10 +4242,11 @@ mod cli_tests {
         struct UnusedRuntimeFactory;
 
         impl frame_server::ProductRuntimeFactory for UnusedRuntimeFactory {
-            fn product_execution(
+            fn product_runtime(
                 &self,
                 _product: truapi_server::ProductContext,
-            ) -> truapi_server::ProductExecution {
+                _sink: Arc<dyn truapi_server::FrameSink>,
+            ) -> truapi_server::ProductRuntime {
                 panic!("the completed script must not open a product connection")
             }
         }

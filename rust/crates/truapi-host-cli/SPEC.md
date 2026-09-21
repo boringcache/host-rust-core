@@ -1575,14 +1575,10 @@ actually bound, so `--frame-listen` and its generated WebSocket URL remain
 consistent. The HTTP response does not grant cross-origin access; browser frame
 access is enforced during the later WebSocket handshake.
 
-The browser bootstrap gives its SDK and the shared container's private
-permission transport the same fresh `execution` query parameter. The host
-groups those connections by page id, browser origin and signing-session
-generation using a shared `ProductExecution`, as the native host does.
-Connections keep separate replies and cancellation state but share temporary
-permissions. The execution is released when its last connection ends; product
-switches invalidate the grouping. Unscoped connections, including `/script`,
-receive independent executions.
+The browser SDK and sandbox permission checks share one WebSocket and its
+`ProductRuntime`, as `/script` does. The shared container keeps its permission
+replies private using reserved request IDs. Each page load or script run opens
+a fresh connection with independent temporary permissions.
 
 Each accepted WebSocket:
 

@@ -1498,12 +1498,13 @@ impl NativeProductExecution {
                 callbacks.on_core_log(marker.to_string(), detail.to_string());
             })
         };
-        let execution = self
-            .runtime
-            .product_execution_with(self.product.clone(), self.adapters());
+        let runtime = self.runtime.clone();
+        let product = self.product.clone();
+        let adapters = self.adapters();
         let product_control = self.product_control.clone();
         let runtime_factory = Arc::new(move |sink| {
-            let product_runtime = execution.product_runtime(sink);
+            let product_runtime =
+                runtime.product_runtime_with(product.clone(), adapters.clone(), sink);
             *product_control
                 .lock()
                 .expect("native product control mutex poisoned") = Some(product_runtime.control());
