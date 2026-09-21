@@ -73,7 +73,7 @@ truapi-platform = { path = "../truapi-platform", features = ["uniffi"] }
 futures = { version = "0.3", features = ["thread-pool"] }
 rand = { version = "0.8", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "io-util", "time"], optional = true }
-tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"], optional = true }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"], optional = true }
 uniffi.workspace = true
 subxt = { version = "0.50.3", default-features = false, features = ["native"] }
 subxt-rpcs = { version = "0.50.3", default-features = false, features = ["jsonrpsee", "native"] }
@@ -101,7 +101,7 @@ wasm-bindgen-test = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "io-util", "time"] }
-tokio-tungstenite = { version = "0.21", default-features = false, features = ["connect", "handshake"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
 
 [lints]
 workspace = true
