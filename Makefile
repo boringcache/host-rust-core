@@ -98,13 +98,17 @@ CLI_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p' | sed 's/-linux-gnu$$/-l
 CLI_VERSION ?= $(shell awk -F'"' '/^version = /{print $$2; exit}' rust/crates/truapi-host-cli/Cargo.toml)
 CLI_ARCHIVE = truapi-host-$(CLI_VERSION)-$(CLI_TARGET).tar.gz
 CLI_RUNNER := $(CLI_DIST_DIR)/runner.js
+CLI_CONTAINER := $(CLI_DIST_DIR)/sandbox-assets/container.js
 CLI_STAGE = $(CLI_DIST_DIR)/$(CLI_TARGET)
 # macOS ships shasum, most Linux images ship only sha256sum.
 SHA256 := $(shell command -v sha256sum >/dev/null 2>&1 && echo "sha256sum" || echo "shasum -a 256")
 
 # Generated SDK sources are needed before bundling. CI builds the runner,
 # dev container once, then reuses them in every target archive.
-$(CLI_RUNNER):
+$(CLI_RUNNER): $(CLI_CONTAINER)
+	@test -f "$@" || bun scripts/build-cli-runner.ts "$(CLI_DIST_DIR)"
+
+$(CLI_CONTAINER):
 	bun scripts/build-cli-runner.ts "$(CLI_DIST_DIR)"
 
 cli-runner: ## Bundle the product-script runner and browser sandbox into target/dist.

@@ -485,8 +485,9 @@ child, then send SIGKILL and wait again if any group member remains. On
 non-Unix platforms the CLI stops and reaps the direct child.
 
 The first blocking bridge tag installs the shared `js/container` bundle before
-application code, with public SDK and private authorization channels sharing
-one Rust execution. `/script` imports the same web API permission wrappers
+application code. The existing SDK message-port interface requires no product
+dependency update. SDK calls and authorization requests share one WebSocket and
+Rust execution. `/script` imports the same web API permission wrappers
 into Bun. Dev preserves the app server URL, native assets and hot reload; no
 app proxy is involved.
 
@@ -810,14 +811,15 @@ Before importing it, the runner:
 Top-level module code is awaited. If the module's default export is a function,
 the runner calls and awaits it with the host context.
 
-Public SDK calls and private authorization share one Rust execution, preserving
-Allow once, Allow always and Deny semantics. These wrappers are also used by the
-full browser container loaded by dev's first blocking bootstrap tag.
+Public SDK calls and authorization requests share one transport and Rust
+execution, preserving Allow once, Allow always and Deny semantics. These wrappers
+are also used by the full browser container loaded by dev's first blocking
+bootstrap tag.
 
 Scripts retain Bun/Node filesystem, environment, subprocess and module imports.
 Native networking APIs can bypass the web API wrappers; this is not
 operating-system isolation. No browser runtime or product bundler is involved.
-The provider is disposed on success or failure.
+The transport and provider are disposed on success or failure.
 
 ### 10.2 Injected globals
 
@@ -1576,9 +1578,12 @@ consistent. The HTTP response does not grant cross-origin access; browser frame
 access is enforced during the later WebSocket handshake.
 
 The browser SDK and sandbox permission checks share one WebSocket and its
-`ProductRuntime`, as `/script` does. The shared container keeps its permission
-replies private using reserved request IDs. Each page load or script run opens
-a fresh connection with independent temporary permissions.
+`ProductRuntime`, as `/script` does. Browser routing uses the SDK's wire codecs
+to correlate authorization replies separately from app messages. CLI checks
+support permission testing, not protection against deliberate product-code
+bypasses. Native hosts retain their separate authorization protection.
+Each page load or script run opens a fresh connection with independent
+temporary permissions.
 
 Each accepted WebSocket:
 
@@ -2115,8 +2120,13 @@ refreshes on the next `make e2e-pairing-cli` run from such a signer.
 Recommended local verification after CLI changes:
 
 ```sh
-cargo fmt --all -- --check
+cargo +nightly fmt --check
 cargo clippy -p truapi-host-cli --all-targets -- -D warnings
 cargo test -p truapi-host-cli
+cargo test -p truapi-host-cli --bin truapi-host caller_configuration_cannot_execute_before_the_sandbox -- --include-ignored
+bun test js/container/src scripts/cli-runner-package.test.ts
 git diff --check
 ```
+
+The launcher regression requires Bun and is ignored by ordinary `cargo test`.
+CI runs it explicitly with the same command above.
