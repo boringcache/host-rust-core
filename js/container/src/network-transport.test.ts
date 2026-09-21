@@ -88,14 +88,14 @@ function fixture(respond = true) {
     clearTimeout,
     addEventListener: events.addEventListener.bind(events),
     __truapi_localhost: { url: server.url.href.replace('http:', 'ws:') },
-    __truapi_host_channel__: channel,
     __HOST_API_PORT__: channel.port1,
   });
   runInContext(source, context);
-  const authorize = runInContext(
-    'module.exports.createPermissionAuthorization(globalThis).network',
-    context,
-  ) as (url: string, decide: (allowed: boolean) => void) => () => void;
+  const createAuthorization = runInContext('module.exports.createPermissionAuthorization', context);
+  const authorize = createAuthorization(runInContext('globalThis', context), channel).network as (
+    url: string,
+    decide: (allowed: boolean) => void,
+  ) => () => void;
   const provider = createMessagePortProvider(channel.port1);
   const client = createClient(createTransport(provider));
   return {
@@ -165,12 +165,10 @@ test('early SDK calls and private authorization share one socket without exposin
     expect(await bounded(host.authorize())).toBe(false);
     expect({
       connections: host.connections,
-      exposedChannel: host.context.__truapi_host_channel__,
       publicReplies: host.replies.map((reply) => reply.requestId),
       privateRequests: host.requests.slice(1).map((request) => request.requestId.startsWith('~')),
     }).toEqual({
       connections: 1,
-      exposedChannel: undefined,
       publicReplies: [host.requests[0]!.requestId],
       privateRequests: [true, true],
     });

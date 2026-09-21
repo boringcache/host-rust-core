@@ -877,7 +877,7 @@ mod tests {
         assert!(script.contains("application/javascript"));
         assert!(
             script.contains(&format!(
-                r#"window.__truapi_cli_frame_url__ = "{endpoint}";"#
+                r#"window.__truapi_localhost = {{ url: "{endpoint}" }};"#
             )),
             "{script}"
         );
@@ -918,7 +918,7 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
         assert!(
             response.contains(&format!(
-                r#"window.__truapi_cli_frame_url__ = "ws://{address}";"#
+                r#"window.__truapi_localhost = {{ url: "ws://{address}" }};"#
             )),
             "{response}"
         );

@@ -50,6 +50,7 @@ interface PendingRequest {
 
 export function createPermissionAuthorization(
   win: typeof globalThis,
+  channel?: MessageChannel,
 ): {
   network: NetworkAuthorization;
   webRtc: WebRtcAuthorization | false;
@@ -57,13 +58,10 @@ export function createPermissionAuthorization(
 } {
   const bootstrap = win as unknown as {
     __truapi_network_port__?: NetworkPort;
-    __truapi_host_channel__?: MessageChannel;
     __truapi_localhost?: { url?: string };
   };
   const port = bootstrap.__truapi_network_port__;
   freezeAndDelete(win, '__truapi_network_port__');
-  const channel = bootstrap.__truapi_host_channel__;
-  freezeAndDelete(win, '__truapi_host_channel__');
   const publicPort = channel?.port1;
   const hostPort = channel?.port2;
   const postMessage = hostPort?.postMessage;

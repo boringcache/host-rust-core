@@ -33,7 +33,7 @@ pub fn read_container(path: &Path) -> Result<String> {
 /// Install the shared sandbox synchronously before the page's product code.
 pub fn script(frame_url: &str, container: &str) -> String {
     let url = serde_json::to_string(frame_url).expect("a string always serializes");
-    format!("window.__truapi_cli_frame_url__ = {url};\n{container}")
+    format!("window.__truapi_localhost = {{ url: {url} }};\n{container}")
 }
 
 /// HTTP URL the bridge script is served from, for a frame endpoint that has
@@ -61,7 +61,7 @@ mod tests {
     fn script_installs_the_shared_container_after_its_escaped_endpoint() {
         assert_eq!(
             script(r#"ws://x";alert(1);//"#, "installSandbox();"),
-            "window.__truapi_cli_frame_url__ = \"ws://x\\\";alert(1);//\";\ninstallSandbox();",
+            "window.__truapi_localhost = { url: \"ws://x\\\";alert(1);//\" };\ninstallSandbox();",
         );
     }
 

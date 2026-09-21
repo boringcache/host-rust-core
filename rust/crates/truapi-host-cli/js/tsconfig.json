@@ -17,7 +17,6 @@
   "include": [
     "runner.ts",
     "browser-sandbox.ts",
-    "sandbox-bridge.ts",
     "../../../../scripts/build-cli-runner.ts",
     "../../../../scripts/cli-runner-package.test.ts"
   ]
