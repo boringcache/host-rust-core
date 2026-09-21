@@ -1042,14 +1042,14 @@ impl ProductRuntimeHost {
     /// The host role's personhood prover, when it can reach the reserved
     /// `peopl.<suffix>` member key.
     ///
-    /// No role supplies one yet: a signing host has the key and a paired host
-    /// must ask the signer for it over SSO, and neither path is built. Until
-    /// one is, a backend that wants a person proven is called unauthenticated
-    /// and answers for itself.
+    /// A signing host holds that key and proves locally. A paired host must ask
+    /// the signer for it over SSO, which no path serves, so it supplies none and
+    /// a backend that wants a person proven is called unauthenticated and
+    /// answers for itself.
     pub(crate) fn personhood_prover(
         &self,
     ) -> Option<&dyn crate::runtime::backend_session::PersonhoodProver> {
-        None
+        self.authority.personhood_prover()
     }
 
     fn chat_platform<E>(&self) -> Result<Arc<dyn truapi_platform::ChatPlatform>, CallError<E>> {

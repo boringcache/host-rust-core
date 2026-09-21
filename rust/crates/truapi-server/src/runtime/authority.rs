@@ -367,6 +367,17 @@ pub(crate) trait ProductAuthority: Send + Sync {
         self.current_session()
     }
 
+    /// The personhood prover this authority supplies, when it can reach the
+    /// reserved `peopl.<suffix>` member key.
+    ///
+    /// Defaulted to none, so an authority that cannot prove a person says so by
+    /// omission rather than by a stub that fails at proof time. A pairing host
+    /// would have to ask the signer holding the key, so it keeps the default and
+    /// a backend wanting a person proven is called unauthenticated.
+    fn personhood_prover(&self) -> Option<&dyn crate::runtime::backend_session::PersonhoodProver> {
+        None
+    }
+
     /// Return the public key of `//product//{product_id}`.
     ///
     /// Pairing hosts obtain this consent-free value from the Account Holder;

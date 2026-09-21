@@ -656,6 +656,20 @@ impl ProductAuthority for SigningHost {
         SigningHost::session_state(self)
     }
 
+    fn personhood_prover(&self) -> Option<&dyn crate::runtime::backend_session::PersonhoodProver> {
+        // A browser host cannot reach the statement-store RPC this proof reads
+        // the ring from, so it keeps the trait's default and its backends are
+        // called unauthenticated.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Some(self)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            None
+        }
+    }
+
     async fn request_login(
         &self,
         _product: &ProductContext,
@@ -1276,6 +1290,96 @@ impl ProductAuthority for SigningHost {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl SigningHost {
+    /// Prove the connected person against `context` and `message`, naming the
+    /// ring the proof opened against.
+    ///
+    /// Both reserved collections are offered as candidates and membership is
+    /// settled on chain, so the widest-budget collection the person is actually
+    /// in wins and the two host roles cannot disagree about personhood. The
+    /// proof opens against the ring's baked-in `included` prefix, which is the
+    /// same member set the verifier reads a commitment for.
+    async fn prove_reserved_person(
+        &self,
+        context: &[u8],
+        message: &[u8],
+    ) -> Result<crate::runtime::backend_session::PersonProof, String> {
+        let session = self.current_session().ok_or("no active local session")?;
+        let candidates = self
+            .reserved_person_collection_candidates(&session)
+            .map_err(|err| err.to_string())?;
+        let rpc = crate::runtime::statement_allowance::rpc::RpcClient::new(
+            self.services
+                .statement_store
+                .client("personhood proof")
+                .await
+                .map_err(|err| err.to_string())?,
+        );
+        let metadata = crate::runtime::statement_allowance::fetch_metadata(&rpc)
+            .await
+            .map_err(|err| err.to_string())?;
+        // Every ring back to index 0, because a membership that stopped being
+        // re-included still proves against the ring that holds it.
+        let membership = crate::runtime::statement_allowance::find_including_rings(
+            &rpc,
+            &metadata,
+            &candidates,
+            u32::MAX,
+        )
+        .await
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .next()
+        .ok_or("no provable ring membership in any reserved collection")?;
+        // Reading the snapshot took chain round trips. Refuse a proof for a
+        // session that disconnected or changed underneath them.
+        self.require_current_session(&session)
+            .map_err(|err| err.to_string())?;
+        let domain =
+            crate::runtime::statement_allowance::proof::domain_for_ring_exponent(
+                membership.ring.exponent,
+            )
+            .map_err(|err| err.to_string())?;
+        let proof = crate::runtime::statement_allowance::proof::ring_vrf_proof(
+            domain,
+            membership.entropy,
+            &membership.ring.members,
+            context,
+            message,
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(crate::runtime::backend_session::PersonProof {
+            proof,
+            ring_index: membership.ring.ring_index,
+        })
+    }
+}
+
+/// Proving the connected person to a backend that authenticates one.
+///
+/// The reserved `peopl.<suffix>` entropies never leave the core: the proof is
+/// built here and only its bytes and ring index travel.
+#[cfg(not(target_arch = "wasm32"))]
+#[truapi::async_trait]
+impl crate::runtime::backend_session::PersonhoodProver for SigningHost {
+    async fn prove_person(
+        &self,
+        context: &[u8],
+        message: &[u8],
+    ) -> Result<crate::runtime::backend_session::PersonProof, ()> {
+        self.prove_reserved_person(context, message)
+            .await
+            .map_err(|reason| {
+                // The caller has no field for a reason, and a backend that
+                // wants a person is about to be called unauthenticated. An
+                // operator reading a wall of 401s needs to know which of the
+                // two this was.
+                tracing::warn!(%reason, "personhood proof unavailable");
+            })
+    }
+}
+
 fn local_session_validation_id(session: &SessionInfo, activation_generation: u64) -> Vec<u8> {
     let mut id = authority_session_validation_id(session);
     id.extend_from_slice(b":activation:");
@@ -1398,6 +1502,46 @@ mod tests {
         assert!(
             !granted,
             "the closed default: no manifest reachable means no grant"
+        );
+    }
+
+    /// The seam a person-authenticating backend is reached through: the role
+    /// supplies a prover and the product runtime reaches that same one.
+    ///
+    /// Worth its own test because a gap here is silent. The tunnel treats an
+    /// absent prover as "this backend wants no session" and calls it
+    /// unauthenticated, so the backend's own `401` is the only symptom and it
+    /// reads as the caller being refused rather than as the host never having
+    /// offered a proof.
+    #[test]
+    fn a_signing_host_supplies_the_prover_the_product_runtime_reaches() {
+        let (services, authority) = signing_runtime();
+        assert!(
+            ProductAuthority::personhood_prover(authority.as_ref()).is_some(),
+            "a signing host holds the reserved member key, so it proves locally"
+        );
+        let host = product_runtime(services, authority);
+        assert!(
+            host.personhood_prover().is_some(),
+            "the tunnel reads the prover off the product runtime, not off the role"
+        );
+    }
+
+    /// Proving needs the root entropy a local session carries, so a host with
+    /// no session refuses instead of producing a proof over absent material.
+    #[test]
+    fn proving_a_person_without_a_session_refuses() {
+        let (_services, authority) = signing_runtime();
+        let outcome = futures::executor::block_on(
+            crate::runtime::backend_session::PersonhoodProver::prove_person(
+                authority.as_ref(),
+                b"myapp.dot",
+                b"challenge",
+            ),
+        );
+        assert!(
+            outcome.is_err(),
+            "no session means no reserved member key, so there is no proof to make"
         );
     }
 
