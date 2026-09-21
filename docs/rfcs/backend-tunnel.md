@@ -15,20 +15,21 @@ A product names a backend and a request against it; the host performs that reque
 
 A product cannot hold a server-side API key. It runs on the user's device, so anything it holds is readable there — [Meld](https://docs.meld.io/docs/meld-api/getting-started) says so directly: "Always call Meld from your backend. Direct calls from a browser or mobile app expose your API key."
 
-So the key lives in a backend the deployer runs, and the question is how a product reaches it. Answering that with a caller identity — a signature the host attaches to the product's own outbound request — answers a different question. It tells a backend *who* is calling, but a deployer's backend does not need the host to identify the user; it needs to know the call came through a host it trusts, so it can decide whether to spend its own quota on it. A backend that does need to know the person establishes that with the product itself, and the tunnel carries what that handshake produced — see [A credential the product holds](#a-credential-the-product-holds).
+So the key lives in a backend the deployer runs, and the question is how a product reaches it. Answering that with a caller identity — a signature the host attaches to the product's own outbound request — answers a different question. It tells a backend *who* is calling, but a deployer's backend does not need the host to identify the user; it needs to know the call came through a host it trusts, so it can decide whether to spend its own quota on it. A backend that does need to know the person is authenticated by the core, not by the product and not by a signature over the product's own request — see [Authenticating a backend that knows a person](#authenticating-a-backend-that-knows-a-person).
 
 There are two credentials, belonging to different parties: the **third-party key** lives in the deployer's backend, the only place it can; the **backend's own credential** lives in the host, which already ships secrets. The product holds neither and needs to hold neither.
 
 ## Approach
 
 ```
-product   ──  backend.request { backend, method, path, query, body, bearer }
+product   ──  backend.request { backend, method, path, query, body }
    │
-core      ──  screens the request; resolves nothing, holds nothing
+core      ──  screens the request; holds the session for a backend that
+   │           authenticates a person, and attaches it
    │
 host      ──  backend id → base URL + host's own credential
    │              ↓ HTTPS, X-Polkadot-Host-Authorization: Bearer <host↔backend credential>
-   │                       Authorization: Bearer <bearer>, when the product has one
+   │                       Authorization: Bearer <session>, when the core holds one
 backend   ──  the deployer's service; holds the third-party key
    │              ↓ HTTPS, authenticated with the third-party key
 provider  ──  Meld and the like
@@ -58,7 +59,6 @@ Moving outbound HTTP into the protocol is what a proxy design does, and the usua
 | `path` | absolute; no `//` prefix; no empty, `.` or `..` segments; no `?`, `#`, `\`, `%`, space, control or non-ASCII byte; ≤2048 bytes |
 | `query` | ≤64 items, ≤4096 bytes total; names `[A-Za-z0-9_.-]`; values may hold any URL syntax, because the host encodes them |
 | `body` | present only on `POST`/`PUT`/`PATCH`; `Json` must be UTF-8; ≤1 MiB |
-| `bearer` | optional; [RFC 7235](https://www.rfc-editor.org/rfc/rfc7235#section-2.1) `token68`, non-empty, ≤4096 bytes |
 
 `%` is banned rather than validated: `%2e%2e%2f` and `%2f` pass a check for the literal characters and become traversal once a URL parser normalizes them. Variable data belongs in the query.
 
@@ -68,7 +68,7 @@ Rules reject rather than normalize, so no normalizer has to stay in step across 
 
 The base URL, TLS, DNS, timeouts and the credentials — plus five things the core cannot check:
 
-1. **Put the two credentials in two headers.** The host's own goes in `X-Polkadot-Host-Authorization`; `bearer`, when the product supplies one, goes in `Authorization`. Neither is logged.
+1. **Put the two credentials in two headers.** The host's own goes in `X-Polkadot-Host-Authorization`; the session the core passes, when it passes one, goes in `Authorization`. Neither is logged.
 2. **Set the path on the parsed base; never concatenate.** Refuse a base carrying a query or fragment: appended to `https://api.example.com/v1?key=abc`, a path lands inside the query. This is the one way a screened request can still reach somewhere unintended.
 3. **Do not follow redirects.** Return the `3xx`.
 4. **Cap the response** rather than truncating it.
@@ -80,19 +80,21 @@ The core re-screens the response, so a host that forgets cannot reach a product 
 
 `Json` and `Form` rather than bytes plus a content-type string. A free-form content type is a header the product writes; bytes with no content type is a header each host guesses differently — `fetch` labels a string body `text/plain`, the native clients label nothing, and a backend expecting JSON refuses two of three. Pinning the type to the variant is what makes one call behave the same everywhere.
 
-### A credential the product holds
+### Authenticating a backend that knows a person
 
-Some backends answer per person, not per product. A fiat on-ramp gating spend on a proof of personhood is the case in front of us: the product runs the backend's handshake, the backend hands back a short-lived session token, and every later call carries it. Without a field for that token the tunnel reaches the handshake and nothing behind it — and no workaround exists, because a `GET` has no body and a bearer in the query string is a credential in every URL and every log.
+Some backends answer per person, not per product. A fiat on-ramp gating spend on a proof of personhood is the case in front of us: it runs a handshake, binds the person to a short-lived session token, and reads that token on every later call.
 
-So a request carries an optional `bearer`. Three things bound it:
+**The product is not part of that.** It holds no credential, mints no proof, and has no field to put one in — the request it sends is the same five fields whether or not the backend authenticates anyone. The core runs the handshake, holds the session it produced, and passes it to the host beside the request; the host writes it into `Authorization`.
 
-- **The scheme is fixed, like the body's content type.** The product supplies a credential, not a header. A product that could write the header value could write a header, and a product that could write a header could write `Host`.
-- **It is screened to `token68`** — the charset a bearer credential is already spelled in. A JWT, a hex or base64 string and an opaque handle all pass; `\r\n`, a space and a non-ASCII byte do not, so nothing folds a second header into the request.
-- **It does not displace the host's credential.** The two travel in headers of their own, and a host still authenticates itself on a request carrying a bearer.
+That places it where the material already is. Proving personhood means a ring-VRF proof over the reserved `peopl.<suffix>` member key, which is the core's to use and never leaves it; a product that could drive the handshake would need that key or a proof made with it, and a proof is a bearer token for its context's alias. Keeping it in the core also means one implementation rather than one per product, and a session that survives the product reloading.
 
-`Authorization` is the product's, and the host's own goes in `X-Polkadot-Host-Authorization`. That way round because the credential the *resource* authenticates is the one belonging in the standard header, where a backend's framework already reads it; a hop credential is a hop header, and a backend checking one is checking a constant. `Proxy-Authorization` is the closer fit for the hop, and is exactly what an intermediary is entitled to consume.
+The same shape already runs in this repo: the CLI host holds the identity backend's JWT, mints it through that backend's sr25519 `challenges` → `token` handshake, and on a `401` evicts and re-authenticates once. A backend session here works the same way.
 
-**This is not a caller identity the host attaches.** The host mints nothing, signs nothing and learns nothing about the person; it copies an opaque string the product already had into one header. What makes that string mean anything is the backend's own handshake, which is the backend's business and outside this RFC.
+`Authorization` carries the session, and the host's own credential goes in `X-Polkadot-Host-Authorization`. That way round because the credential the *resource* authenticates is the one belonging in the standard header, where a backend's framework already reads it; a hop credential is a hop header, and a backend checking one is checking a constant. `Proxy-Authorization` is the closer fit for the hop, and is exactly what an intermediary is entitled to consume.
+
+Whatever a handshake hands back is screened to [RFC 7235](https://www.rfc-editor.org/rfc/rfc7235#section-2.1) `token68` and bounded at 4096 bytes before it becomes a header, so a backend cannot fold a second header into the host's own request.
+
+**Open: the handshake itself.** Which handshake the core runs, how it learns that a backend wants one, and whether the person is asked before their personhood is proven to a deployer's backend are not settled here. The wire above does not depend on the answer: the product's request is unchanged either way, and the credential never becomes something a product can name.
 
 ### What comes back
 
@@ -115,13 +117,13 @@ The host forwards the connection's product id as `X-Polkadot-Product`, overwriti
 - **On a browser host every host-side failure collapses to one variant**, since a JS host can only reject with a string. Native hosts and the CLI return them typed.
 - **Adding a backend needs a host release.** That is the cost of the registry being the trust boundary. `Backend::list` is what keeps that from being invisible to a product shipped against an id the host in front of it does not serve.
 - **Rejected: a caller identity the host attaches to the product's own request.** It answers "which user" when the deployer asks "which host", it needs the host to intercept an outbound request — which Android's `shouldInterceptRequest` cannot do for a body and dotli cannot do at all — and it leaves the product's own network stack carrying the call, with CORS and interception differing per platform.
-- **A product supplies its own bearer, and the core cannot tell a real one from a guess.** It is screened for shape, not meaning; whether it names anyone is the backend's handshake to decide. What the core does guarantee is that it cannot become a second header, and that it never displaces the host's own credential.
+- **A backend that authenticates a person costs the core a session to keep.** Per product and per backend, refreshed when it expires or is refused. The alternative — a proof on every call — puts a chain read in front of every request the backend serves.
 - **The host's credential is not in `Authorization`.** A backend that already expects it there needs a one-line change to read `X-Polkadot-Host-Authorization`. The alternative puts every per-person credential in a nonstandard header instead, where no framework's bearer middleware looks for it.
 - **Rejected: a core-side rate limit.** The backend holds the quota and is the only party that knows its own limits.
 
 ## Open questions
 
-1. **Is the response-header allowlist the right set?** It is the smallest one that lets a product parse an answer and back off, but widening it later is a wire change. `www-authenticate` is the first candidate now that a product can hold a credential of its own.
+1. **Is the response-header allowlist the right set?** It is the smallest one that lets a product parse an answer and back off, but widening it later is a wire change.
 2. **How is a registry provisioned and rotated across hosts?** Today each host ships its own, so a credential rotation is a release per host.
 3. **Should the base-URL join be a shared helper rather than prose?** "Set the path on the parsed base, refuse a base carrying a query" is an obligation every host reimplements and the core cannot check. A `truapi_platform` function would make it mechanical.
 4. **Should pinning allowed product ids be protocol rather than host configuration?** Protocol would let the core enforce it; host-side keeps the core free of a policy it cannot verify.

@@ -15,10 +15,10 @@ use crate::{wire, wire_trait};
 /// between them. The product never learns the origin it reached or the
 /// credential that authenticated the call.
 ///
-/// A backend that answers per person rather than per product runs its own
-/// handshake and hands the product a session token; `bearer` is how that token
-/// gets back to it. It is the product's credential, not the host's, and the
-/// host keeps its own out of that header.
+/// A backend that answers per person rather than per product is authenticated
+/// by the core: it runs that backend's handshake, holds the session, and
+/// attaches it on the way out. A product holds no credential for a backend and
+/// has no field to put one in.
 ///
 /// Which backends exist is host configuration, not protocol. A host with no
 /// tunnel at all answers `Unsupported`; one that has a tunnel but does not
@@ -39,23 +39,9 @@ pub trait Backend: Send + Sync {
     ///   path: "/ok",
     ///   query: [{ name: "hello", value: "world" }],
     ///   body: undefined,
-    ///   // A credential this product holds for this backend. A backend that
-    ///   // gates on a person hands one out in its own handshake; one that
-    ///   // gates on the host alone needs none, and this stays undefined.
-    ///   bearer: "session-token-the-backend-issued",
     /// });
     /// assert(result.isOk(), "backend request failed:", result);
     /// console.log("backend answered:", result.value.status);
-    ///
-    /// // The echo backend reports the `Authorization` it was sent, so the
-    /// // round trip shows the bearer arrived as the product's own credential.
-    /// const echoed = JSON.parse(new TextDecoder().decode(result.value.body));
-    /// assert(
-    ///   echoed.authorization === "Bearer session-token-the-backend-issued",
-    ///   "the bearer did not reach the backend:",
-    ///   echoed,
-    /// );
-    /// console.log("backend saw the bearer:", echoed.authorization);
     /// ```
     #[wire(id = 0)]
     async fn request(

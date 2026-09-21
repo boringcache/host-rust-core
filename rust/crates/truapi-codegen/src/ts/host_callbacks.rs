@@ -1006,6 +1006,12 @@ fn adapter_arg(
         TypeRef::Primitive(p) if matches!(p.as_str(), "u64" | "u128" | "i64" | "i128") => {
             format!("BigInt({name})")
         }
+        // The raw boundary admits `null` for an absent value, the typed surface
+        // does not: a JS host that writes `null` and a Rust `None` mean the
+        // same thing, and only one of them is expressible above.
+        TypeRef::Option(inner) if matches!(inner.as_ref(), TypeRef::Primitive(p) if p == "str") => {
+            format!("{name} ?? undefined")
+        }
         _ => name,
     }
 }

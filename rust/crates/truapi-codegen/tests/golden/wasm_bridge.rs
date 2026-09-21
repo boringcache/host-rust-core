@@ -151,12 +151,14 @@ impl truapi_platform::BackendHost for WasmPlatform {
         &self,
         product: &truapi_platform::ProductContext,
         request: v01::HostBackendRequest,
+        authorization: Option<String>,
     ) -> Result<v01::HostBackendResponse, v01::HostBackendError> {
         let bytes = invoke_bytes_return(
             &self.bridge.backend_request,
             vec![
                 Uint8Array::from(product.encode().as_slice()).into(),
                 Uint8Array::from(request.encode().as_slice()).into(),
+                authorization.map_or(JsValue::UNDEFINED, |value| JsValue::from_str(&value)),
             ],
         )
         .await

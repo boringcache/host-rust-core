@@ -310,9 +310,10 @@ interface HostBridge {
      * allowlisted headers, and forward [productId] as `X-Polkadot-Product`.
      *
      * Two credentials, two headers: send this host's own as
-     * `X-Polkadot-Host-Authorization`, and `request.bearer` — the product's
-     * own, when it has one — as `Authorization: Bearer`. Never the host's in
-     * `Authorization`, and neither in a log.
+     * `X-Polkadot-Host-Authorization`, and [authorization] — the session the
+     * core holds for a backend that authenticates a person — as
+     * `Authorization: Bearer`. Never the host's in `Authorization`, and
+     * neither in a log.
      *
      * Defaults to [HostBackendRejection.UnknownBackend], so an app that
      * registers no backends leaves these calls refused.
@@ -321,6 +322,7 @@ interface HostBridge {
     suspend fun backendRequest(
         productId: String,
         request: HostBackendRequest,
+        authorization: String?,
     ): NativeBackendResponse = throw HostBackendRejection.UnknownBackend()
 
     /**
@@ -544,9 +546,10 @@ private class HostCallbackAdapter(private val bridge: HostBridge) : HostCallback
     override suspend fun backendRequest(
         productId: String,
         request: HostBackendRequest,
+        authorization: String?,
     ): NativeBackendResponse =
         try {
-            bridge.backendRequest(productId, request)
+            bridge.backendRequest(productId, request, authorization)
         } catch (error: HostBackendRejection) {
             throw error
         } catch (error: Throwable) {

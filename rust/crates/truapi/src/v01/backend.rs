@@ -91,26 +91,6 @@ pub struct HostBackendRequest {
     pub query: Vec<BackendQueryItem>,
     /// Request body, for the methods that carry one.
     pub body: Option<BackendBody>,
-    /// A credential the product holds for this backend, sent as
-    /// `Authorization: Bearer <bearer>`.
-    ///
-    /// For a backend that answers per person rather than per product: one that
-    /// runs a handshake and hands back a session token has no other way to
-    /// receive it, since a product cannot write a header here. The scheme is
-    /// fixed rather than product-supplied, for the reason [`BackendBody`] fixes
-    /// the content type — and because a product that could write the header
-    /// could write any of them.
-    ///
-    /// It is not the host's credential and never replaces it: the host carries
-    /// its own in a header of its own, so a backend reading `Authorization`
-    /// reads the product's token and nothing else. A product that has none
-    /// leaves this empty; the host still authenticates itself.
-    ///
-    /// Bounded and screened to [RFC 7235] `token68`, so it cannot carry a
-    /// second header into the request.
-    ///
-    /// [RFC 7235]: https://www.rfc-editor.org/rfc/rfc7235#section-2.1
-    pub bearer: Option<String>,
 }
 
 /// What a backend answered. Headers are a fixed allowlist rather than whatever

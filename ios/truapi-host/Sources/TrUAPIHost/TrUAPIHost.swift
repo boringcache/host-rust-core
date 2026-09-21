@@ -306,13 +306,17 @@ public protocol HostBridge: AnyObject, Sendable {
     /// concatenating, do not follow redirects, cap the response, return only
     /// the allowlisted headers, and forward `productId` as `X-Polkadot-Product`.
     /// Two credentials, two headers: send this host's own as
-    /// `X-Polkadot-Host-Authorization`, and `request.bearer` — the product's
-    /// own, when it has one — as `Authorization: Bearer`. Never the host's in
-    /// `Authorization`, and neither in a log.
+    /// `X-Polkadot-Host-Authorization`, and `authorization` — the session the
+    /// core holds for a backend that authenticates a person — as
+    /// `Authorization: Bearer`. Never the host's in `Authorization`, and
+    /// neither in a log.
     /// Defaults to `.unknownBackend`, so an app that registers no backends
     /// leaves these calls refused.
-    func backendRequest(productId: String, request: HostBackendRequest) async throws
-        -> NativeBackendResponse
+    func backendRequest(
+        productId: String,
+        request: HostBackendRequest,
+        authorization: String?
+    ) async throws -> NativeBackendResponse
 
     /// Identifiers `backendRequest` accepts for `productId`. Defaults to none.
     func backendList(productId: String) async throws -> [String]
@@ -476,8 +480,11 @@ public extension HostBridge {
     func workerDemandChanged(productId: String, transition: WorkerTransition) {}
     func devicePermissionStatus(request: HostDevicePermissionRequest) async throws
         -> NativeDevicePermissionStatus { .notApplicable }
-    func backendRequest(productId _: String, request _: HostBackendRequest) async throws
-        -> NativeBackendResponse { throw HostBackendRejection.UnknownBackend }
+    func backendRequest(
+        productId _: String,
+        request _: HostBackendRequest,
+        authorization _: String?
+    ) async throws -> NativeBackendResponse { throw HostBackendRejection.UnknownBackend }
     func backendList(productId _: String) async throws -> [String] { [] }
 }
 
@@ -609,11 +616,17 @@ private final class HostCallbackAdapter: HostCallbacks, @unchecked Sendable {
         }
     }
 
-    func backendRequest(productId: String, request: HostBackendRequest) async throws
-        -> NativeBackendResponse
-    {
+    func backendRequest(
+        productId: String,
+        request: HostBackendRequest,
+        authorization: String?
+    ) async throws -> NativeBackendResponse {
         do {
-            return try await bridge.backendRequest(productId: productId, request: request)
+            return try await bridge.backendRequest(
+                productId: productId,
+                request: request,
+                authorization: authorization
+            )
         } catch let error as HostBackendRejection {
             throw error
         } catch {

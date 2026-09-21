@@ -162,10 +162,11 @@ function backendRawCallbacks(
   bridge: WorkerCallbackBridge,
 ): Required<Pick<RawCallbacks, "backendRequest" | "backends">> {
   return {
-    backendRequest: (product, request) =>
+    backendRequest: (product, request, authorization) =>
       bridge.callbackRequest("backendRequest", [
         product,
         request,
+        authorization,
       ]) as ReturnType<Required<RawCallbacks>["backendRequest"]>,
     backends: (product) =>
       bridge.callbackRequest("backends", [product]) as ReturnType<

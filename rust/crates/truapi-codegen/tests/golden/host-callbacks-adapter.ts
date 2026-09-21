@@ -53,6 +53,7 @@ export interface RawCallbacks {
   backendRequest?(
     product: Uint8Array,
     request: Uint8Array,
+    authorization: string | null | undefined,
   ): Promise<Uint8Array>;
   backends?(product: Uint8Array): Promise<Uint8Array>;
   chainConnect: ChainConnect;
@@ -122,11 +123,12 @@ export function createWasmRawCallbacks(
       await callbacks.auth.authStateChanged(AuthState.dec(state)),
     ...(backend
       ? {
-          backendRequest: async (product, request) =>
+          backendRequest: async (product, request, authorization) =>
             HostBackendResponse.enc(
               await backend.backendRequest(
                 ProductContext.dec(product),
                 HostBackendRequest.dec(request),
+                authorization ?? undefined,
               ),
             ),
           backends: async (product) =>

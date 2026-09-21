@@ -961,11 +961,13 @@ export interface AuthPresenter {
  * host that cannot keep a credential from its own users — anything running as
  * script in a browser — registers no backends.
  *
- * A request may also carry a credential of the product's own, for a backend
- * that answers per person rather than per product. The two never meet: the
- * product's is what the backend reads as `Authorization`, the host's is what
- * tells the backend which host it is talking to, and neither substitutes for
- * the other.
+ * A backend that answers per person rather than per product is authenticated
+ * by the core, not by the product and not here: the core runs that backend's
+ * handshake, holds the session it produces, and passes the credential to
+ * `backend_request` alongside the request. The product never holds it and
+ * cannot set it. The two credentials never meet — the core's is what the
+ * backend reads as `Authorization`, the host's is what tells the backend
+ * which host it is talking to.
  *
  * The core screens the request first: `path` is absolute within the backend
  * and carries no dot segments, empty segments, percent escapes or
@@ -992,21 +994,23 @@ export interface AuthPresenter {
  *   that name. It is host-attested, not cryptographic.
  * - **Send your own credential as `X-Polkadot-Host-Authorization`**,
  *   overwriting any header of that name, and never as `Authorization`.
- * - **Send `request.bearer` as `Authorization: Bearer <bearer>`** when it is
- *   present, and send that header for no other reason. It is the product's
- *   credential for a backend that answers per person; the core has screened
- *   it to `token68`, so it cannot fold a second header into the request.
+ * - **Send `authorization` as `Authorization: Bearer <authorization>`** when
+ *   the core passes one, and send that header for no other reason. The core
+ *   has screened it to `token68`, so it cannot fold a second header into the
+ *   request.
  * - **Keep both credentials out of logs**, and the host's out of anything the
  *   product can name or read back.
  */
 export interface BackendHost {
   /**
    * Perform one request against a registered backend, attaching the host's
-   * own credential.
+   * own credential and, when the core passes one, the session credential it
+   * holds for this backend.
    */
   backendRequest(
     product: ProductContext,
     request: HostBackendRequest,
+    authorization: string | undefined,
   ): Promise<HostBackendResponse>;
 
   /**

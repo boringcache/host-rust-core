@@ -623,6 +623,7 @@ pub trait HostCallbacks: Send + Sync {
         &self,
         product_id: String,
         request: v01::HostBackendRequest,
+        authorization: Option<String>,
     ) -> Result<NativeBackendResponse, HostBackendRejection>;
 
     /// Identifiers `backend_request` accepts for `product_id`.
@@ -1851,6 +1852,7 @@ impl truapi_platform::BackendHost for CallbackPlatform {
         &self,
         product: &truapi_platform::ProductContext,
         request: v01::HostBackendRequest,
+        authorization: Option<String>,
     ) -> Result<v01::HostBackendResponse, v01::HostBackendError> {
         self.callbacks.on_core_log(
             "truapi.native.callback.backend_request".to_string(),
@@ -1859,7 +1861,7 @@ impl truapi_platform::BackendHost for CallbackPlatform {
         );
 
         self.callbacks
-            .backend_request(product.product_id.clone(), request)
+            .backend_request(product.product_id.clone(), request, authorization)
             .await
             .map(v01::HostBackendResponse::from)
             .map_err(v01::HostBackendError::from)
@@ -2682,6 +2684,7 @@ mod tests {
             &self,
             _product_id: String,
             _request: v01::HostBackendRequest,
+            _authorization: Option<String>,
         ) -> Result<NativeBackendResponse, HostBackendRejection> {
             Err(HostBackendRejection::UnknownBackend)
         }
@@ -4037,6 +4040,7 @@ mod tests {
                 &self,
                 _product_id: String,
                 _request: v01::HostBackendRequest,
+                _authorization: Option<String>,
             ) -> Result<NativeBackendResponse, HostBackendRejection> {
                 Err(HostBackendRejection::UnknownBackend)
             }
@@ -4197,6 +4201,7 @@ mod tests {
                 &self,
                 _product_id: String,
                 _request: v01::HostBackendRequest,
+                _authorization: Option<String>,
             ) -> Result<NativeBackendResponse, HostBackendRejection> {
                 Err(HostBackendRejection::UnknownBackend)
             }

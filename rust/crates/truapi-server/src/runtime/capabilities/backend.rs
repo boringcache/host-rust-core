@@ -8,7 +8,7 @@ use truapi::versioned::backend::{
 };
 use truapi::{CallContext, CallError};
 
-use crate::host_logic::backend::{screen_request, screen_response};
+use crate::host_logic::backend::{screen_authorization, screen_request, screen_response};
 use crate::runtime::ProductRuntimeHost;
 
 #[truapi::async_trait]
@@ -24,8 +24,17 @@ impl Backend for ProductRuntimeHost {
 
         screen_request(&inner).map_err(domain)?;
 
+        // Authenticating a backend that answers per person is the core's job,
+        // not the product's and not the host's: nothing a product sends can
+        // reach this argument. No session source is wired in yet, so every
+        // call goes out with the host's credential alone.
+        let authorization: Option<String> = None;
+        if let Some(authorization) = &authorization {
+            screen_authorization(authorization).map_err(domain)?;
+        }
+
         let mut response = host
-            .backend_request(&self.product, inner)
+            .backend_request(&self.product, inner, authorization)
             .await
             .map_err(domain)?;
         // The host owes the allowlist and the cap; this catches one that skips them.

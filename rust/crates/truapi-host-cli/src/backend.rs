@@ -7,8 +7,8 @@
 //!
 //! Two credentials can be on one request and they do not share a header. The
 //! registry token authenticates this host to the backend and travels in
-//! `X-Polkadot-Host-Authorization`; the product's own credential, if it has
-//! one, travels in `Authorization`.
+//! `X-Polkadot-Host-Authorization`; the session the core holds for a backend
+//! that authenticates a person travels in `Authorization`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -37,9 +37,9 @@ const PRODUCT_HEADER: &str = "X-Polkadot-Product";
 
 /// Header carrying this host's own credential to the backend.
 ///
-/// Not `Authorization`, which belongs to the product's credential when it has
-/// one: a backend that authenticates a person reads the standard header with
-/// its framework's own machinery, and a hop credential is a hop header. Not
+/// Not `Authorization`, which belongs to the session the core attaches: a
+/// backend that authenticates a person reads the standard header with its
+/// framework's own machinery, and a hop credential is a hop header. Not
 /// `Proxy-Authorization` either, which an intermediary is entitled to consume.
 const HOST_AUTH_HEADER: &str = "X-Polkadot-Host-Authorization";
 
@@ -160,6 +160,7 @@ impl BackendHost for CliBackendHost {
         &self,
         product: &ProductContext,
         request: HostBackendRequest,
+        authorization: Option<String>,
     ) -> Result<HostBackendResponse, HostBackendError> {
         let entry = self
             .registry
@@ -176,9 +177,12 @@ impl BackendHost for CliBackendHost {
         }
 
         // Screened to `token68` by the core, so it cannot fold a second header
-        // into the request. Left to the product whether to send one at all.
-        if let Some(bearer) = &request.bearer {
-            call = call.header(reqwest::header::AUTHORIZATION, format!("Bearer {bearer}"));
+        // into the request. Absent for a backend the core holds no session for.
+        if let Some(authorization) = &authorization {
+            call = call.header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {authorization}"),
+            );
         }
 
         call = match request.body {
@@ -261,8 +265,8 @@ fn header_of(head: &str, name: &str) -> Option<String> {
 
 /// Start a loopback backend that echoes the request line back.
 ///
-/// It reports the product header and the product's own `Authorization`, which
-/// is how the battery sees that a bearer arrived. It never reports
+/// It reports the product header and the `Authorization` the core attached,
+/// which is how the battery sees that a session arrived. It never reports
 /// `X-Polkadot-Host-Authorization`: handing a host credential to the product
 /// is what keeps `TRACE` off [`BackendHttpMethod`], and a fixture is no place
 /// to make an exception.
@@ -315,7 +319,6 @@ mod tests {
             path: path.to_string(),
             query: Vec::new(),
             body: None,
-            bearer: None,
         }
     }
 
@@ -386,15 +389,16 @@ mod tests {
 
         let mut call = request("/a");
         call.backend = "recorder".to_string();
-        call.bearer = Some("product-session-jwt".to_string());
         let product = ProductContext::new("onramp.dot".to_string()).expect("valid product id");
-        let _ = host.backend_request(&product, call).await;
+        let _ = host
+            .backend_request(&product, call, Some("core-minted-session".to_string()))
+            .await;
 
         let head = head.await.expect("the recorder saw the request");
         assert_eq!(
             header_of(&head, "authorization").as_deref(),
-            Some("Bearer product-session-jwt"),
-            "the product's credential belongs in the standard header: {head}"
+            Some("Bearer core-minted-session"),
+            "the session the core attached belongs in the standard header: {head}"
         );
         assert_eq!(
             header_of(&head, HOST_AUTH_HEADER).as_deref(),
@@ -408,7 +412,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_product_without_a_credential_leaves_the_header_off() {
+    async fn a_backend_with_no_session_and_no_registry_token_gets_neither_header() {
         let (base, head) = spawn_recorder().await;
         let host = CliBackendHost {
             registry: BTreeMap::from([(
@@ -424,7 +428,7 @@ mod tests {
         let mut call = request("/a");
         call.backend = "recorder".to_string();
         let product = ProductContext::new("onramp.dot".to_string()).expect("valid product id");
-        let _ = host.backend_request(&product, call).await;
+        let _ = host.backend_request(&product, call, None).await;
 
         let head = head.await.expect("the recorder saw the request");
         assert_eq!(header_of(&head, "authorization"), None, "head: {head}");
@@ -434,20 +438,23 @@ mod tests {
     /// What the generated `Backend/request` example asserts on, so the example
     /// and the fixture it runs against cannot drift apart.
     #[tokio::test]
-    async fn the_echo_backend_reports_the_product_and_its_bearer() {
+    async fn the_echo_backend_reports_the_product_and_the_attached_session() {
         let host = CliBackendHost::from_env();
-        let mut call = request("/ok");
-        call.bearer = Some("session-token-the-backend-issued".to_string());
+        let call = request("/ok");
         let product = ProductContext::new("onramp.dot".to_string()).expect("valid product id");
 
         let response = host
-            .backend_request(&product, call)
+            .backend_request(
+                &product,
+                call,
+                Some("session-the-core-attached".to_string()),
+            )
             .await
             .expect("the echo backend answers");
         let body = String::from_utf8(response.body).expect("the echo body is text");
 
         assert!(
-            body.contains(r#""authorization":"Bearer session-token-the-backend-issued""#),
+            body.contains(r#""authorization":"Bearer session-the-core-attached""#),
             "body: {body}"
         );
         assert!(body.contains(r#""product":"onramp.dot""#), "body: {body}");

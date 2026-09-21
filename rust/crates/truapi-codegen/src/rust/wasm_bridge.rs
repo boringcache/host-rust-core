@@ -588,6 +588,14 @@ fn js_arg_expr(name: &str, ty: &TypeRef, ctx: &BridgeCtx<'_>) -> Result<String> 
     if is_string(ty) {
         return Ok(format!("JsValue::from_str(&{name})"));
     }
+    if is_optional_string(ty) {
+        // `undefined` rather than `null`: the generated TS types the parameter
+        // as optional, and a JS host reading it with `?? fallback` or a plain
+        // `if` should see the same absence a Rust `None` means.
+        return Ok(format!(
+            "{name}.map_or(JsValue::UNDEFINED, |value| JsValue::from_str(&value))"
+        ));
+    }
     if is_bytes(ty) {
         return Ok(format!("Uint8Array::from({name}.as_slice()).into()"));
     }
@@ -789,6 +797,10 @@ fn is_bytes(ty: &TypeRef) -> bool {
 
 fn is_optional_bytes(ty: &TypeRef) -> bool {
     matches!(ty, TypeRef::Option(inner) if is_bytes(inner))
+}
+
+fn is_optional_string(ty: &TypeRef) -> bool {
+    matches!(ty, TypeRef::Option(inner) if is_string(inner))
 }
 
 fn is_u8(ty: &TypeRef) -> bool {
