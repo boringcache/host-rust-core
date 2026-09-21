@@ -28,13 +28,14 @@ dwarf-debug-info = false
 [features]
 default = ["wasm-signing-host"]
 wasm-signing-host = []
-ws-bridge = ["dep:tokio", "dep:tokio-tungstenite", "dep:rand", "dep:base64"]
+ws-bridge = ["dep:tokio", "dep:tokio-tungstenite", "dep:rand"]
 
 [dependencies]
 truapi = { path = "../truapi" }
 truapi-platform = { path = "../truapi-platform" }
 truapi-macros = { path = "../truapi-macros" }
 async-trait = "0.1"
+base64 = "0.22"
 derive_more = { version = "2", features = ["debug", "display", "error", "from"] }
 futures = "0.3"
 futures-timer = "3"
@@ -78,7 +79,6 @@ subxt = { version = "0.50.3", default-features = false, features = ["native"] }
 subxt-rpcs = { version = "0.50.3", default-features = false, features = ["jsonrpsee", "native"] }
 frame-metadata = { version = "23", default-features = false, features = ["std", "current", "decode"] }
 scale-info = { version = "2.11", default-features = false, features = ["decode"] }
-base64 = { version = "0.22", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 futures-timer = { version = "3", features = ["wasm-bindgen"] }

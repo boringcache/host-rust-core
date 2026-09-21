@@ -6,6 +6,8 @@
 //! rather than normalize so no normalizer has to stay in step across the
 //! boundary.
 
+pub mod session;
+
 use truapi::latest::{
     BackendBody, BackendQueryItem, HostBackendError, HostBackendRequest, HostBackendResponse,
 };

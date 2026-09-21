@@ -10,9 +10,10 @@
 /// Connection-scoped, host-fed action streams.
 pub(crate) mod actions;
 mod allowances;
-/// Core-owned auth/session UI state machine.
 pub(crate) mod auth_state;
 mod authority;
+/// Core-owned auth/session UI state machine.
+pub(crate) mod backend_session;
 /// In-core Bulletin preimage submission over the shared Subxt client.
 pub(crate) mod bulletin_rpc;
 mod capabilities;
@@ -262,6 +263,9 @@ pub struct ProductRuntimeHost {
     pocket_platform: Option<Arc<dyn truapi_platform::PocketPlatform>>,
     /// Tunnel to the host's registered backends, when the host serves any.
     backend_host: Option<Arc<dyn truapi_platform::BackendHost>>,
+    /// Sessions this product execution holds for backends that authenticate a
+    /// person. Empty until a backend turns out to want one.
+    backend_sessions: crate::runtime::backend_session::BackendSessions,
 }
 
 impl ProductRuntimeHost {
@@ -286,6 +290,7 @@ impl ProductRuntimeHost {
             renderer: adapters.renderer,
             pocket_platform: adapters.pocket_platform,
             backend_host: adapters.backend_host,
+            backend_sessions: crate::runtime::backend_session::BackendSessions::default(),
         }
     }
 
@@ -419,6 +424,7 @@ impl ProductRuntimeHost {
             renderer,
             pocket_platform: None,
             backend_host: None,
+            backend_sessions: crate::runtime::backend_session::BackendSessions::default(),
         };
         (host, pairing_host)
     }
@@ -1026,6 +1032,24 @@ impl ProductRuntimeHost {
     /// The host's backend tunnel, or `Unsupported` when it registers none.
     fn backend_host<E>(&self) -> Result<Arc<dyn truapi_platform::BackendHost>, CallError<E>> {
         self.backend_host.clone().ok_or(CallError::Unsupported)
+    }
+
+    /// Sessions held for backends that authenticate a person.
+    pub(crate) fn backend_sessions(&self) -> &crate::runtime::backend_session::BackendSessions {
+        &self.backend_sessions
+    }
+
+    /// The host role's personhood prover, when it can reach the reserved
+    /// `peopl.<suffix>` member key.
+    ///
+    /// No role supplies one yet: a signing host has the key and a paired host
+    /// must ask the signer for it over SSO, and neither path is built. Until
+    /// one is, a backend that wants a person proven is called unauthenticated
+    /// and answers for itself.
+    pub(crate) fn personhood_prover(
+        &self,
+    ) -> Option<&dyn crate::runtime::backend_session::PersonhoodProver> {
+        None
     }
 
     fn chat_platform<E>(&self) -> Result<Arc<dyn truapi_platform::ChatPlatform>, CallError<E>> {

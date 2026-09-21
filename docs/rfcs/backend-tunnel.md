@@ -94,7 +94,21 @@ The same shape already runs in this repo: the CLI host holds the identity backen
 
 Whatever a handshake hands back is screened to [RFC 7235](https://www.rfc-editor.org/rfc/rfc7235#section-2.1) `token68` and bounded at 4096 bytes before it becomes a header, so a backend cannot fold a second header into the host's own request.
 
-**Open: the handshake itself.** Which handshake the core runs, how it learns that a backend wants one, and whether the person is asked before their personhood is proven to a deployer's backend are not settled here. The wire above does not depend on the answer: the product's request is unchanged either way, and the credential never becomes something a product can name.
+The handshake is two calls the core makes through this same tunnel, so it holds no origin of its own and the host authenticates itself on them exactly as it will on the product's:
+
+| | |
+| --- | --- |
+| `POST /api/v1/auth/challenge` | → `{ challenge }`, opaque bytes in base64url |
+| | the core proves the person over `context`, `message` = the challenge bytes |
+| `POST /api/v1/auth/redeem` | `{ challenge, proof, ring, productId }` → `{ token, expiresAtMs }` |
+
+`context` is the product id as UTF-8, which is the alias's namespace: one person reaching two products is two unlinkable aliases, and reaching one product twice is recognisably the same customer.
+
+**The core authenticates on first use of a backend**, not before and not on every call, and again once when a backend answers `401` to a call it authenticated — a token can go stale in a way its stated expiry did not predict, and the person is still a person. A backend that answers the challenge path with something that is not this handshake wants no session, and is not asked again.
+
+**Nothing prompts the person.** Which backends a host serves at all is the host vendor's decision and the registry is where it lives; a prompt would ask the person about a boundary they did not draw. What the proof discloses is an alias bound to the product and to nothing else.
+
+**Open: the proof itself.** A signing host holds the reserved `peopl.<suffix>` member key and can prove directly; a paired host has to ask the signer that holds it, which is an SSO round trip that does not exist yet. Until it does, a backend that wants a person proven is called unauthenticated and answers for itself.
 
 ### What comes back
 

@@ -8,7 +8,11 @@ use truapi::versioned::backend::{
 };
 use truapi::{CallContext, CallError};
 
-use crate::host_logic::backend::{screen_authorization, screen_request, screen_response};
+use crate::host_logic::backend::{screen_request, screen_response};
+use crate::runtime::backend_session::now_ms;
+
+/// The status that means the session the core attached is no longer good.
+const UNAUTHORIZED: u16 = 401;
 use crate::runtime::ProductRuntimeHost;
 
 #[truapi::async_trait]
@@ -26,17 +30,44 @@ impl Backend for ProductRuntimeHost {
 
         // Authenticating a backend that answers per person is the core's job,
         // not the product's and not the host's: nothing a product sends can
-        // reach this argument. No session source is wired in yet, so every
-        // call goes out with the host's credential alone.
-        let authorization: Option<String> = None;
-        if let Some(authorization) = &authorization {
-            screen_authorization(authorization).map_err(domain)?;
-        }
+        // reach this argument.
+        let authorization = match self.personhood_prover() {
+            Some(prover) => {
+                self.backend_sessions()
+                    .authorization(
+                        host.as_ref(),
+                        prover,
+                        &self.product,
+                        &inner.backend,
+                        now_ms(),
+                    )
+                    .await
+            }
+            None => None,
+        };
 
         let mut response = host
-            .backend_request(&self.product, inner, authorization)
+            .backend_request(&self.product, inner.clone(), authorization.clone())
             .await
             .map_err(domain)?;
+
+        // A backend refusing the session the core holds is saying the token is
+        // stale in a way its stated expiry did not predict. The person is
+        // still a person, so one more handshake settles it; a second refusal
+        // is the backend's answer and belongs to the product.
+        if response.status == UNAUTHORIZED
+            && authorization.is_some()
+            && let Some(prover) = self.personhood_prover()
+            && let Some(refreshed) = self
+                .backend_sessions()
+                .reauthenticate(host.as_ref(), prover, &self.product, &inner.backend)
+                .await
+        {
+            response = host
+                .backend_request(&self.product, inner, Some(refreshed))
+                .await
+                .map_err(domain)?;
+        }
         // The host owes the allowlist and the cap; this catches one that skips them.
         screen_response(&mut response).map_err(domain)?;
         Ok(HostBackendResponse::V1(response))
