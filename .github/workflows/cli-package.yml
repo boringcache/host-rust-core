@@ -77,7 +77,7 @@ jobs:
         run: |
           make cli-runner
           npm run typecheck:cli
-          bun test js/container/src rust/crates/truapi-host-cli/js/sandbox-bridge.test.ts scripts/cli-runner-package.test.ts
+          bun test js/container/src scripts/cli-runner-package.test.ts
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

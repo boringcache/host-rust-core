@@ -1,14 +1,15 @@
 //! Product-frame WebSocket bridge for the pairing host.
 //!
-//! Each WebSocket connection is one product: inbound binary frames are pushed
-//! into a [`ProductRuntime`] and its outgoing frames are written back as
-//! binary messages. One binary WS message carries exactly one SCALE
+//! Each WebSocket connection has a [`ProductRuntime`]. A page's SDK and
+//! permission connections share a [`ProductExecution`]. Inbound binary frames
+//! are dispatched and replies written back as binary messages. Each carries one SCALE
 //! `ProtocolMessage`, matching the browser transport's framing.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
@@ -30,8 +31,8 @@ use tracing::{debug, warn};
 use crate::bootstrap;
 use truapi_platform::ProductExecutionKind;
 use truapi_server::{
-    FrameSink, PairingHostRuntime, ProductContext, ProductRuntime, ProductRuntimeError,
-    SigningHostRuntime,
+    FrameSink, PairingHostRuntime, ProductContext, ProductExecution, ProductRuntime,
+    ProductRuntimeError, SigningHostRuntime,
 };
 
 /// Pause after a failed `accept()` before trying again.
@@ -62,7 +63,10 @@ pub struct ProductSelection {
     /// lifetime: the core reads it per connection, and chat is denied to a
     /// connection that opened as `App`.
     execution_kind: ProductExecutionKind,
+    executions: Mutex<HashMap<ExecutionKey, Weak<ProductExecution>>>,
 }
+
+type ExecutionKey = (u64, Option<String>, String);
 
 impl ProductSelection {
     /// Validate and normalize the initial product id.
@@ -73,6 +77,7 @@ impl ProductSelection {
         Ok(Arc::new(Self {
             current,
             execution_kind,
+            executions: Mutex::default(),
         }))
     }
 
@@ -85,23 +90,47 @@ impl ProductSelection {
     pub fn select(&self, product_id: String) -> Result<bool> {
         let product = ProductContext::new_with_execution(product_id, self.execution_kind)
             .map_err(|error| anyhow::anyhow!("invalid product id: {error}"))?;
-        Ok(self.current.send_if_modified(|current| {
+        let mut executions = self.executions.lock().expect("execution registry poisoned");
+        let changed = self.current.send_if_modified(|current| {
             if current == &product {
                 false
             } else {
                 *current = product;
                 true
             }
-        }))
+        });
+        if changed {
+            executions.clear();
+        }
+        Ok(changed)
     }
 
     fn subscribe(&self) -> watch::Receiver<ProductContext> {
         self.current.subscribe()
     }
+
+    fn execution(
+        &self,
+        runtime: &dyn ProductRuntimeFactory,
+        key: Option<ExecutionKey>,
+    ) -> Arc<ProductExecution> {
+        let mut executions = self.executions.lock().expect("execution registry poisoned");
+        let product = self.current.borrow().clone();
+        let Some(key) = key else {
+            return Arc::new(runtime.product_execution(product));
+        };
+        executions.retain(|_, execution| execution.strong_count() > 0);
+        if let Some(execution) = executions.get(&key).and_then(Weak::upgrade) {
+            return execution;
+        }
+        let execution = Arc::new(runtime.product_execution(product));
+        executions.insert(key, Arc::downgrade(&execution));
+        execution
+    }
 }
 
 pub trait ProductRuntimeFactory: Send + Sync + 'static {
-    fn product_runtime(&self, product: ProductContext, sink: Arc<dyn FrameSink>) -> ProductRuntime;
+    fn product_execution(&self, product: ProductContext) -> ProductExecution;
 
     /// Subscribe to a signal that invalidates existing product connections.
     fn connection_reset(&self) -> Option<watch::Receiver<u64>> {
@@ -127,14 +156,14 @@ impl ConnectionRuntime for ProductRuntime {
 }
 
 impl ProductRuntimeFactory for PairingHostRuntime {
-    fn product_runtime(&self, product: ProductContext, sink: Arc<dyn FrameSink>) -> ProductRuntime {
-        PairingHostRuntime::product_runtime(self, product, sink)
+    fn product_execution(&self, product: ProductContext) -> ProductExecution {
+        PairingHostRuntime::product_execution(self, product)
     }
 }
 
 impl ProductRuntimeFactory for SigningHostRuntime {
-    fn product_runtime(&self, product: ProductContext, sink: Arc<dyn FrameSink>) -> ProductRuntime {
-        SigningHostRuntime::product_runtime(self, product, sink)
+    fn product_execution(&self, product: ProductContext) -> ProductExecution {
+        SigningHostRuntime::product_execution(self, product)
     }
 }
 
@@ -168,11 +197,11 @@ impl SwitchableSigningRuntime {
 }
 
 impl ProductRuntimeFactory for SwitchableSigningRuntime {
-    fn product_runtime(&self, product: ProductContext, sink: Arc<dyn FrameSink>) -> ProductRuntime {
+    fn product_execution(&self, product: ProductContext) -> ProductExecution {
         self.current
             .read()
             .expect("runtime lock poisoned")
-            .product_runtime(product, sink)
+            .product_execution(product)
     }
 
     fn connection_reset(&self) -> Option<watch::Receiver<u64>> {
@@ -552,6 +581,37 @@ fn check_origin(
     Err(rejection)
 }
 
+#[allow(clippy::result_large_err)]
+fn execution_key(
+    request: &Request,
+    generation: u64,
+) -> Result<Option<ExecutionKey>, ErrorResponse> {
+    let mut id = None;
+    for field in request.uri().query().unwrap_or_default().split('&') {
+        let (name, value) = field.split_once('=').unwrap_or((field, ""));
+        if name != "execution" {
+            continue;
+        }
+        if id.is_some()
+            || value.is_empty()
+            || value.len() > 128
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            let mut error = ErrorResponse::new(Some("invalid execution identifier".into()));
+            *error.status_mut() = StatusCode::BAD_REQUEST;
+            return Err(error);
+        }
+        id = Some(value.to_string());
+    }
+    let origin = request
+        .headers()
+        .get(header::ORIGIN)
+        .map(|value| value.to_str().unwrap_or_default().to_string());
+    Ok(id.map(|id| (generation, origin, id)))
+}
+
 fn origin_host(origin: &str) -> Option<&str> {
     let authority = origin.split_once("://")?.1;
     match authority.strip_prefix('[') {
@@ -606,19 +666,23 @@ where
     // only cause an extra reconnect, never leave a connection on stale state.
     let reset = runtime.connection_reset();
     let product_updates = selected_product.subscribe();
+    let generation = reset.as_ref().map_or(0, |receiver| *receiver.borrow());
+    let mut key = None;
     #[allow(clippy::result_large_err)]
-    let ws = accept_hdr_async(stream, move |request: &Request, response: Response| {
-        check_origin(peer, request, response)
+    let ws = accept_hdr_async(stream, |request: &Request, response: Response| {
+        let response = check_origin(peer, request, response)?;
+        key = execution_key(request, generation)?;
+        Ok(response)
     })
     .await?;
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<Message>();
-    let product = product_updates.borrow().clone();
     let sink = Arc::new(WsFrameSink {
         outbound: outbound_tx.clone(),
     });
-    let product_runtime = Arc::new(runtime.product_runtime(product, sink));
+    let execution = selected_product.execution(runtime.as_ref(), key);
+    let product_runtime = Arc::new(execution.product_runtime(sink));
 
-    drive_connection(
+    let result = drive_connection(
         ws,
         product_runtime,
         reset,
@@ -626,7 +690,9 @@ where
         outbound_tx,
         outbound_rx,
     )
-    .await
+    .await;
+    drop(execution);
+    result
 }
 
 async fn drive_connection<S>(
@@ -705,11 +771,7 @@ mod tests {
     struct UnusedRuntimeFactory;
 
     impl ProductRuntimeFactory for UnusedRuntimeFactory {
-        fn product_runtime(
-            &self,
-            _product: ProductContext,
-            _sink: Arc<dyn FrameSink>,
-        ) -> ProductRuntime {
+        fn product_execution(&self, _product: ProductContext) -> ProductExecution {
             panic!("HTTP requests and rejected handshakes must not create a product runtime")
         }
     }
@@ -789,6 +851,76 @@ mod tests {
         )?;
         let spawner: truapi_server::subscription::Spawner = Arc::new(|_| {});
         Ok(Arc::new(SigningHostRuntime::new(platform, config, spawner)))
+    }
+
+    #[test]
+    fn page_connections_share_an_execution_until_the_last_connection_closes() -> Result<()> {
+        let runtime = signing_runtime()?;
+        let product = ProductSelection::new("page.testnet".into(), ProductExecutionKind::App)?;
+        let key = (0, Some("http://localhost:3000".into()), "page".into());
+        let sdk = product.execution(runtime.as_ref(), Some(key.clone()));
+        let permission = product.execution(runtime.as_ref(), Some(key.clone()));
+        let other_page =
+            product.execution(runtime.as_ref(), Some((0, key.1.clone(), "other".into())));
+        let other_origin = product.execution(
+            runtime.as_ref(),
+            Some((0, Some("http://localhost:3001".into()), key.2.clone())),
+        );
+        let reset = product.execution(runtime.as_ref(), Some((1, key.1.clone(), key.2.clone())));
+        let raw = product.execution(runtime.as_ref(), None);
+        let another_raw = product.execution(runtime.as_ref(), None);
+        assert_eq!(
+            [
+                Arc::ptr_eq(&sdk, &permission),
+                Arc::ptr_eq(&sdk, &other_page),
+                Arc::ptr_eq(&sdk, &other_origin),
+                Arc::ptr_eq(&sdk, &reset),
+                Arc::ptr_eq(&raw, &another_raw),
+            ],
+            [true, false, false, false, false],
+        );
+
+        let ended = Arc::downgrade(&sdk);
+        drop(sdk);
+        assert!(ended.upgrade().is_some());
+        drop(permission);
+        assert!(ended.upgrade().is_none());
+        let reloaded = product.execution(runtime.as_ref(), Some(key.clone()));
+        assert!(!Weak::ptr_eq(&ended, &Arc::downgrade(&reloaded)));
+        product.select("other.testnet".into())?;
+        product.select("page.testnet".into())?;
+        let switched = product.execution(runtime.as_ref(), Some(key));
+        assert!(!Arc::ptr_eq(&reloaded, &switched));
+        Ok(())
+    }
+
+    #[test]
+    fn execution_query_is_unambiguous_and_scoped_to_the_browser_origin() -> Result<()> {
+        let mut request =
+            "ws://127.0.0.1/?existing=value&execution=page-123".into_client_request()?;
+        request
+            .headers_mut()
+            .insert(header::ORIGIN, "http://localhost:3000".parse()?);
+        assert_eq!(
+            execution_key(&request, 7).unwrap(),
+            Some((7, Some("http://localhost:3000".into()), "page-123".into()))
+        );
+        let raw = "ws://127.0.0.1/".into_client_request()?;
+        assert_eq!(execution_key(&raw, 7).unwrap(), None);
+        for query in [
+            "execution",
+            "execution=",
+            "execution=a&execution=b",
+            "execution=%20",
+            &format!("execution={}", "a".repeat(129)),
+        ] {
+            let request = format!("ws://127.0.0.1/?{query}").into_client_request()?;
+            assert_eq!(
+                execution_key(&request, 0).unwrap_err().status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        Ok(())
     }
 
     #[test]

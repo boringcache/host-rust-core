@@ -295,13 +295,17 @@ impl PairingHostRuntime {
         product: ProductContext,
         sink: Arc<dyn FrameSink>,
     ) -> ProductRuntime {
-        ProductRuntime::new(
-            self.services.clone(),
-            self.pairing_host.clone(),
+        self.product_execution(product).product_runtime(sink)
+    }
+
+    /// Create one product execution whose connections share temporary permissions.
+    pub fn product_execution(&self, product: ProductContext) -> ProductExecution {
+        ProductExecution {
+            services: self.services.clone(),
+            authority: self.pairing_host.clone(),
             product,
-            ConnectionAdapters::from_services(&self.services),
-            sink,
-        )
+            adapters: ConnectionAdapters::from_services(&self.services),
+        }
     }
 
     /// Build a product-scoped administration handle from this pairing host.
@@ -647,31 +651,26 @@ impl SigningHostRuntime {
         product: ProductContext,
         sink: Arc<dyn FrameSink>,
     ) -> ProductRuntime {
-        ProductRuntime::new(
-            self.services.clone(),
-            self.signing_host.clone(),
-            product,
-            ConnectionAdapters::from_services(&self.services),
-            sink,
-        )
+        self.product_execution(product).product_runtime(sink)
     }
 
-    /// Build one product connection with adapters scoped to one native
-    /// executable while sharing this runtime's authentication and services.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "ws-bridge"))]
-    pub(crate) fn product_runtime_with(
+    /// Create one product execution whose connections share temporary permissions.
+    pub fn product_execution(&self, product: ProductContext) -> ProductExecution {
+        self.product_execution_with(product, ConnectionAdapters::from_services(&self.services))
+    }
+
+    /// Use adapters already owned by a native product execution.
+    pub(crate) fn product_execution_with(
         &self,
         product: ProductContext,
         adapters: ConnectionAdapters,
-        sink: Arc<dyn FrameSink>,
-    ) -> ProductRuntime {
-        ProductRuntime::new(
-            self.services.clone(),
-            self.signing_host.clone(),
+    ) -> ProductExecution {
+        ProductExecution {
+            services: self.services.clone(),
+            authority: self.signing_host.clone(),
             product,
             adapters,
-            sink,
-        )
+        }
     }
 
     /// Build a product-scoped administration handle from this signing host.
@@ -989,9 +988,9 @@ impl SigningHostRuntime {
     }
 }
 
-/// Adapters scoped to one product connection: the platform serving its
-/// syscalls, the optional native Chat adapter, and the connection's
-/// host-fed action streams. Non-native connections use [`Self::from_services`].
+/// Adapters shared by one execution's connections: its platform, optional
+/// native Chat adapter, and host-fed action streams. Non-native executions
+/// use [`Self::from_services`].
 ///
 /// `pocket_platform` is the same kind of optional adapter for the card
 /// collection.
@@ -1024,6 +1023,29 @@ impl ConnectionAdapters {
             renderer: Arc::new(ActionChannel::renderer()),
             pocket_platform: services.pocket_platform(),
         }
+    }
+}
+
+/// A product execution shared by its SDK and internal permission connections.
+/// Each connection keeps its own dispatcher, replies, and cancellation state.
+#[derive(Clone)]
+pub struct ProductExecution {
+    services: Arc<RuntimeServices>,
+    authority: Arc<dyn ProductAuthority>,
+    product: ProductContext,
+    adapters: ConnectionAdapters,
+}
+
+impl ProductExecution {
+    /// Open an independent connection using this execution's adapters and grants.
+    pub fn product_runtime(&self, sink: Arc<dyn FrameSink>) -> ProductRuntime {
+        ProductRuntime::new(
+            self.services.clone(),
+            self.authority.clone(),
+            self.product.clone(),
+            self.adapters.clone(),
+            sink,
+        )
     }
 }
 
@@ -1906,6 +1928,116 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[test]
+    fn execution_connections_share_one_use_permissions_and_keep_sinks_separate() {
+        use truapi::CallError;
+        use truapi_platform::PermissionDecision;
+
+        for signing in [false, true] {
+            let platform = Arc::new(StubPlatform {
+                remote_permission_denied: true,
+                remote_permission_decisions: Mutex::new([PermissionDecision::AllowOnce].into()),
+                ..Default::default()
+            });
+            let (config, product) = runtime_config("fetch.dot");
+            let (execution, separate_execution) = if signing {
+                let host = activated_signing_runtime(platform.clone());
+                (
+                    host.product_execution(product.clone()),
+                    host.product_execution(product),
+                )
+            } else {
+                let host = PairingHostRuntime::new(platform.clone(), config, test_spawner());
+                (
+                    host.product_execution(product.clone()),
+                    host.product_execution(product),
+                )
+            };
+            let public_sink = Arc::new(RecordingSink::default());
+            let private_sink = Arc::new(RecordingSink::default());
+            let separate_sink = Arc::new(RecordingSink::default());
+            let public = execution.product_runtime(public_sink.clone());
+            let private = execution.clone().product_runtime(private_sink.clone());
+            let separate = separate_execution.product_runtime(separate_sink.clone());
+            futures::executor::block_on(async {
+                let frame = |method, domain| {
+                    let ids = request_ids(method).expect("known permission request");
+                    ProtocolMessage {
+                        request_id: "permission:1".into(),
+                        payload: Payload {
+                            trait_id: ids.trait_id,
+                            method_id: ids.method_id,
+                            message_type: crate::frame::MESSAGE_TYPE_REQUEST,
+                            value: permissions::RemotePermissionRequest::V1(network_permission(&[
+                                domain,
+                            ]))
+                            .encode(),
+                        },
+                    }
+                };
+                let response = |mut frame: ProtocolMessage, granted| {
+                    frame.payload.message_type = crate::frame::MESSAGE_TYPE_RESPONSE;
+                    frame.payload.value = Ok::<_, CallError<permissions::RemotePermissionError>>(
+                        permissions::RemotePermissionResponse::V1(RemotePermissionResponse {
+                            granted,
+                        }),
+                    )
+                    .encode();
+                    frame.encode()
+                };
+                let request = frame("permissions_request_remote_permission", "api.example.com");
+                let authorize = frame("permissions_authorize_remote_permission", "api.example.com");
+                public.receive_frame(request.encode()).await.unwrap();
+                public.dispose();
+                private.receive_frame(authorize.encode()).await.unwrap();
+                private.receive_frame(authorize.encode()).await.unwrap();
+
+                platform
+                    .remote_permission_decisions
+                    .lock()
+                    .unwrap()
+                    .push_back(PermissionDecision::AllowOnce);
+                let isolated_request =
+                    frame("permissions_request_remote_permission", "other.example.com");
+                let isolated_authorize = frame(
+                    "permissions_authorize_remote_permission",
+                    "other.example.com",
+                );
+                private
+                    .receive_frame(isolated_request.encode())
+                    .await
+                    .unwrap();
+                separate
+                    .receive_frame(isolated_authorize.encode())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    (
+                        public_sink.frames.lock().unwrap().clone(),
+                        private_sink.frames.lock().unwrap().clone(),
+                        separate_sink.frames.lock().unwrap().clone(),
+                        platform.remote_permission_requests.lock().unwrap().clone(),
+                    ),
+                    (
+                        vec![response(request, true)],
+                        vec![
+                            response(authorize.clone(), true),
+                            response(authorize, false),
+                            response(isolated_request, true),
+                        ],
+                        vec![response(isolated_authorize, false)],
+                        vec![
+                            network_permission(&["api.example.com"]),
+                            network_permission(&["api.example.com"]),
+                            network_permission(&["other.example.com"]),
+                            network_permission(&["other.example.com"]),
+                        ],
+                    )
+                );
+            });
+        }
     }
 
     #[test]
@@ -2888,6 +3020,44 @@ mod tests {
         assert_eq!(services.worker_ledger.count("worker.dot"), 0);
         drop(render);
         assert_eq!(services.worker_ledger.count("worker.dot"), 0);
+    }
+
+    #[test]
+    fn disposing_one_execution_connection_preserves_the_others_subscription() {
+        let (config, _) = runtime_config("worker.dot");
+        let product = ProductContext::new_with_execution(
+            "worker.dot".into(),
+            truapi_platform::ProductExecutionKind::Worker,
+        )
+        .unwrap();
+        let host =
+            PairingHostRuntime::new(Arc::new(StubPlatform::default()), config, test_spawner());
+        let execution = host.product_execution(product);
+        let first = execution.product_runtime(Arc::new(RecordingSink::default()));
+        let second_sink = Arc::new(RecordingSink::default());
+        let second = execution.product_runtime(second_sink.clone());
+        let mut first_render = start_render(&first, "loyalty");
+        let mut second_render = start_render(&second, "rewards");
+        first.dispose();
+        let first_ended = matches!(
+            poll_render(&mut first_render),
+            core::task::Poll::Ready(None)
+        );
+        let second_pending = matches!(poll_render(&mut second_render), core::task::Poll::Pending);
+        deliver_render_frame(
+            &second,
+            &render_request_id(&second_sink, 0),
+            crate::frame::MESSAGE_TYPE_INTERRUPT,
+            crate::frame::encode_clean_interrupt(),
+        );
+        let second_ended = matches!(
+            poll_render(&mut second_render),
+            core::task::Poll::Ready(None)
+        );
+        assert_eq!(
+            (first_ended, second_pending, second_ended),
+            (true, true, true)
+        );
     }
 
     #[test]
