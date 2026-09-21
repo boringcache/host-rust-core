@@ -17,3 +17,4 @@ typealias TrUAPIHostRingLocation = RingLocation
 typealias TrUAPIHostShape = Shape
 typealias TrUAPIHostHorizontalAlignment = HorizontalAlignment
 typealias TrUAPIHostVerticalAlignment = VerticalAlignment
+typealias TrUAPIPermissionDecision = PermissionDecision

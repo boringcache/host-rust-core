@@ -198,10 +198,6 @@ private extension ChatRustRuntime {
     func startRuntime(
         messagingSupport: ProductsNativeApi.MessagingSupport
     ) async throws {
-        let jsEngine = try await bootEngine()
-
-        try checkNotDisposed()
-
         // Bound before the bridge starts, so the core can never reach a surface
         // with no binding.
         chatSurface.bind(messagingSupport)
@@ -210,16 +206,13 @@ private extension ChatRustRuntime {
         executionModel = model
         startRoomsForwarding(chatMessaging: chatSurface, execution: model.execution)
 
-        let bootstrapScript = try await model.startBridge()
-        let scriptsFactory = ChatRustRuntimeScriptsFactory(bootstrapScript: bootstrapScript)
-
-        // Factory order is load-bearing: the bootstrap publishes
-        // __truapi_localhost, then the container lockdown gates WebSocket to
-        // exactly that URL.
-        for script in try scriptsFactory.makeScripts() {
-            try checkNotDisposed()
-            try await jsEngine.evaluate(script)
-        }
+        let bootstrapScript = try model.startBridge()
+        let scriptsFactory = RustRuntimeScriptsFactory(bootstrapScript: bootstrapScript)
+        let jsEngine = try await bootEngine(
+            scripts: scriptsFactory.makeScripts(),
+            osPermissionAsker: model.osPermissionAsker
+        )
+        try checkNotDisposed()
 
         let modBridge = JSESModuleBridge(engine: jsEngine)
         await modBridge.install()
@@ -232,19 +225,24 @@ private extension ChatRustRuntime {
         logger.debug("Rust chat runtime started for: \(productUrl)")
     }
 
-    func bootEngine() async throws -> JSEngineProtocol {
+    func bootEngine(
+        scripts: [JSEngineScript],
+        osPermissionAsker: OSPermissionAsking
+    ) async throws -> JSEngineProtocol {
         let jsEngine = engineFactory()
-        try await jsEngine.initialize()
-
-        guard await jsEngine.getState() == .ready else {
-            throw ScriptExecutorError.engineInitFailed
-        }
-
-        // Disposed while booting: dispose captured nil for the engine, so
-        // this start is the only owner left — destroy before bailing.
-        guard !disposed else {
+        do {
+            await jsEngine.registerJSDeviceCapabilityHandler(
+                osPermissionAsker.makeDeviceCapabilityHandler()
+            )
+            try checkNotDisposed()
+            try await jsEngine.initialize(with: scripts)
+            guard await jsEngine.getState() == .ready else {
+                throw ScriptExecutorError.engineInitFailed
+            }
+            try checkNotDisposed()
+        } catch {
             await jsEngine.destroy()
-            throw CancellationError()
+            throw error
         }
 
         let monitor = JSEngineMonitor(

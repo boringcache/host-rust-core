@@ -14,6 +14,7 @@ func makeChatBridgeDependencies(
         productId: productId,
         executionKind: .worker,
         permissionGuard: MockPermissionGuard(),
+        osPermissionAsker: MockOSPermissionAsker(),
         notificationScheduler: MockNotificationScheduler(),
         navigationRouter: MockNavigationRouter(),
         chainRegistry: MockChainRegistry(),

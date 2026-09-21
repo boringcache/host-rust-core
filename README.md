@@ -64,6 +64,8 @@ requests after a bounded deadline; pass `requestTimeoutMs` to `createTransport` 
 
 See [`js/packages/truapi/README.md`](js/packages/truapi/README.md) for the full client reference.
 
+The [permission model](docs/rfcs/0002-permission-model.md) separates outbound domain access from `OpenUrl` external navigation and requires `Notifications` for push delivery. Hosts preserve the user's `AllowOnce`, `AllowAlways`, or `Deny` choice; Rust owns one-use grants for Rust-backed executions.
+
 ## Repository layout
 
 ```
@@ -296,6 +298,7 @@ where each tree came from and at which revision.
 ```bash
 scripts/refresh-host-import.sh status ios     # how far behind, and what differs
 scripts/refresh-host-import.sh refresh ios    # take the new tree, re-apply adaptations
+scripts/refresh-host-import.sh backport ios   # what this tree owes the source
 ```
 
 `refresh` replaces the tree with the source's, re-applies this repository's
@@ -306,6 +309,15 @@ did not apply or has been adopted upstream.
 
 A clean apply is staged for review. A conflicted one is left unmerged, so git
 refuses to commit it until someone decides which side is right.
+
+`refresh` moves changes one way, from the source into this tree. `backport`
+answers the other direction: of everything this tree has changed, which is app
+code the source does not have. The rest, the CI actions and the manifests that
+resolve the core from here, exists because the tree lives in this repository,
+and is listed per host in `hosts/imports.json` under `infrastructure`.
+
+`--patch <file>` writes the owed changes with the `hosts/<host>/` prefix
+stripped, so they apply at the root of the source repository.
 
 ### Working on the iOS host
 
