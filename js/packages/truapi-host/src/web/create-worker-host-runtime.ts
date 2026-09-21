@@ -351,8 +351,8 @@ function debuggerBuildAllows(): boolean {
 /**
  * Which of the two production verdicts applies. Pure, and exported for the same
  * reason {@link resolveDebuggerEnablement} is: the caller reads
- * `import.meta.env`, which a bundler substitutes and a test runner cannot, so
- * neither the build value nor the DEV gate can be varied from a test.
+ * `import.meta.env`, whose build value a bundler substitutes and a test runner
+ * cannot, so the build half cannot be varied from a test.
  *
  * The build half is the one that matters and the one that is easy to drop. The
  * env var is substituted at build time, so it is still readable in a production
@@ -391,12 +391,11 @@ function readDebuggerEnablement(
 
 /**
  * Resolve the dev-build switches into one verdict. Pure, and exported so the
- * precedence is testable: the caller reads `import.meta.env.DEV`, which a bundler
- * substitutes and a test runner cannot, so the live path cannot reach this branch
- * under `bun test` at all.
+ * precedence can be asserted against a build value, which a bundler substitutes
+ * and a test runner cannot supply.
  *
- * `fromOption` is `undefined` when the embedder said nothing, `null` or `""` when
- * it explicitly asked for no dial, and a URL when it asked for one.
+ * `fromOption` is `undefined` when the embedder said nothing, and a URL when it
+ * asked for one. Anything else, `null` and `""` included, is an explicit refusal.
  *
  * Precedence:
  *
@@ -417,10 +416,12 @@ export function resolveDebuggerEnablement(
   fromOption: string | null | undefined,
   fromBuild: string | null,
 ): DebuggerEnablement {
-  if (fromOption === null || fromOption === "")
-    return { url: null, reason: "not-configured" };
-  if (typeof fromOption === "string")
+  if (typeof fromOption === "string" && fromOption !== "")
     return refuseUnlessLoopback(fromOption, "enabled-from-option");
+  // Only an omitted option falls through to the build. Anything else the
+  // embedder passed is a refusal, including the `false` a JS host or a
+  // `wanted && url` expression yields, which must not turn the tap on.
+  if (fromOption !== undefined) return { url: null, reason: "not-configured" };
   if (fromBuild !== null)
     return refuseUnlessLoopback(fromBuild, "enabled-from-build");
   return { url: null, reason: "not-configured" };

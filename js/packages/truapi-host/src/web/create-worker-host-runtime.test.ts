@@ -70,10 +70,9 @@ describe("debugger enablement reporting", () => {
   });
 });
 
-// The dev-build branch, which the suite above cannot reach: it gates on
-// `import.meta.env.DEV`, a token a bundler substitutes and `bun test` leaves
-// undefined, so the live call always takes the production path here. The pure
-// seam is where the precedence can actually be asserted.
+// The pure seam, which is where precedence against a *build* value can be
+// asserted: a bundler substitutes that one and `bun test` cannot supply it.
+// The DEV gate itself is driven live further down.
 describe("debugger switch precedence", () => {
   const BUILD = "ws://127.0.0.1:9231";
 
@@ -96,6 +95,19 @@ describe("debugger switch precedence", () => {
   // The case that is easy to fold in with "omitted". If null fell through to the
   // build, a host compiled with a URL could not refuse the dial short of being
   // rebuilt - so a host has no way to turn the tap off for its own users.
+  // Same reasoning as the null case, for the value a host that is not writing
+  // TypeScript actually produces. `wanted && url` yields `false`, and falling
+  // through to the build there turns the tap on for a host that asked for it
+  // off, which is the opposite of what the option is for.
+  it("treats any non-URL the host passed as OFF, beating the build", () => {
+    expect(
+      resolveDebuggerEnablement(false as unknown as string, BUILD),
+    ).toEqual({
+      url: null,
+      reason: "not-configured",
+    });
+  });
+
   it("treats an explicit null or empty string as OFF, beating the build", () => {
     expect(resolveDebuggerEnablement(null, BUILD)).toEqual({
       url: null,
@@ -293,5 +305,43 @@ describe("putting a dial into service", () => {
   it("is inert where there is no document", () => {
     delete g.document;
     expect(() => dial(ENDPOINT)).not.toThrow();
+  });
+});
+
+// The dev branch, driven end to end. `import.meta.env.DEV` is a bundler token,
+// but under `bun test` `import.meta.env` is an ordinary object, so the live
+// gate can be opened from here. Without this, deleting the one line that hands
+// the resolved dial to the worker leaves the whole suite green: every other
+// `debuggerUrl` assertion in the repo asserts `null`.
+describe("a dev build hands the resolved dial to the worker", () => {
+  const ENDPOINT = "ws://127.0.0.1:9231";
+  const env = (import.meta as unknown as { env: Record<string, unknown> }).env;
+  let wasDev: unknown;
+
+  beforeEach(() => {
+    wasDev = env.DEV;
+    env.DEV = true;
+  });
+
+  afterEach(() => {
+    env.DEV = wasDev;
+  });
+
+  it("carries the host's dial through to init", async () => {
+    const worker = new FakeWorker();
+    await readyRuntime(worker, { debugger: ENDPOINT });
+
+    const init = worker.messages.find((m) => m.kind === "init");
+    expect(init).toMatchObject({ debuggerUrl: ENDPOINT });
+  });
+
+  it("carries no dial when the host refused one", async () => {
+    // Paired with the case above so a runtime hard-coded to either answer
+    // fails one of them.
+    const worker = new FakeWorker();
+    await readyRuntime(worker, { debugger: null });
+
+    const init = worker.messages.find((m) => m.kind === "init");
+    expect(init).toMatchObject({ debuggerUrl: null });
   });
 });
