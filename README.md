@@ -36,6 +36,8 @@ curl -fsSL https://raw.githubusercontent.com/paritytech/host-rust-core/main/scri
 
 Prebuilt for macOS on Apple silicon and Linux on x86_64 and arm64. No Rust toolchain or checkout needed, and it keeps itself up to date. See the [`truapi-host-cli` guide](rust/crates/truapi-host-cli/README.md) for the commands, the terminal UI, and product scripts.
 
+Product scripts and `truapi-host dev` use the same web API permission checks from `js/container`. Dev loads the container through a blocking script tag in your existing browser. Scripts run in Bun and retain filesystem, environment and process access.
+
 ## Usage
 
 `@parity/truapi` is the low-level generated protocol client. Product apps should normally use a higher-level product SDK, such as [`paritytech/product-sdk`](https://github.com/paritytech/product-sdk), while SDK and host-integration layers can depend on this package directly.
@@ -264,15 +266,16 @@ reaches it through a development-only `<script>` tag:
 )}
 ```
 
-The host serves the same bootstrap script as the native hosts. It publishes the
-WebSocket URL and token in `window.__truapi_localhost`; the TrUAPI SDK opens the
-connection on the first API call. After a disconnect, the next call opens a new
-connection without reloading the page. Older SDKs use the provided
-`window.__HOST_API_PORT__` adapter and require a page reload after a disconnect.
-The script needs no imports or environment variables.
-TCP frame connections are accepted only from loopback peers, and browser
-WebSocket origins must also name localhost or a loopback IP. WebSocket is not
-subject to CORS, and confirmations here are auto-approved.
+The host serves that script itself, so the page needs no package, no imports,
+and no environment variables. It installs the SDK bridge and the shared browser
+container before product code runs. Keep the tag before application scripts, without `async` or `defer`.
+The container shares one connection for SDK calls and permission checks. Reload
+the page after a disconnect. It routes fetch, XHR and WebSocket permission checks to Rust.
+WebRTC and camera/microphone access use the same live permission checks.
+`/script` shares these wrappers for the APIs available in Bun. TCP frame
+connections are accepted only from loopback peers, and browser WebSocket
+origins must also name localhost or a loopback IP. WebSocket is not subject to
+CORS, and confirmations here are auto-approved.
 
 The CLI owns the wrapped command's process group on Unix. On shutdown it sends
 SIGTERM to the group, waits up to five seconds, then sends SIGKILL if a

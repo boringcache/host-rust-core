@@ -1,4 +1,4 @@
-//! Shared browser bootstrap for native hosts and the development CLI.
+//! Browser bootstrap shared by the native hosts.
 
 const SOURCE: &str = include_str!("bootstrap/localhost-bridge.js");
 const URL_PLACEHOLDER: &str = "__TRUAPI_BRIDGE_URL__";

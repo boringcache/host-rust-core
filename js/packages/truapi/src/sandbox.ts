@@ -29,7 +29,7 @@ export type ConnectionStatus = "disconnected" | "connecting" | "connected";
 
 declare global {
   interface Window {
-    /** Localhost WebSocket endpoint published by native hosts and the CLI. */
+    /** Localhost WebSocket endpoint published by native hosts. */
     __truapi_localhost?: { url: string; token: string };
     /** Set by webview hosts (Polkadot Desktop / Mobile) to mark the embedding. */
     __HOST_WEBVIEW_MARK__?: boolean;
