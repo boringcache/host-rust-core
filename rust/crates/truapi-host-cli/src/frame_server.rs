@@ -455,7 +455,7 @@ async fn serve_bridge_script(stream: &mut TcpStream, head: &[u8], endpoint: &str
         Some(bootstrap::PATH) => http_response(
             "200 OK",
             "application/javascript; charset=utf-8",
-            &bootstrap::script(endpoint),
+            &truapi_server::bootstrap::script(endpoint, ""),
         ),
         _ => http_response(
             "404 Not Found",

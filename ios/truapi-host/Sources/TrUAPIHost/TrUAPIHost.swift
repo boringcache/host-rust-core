@@ -9,9 +9,8 @@
 // `LocalhostBridgeBootstrap` helper used to publish an execution's WS endpoint.
 //
 // Products running inside a `WKWebView` connect to the Rust core via the
-// localhost WebSocket bridge. The bootstrap script publishes the URL
-// (`ws://127.0.0.1:<port>/?t=<token>`) and a MessagePort-shaped compatibility
-// object that proxies the product's existing webview transport onto it.
+// localhost WebSocket bridge. The bootstrap publishes its endpoint and the
+// `window.__HOST_API_PORT__` messaging port used by `@parity/truapi`.
 
 import Foundation
 

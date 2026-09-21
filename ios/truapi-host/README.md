@@ -242,7 +242,7 @@ current tree of an open render stream.
 
 ```text
 product app in WKWebView
-  Uint8Array frames via @parity/truapi createWebSocketProvider
+  Uint8Array frames via @parity/truapi's injected host port
            |
            v   ws://127.0.0.1:<port>/?t=<token>
 TrUAPIProductExecution.startWsBridge()
@@ -512,7 +512,7 @@ execution.close()
 runtime.disconnect()
 ```
 
-The product page reads `window.__truapi_localhost.url` (set by the bootstrap script) and passes it to `@parity/truapi`'s `createWebSocketProvider(url)`.
+The `@parity/truapi` SDK uses `window.__HOST_API_PORT__`, which the bootstrap replaces after a disconnect so later calls can reconnect.
 
 The shared container captures a private WebSocket connection to the product execution and asks Rust to authorize each fetch or XHR before sending it, and each remote WebSocket before connecting. It parses the URL with captured browser primitives and sends its hostname to `authorize_remote_permission`; Rust normalizes and checks the domain. Swift supplies the endpoint and handles native permission prompts; it does not relay individual network permission messages. An upfront permission request and a network operation are separate, so an Allow once decision is consumed by the next permitted operation rather than persisted.
 

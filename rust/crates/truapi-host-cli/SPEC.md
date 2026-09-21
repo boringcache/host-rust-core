@@ -472,11 +472,12 @@ The product includes a development-only blocking tag before product code:
 ```
 
 The JavaScript is the one every native host injects, rendered by
-`truapi_server::bootstrap`. It publishes the endpoint on
-`window.__truapi_localhost`, a port over the same-port WebSocket on
-`window.__HOST_API_PORT__`, the native-webview marker, and the
+`truapi_server::bootstrap`. It stores the WebSocket URL and token in
+`window.__truapi_localhost` and exposes a messaging port at
+`window.__HOST_API_PORT__`. HTTP and WebSocket share the same TCP port.
+The script also sets the native-webview marker, installs the
 `window.__pauseConnections__` / `window.__resumeConnections__` lifecycle hooks,
-then dispatches `truapi-native-ready`. Frames posted before the WebSocket opens
+and dispatches `truapi-native-ready`. Frames posted before the WebSocket opens
 are queued. A socket that dies takes its port with it and a fresh one is
 published with bounded backoff, so a page survives the host restarting.
 Production builds must omit the tag.

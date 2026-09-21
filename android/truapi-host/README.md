@@ -149,7 +149,7 @@ On the execution: `publishChatAction` delivers a user's action back to the produ
 
 ```text
 product app in WebView
-  Uint8Array frames via @parity/truapi createWebSocketProvider
+  Uint8Array frames via @parity/truapi's injected host port
            |
            v   ws://127.0.0.1:<port>/?t=<token>
 TrUAPIProductExecution.startWsBridge()
@@ -389,11 +389,10 @@ runtime.notifyChainClosed(chainConnectionId)
 // DOCUMENT-START script so it runs in the destination document before the page
 // scripts — `evaluateJavascript` runs in the CURRENT document, which the
 // following `loadUrl` replaces, so the product would lose the endpoint. Scope
-// it to the product origin. The page reads `window.__truapi_localhost.url` and
-// passes it to `@parity/truapi`'s `createWebSocketProvider`.
-// This publishes the endpoint only. Android's current embedding does not
-// install the shared container, so it does not yet enforce its per-fetch or
-// per-peer-connection Rust permission checks.
+// it to the product origin. The SDK uses `window.__HOST_API_PORT__`, which the
+// bootstrap replaces after a disconnect so later calls can reconnect.
+// Android's current embedding does not install the shared container, so it
+// does not yet enforce its per-fetch or per-peer-connection Rust permission checks.
 val bootstrap = LocalhostBridgeBootstrap.script(endpoint.port, endpoint.token)
 main.post {
     val productUrl = "https://your-product.example/"

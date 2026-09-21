@@ -20,8 +20,8 @@
 // Products running inside a `WebView` connect to the Rust core via the
 // localhost WebSocket bridge. Start it with `execution.startWsBridge()` and load
 // the product page with a `LocalhostBridgeBootstrap.script(...)` snippet
-// injected at document start so the page's `@parity/truapi`
-// `createWebSocketProvider` can dial `ws://127.0.0.1:<port>/?t=<token>`.
+// injected at document start so `@parity/truapi` can use
+// `window.__HOST_API_PORT__`.
 
 package io.parity.truapi
 

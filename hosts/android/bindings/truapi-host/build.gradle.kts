@@ -178,7 +178,7 @@ val buildHostCdylib by tasks.registering(Exec::class) {
     workingDir = file(truapiDir)
     commandLine("cargo", "build", "-p", "truapi-server", "--profile", "codegen", "--features", "ws-bridge")
     inputs.files(
-        fileTree("$truapiDir/rust/crates") { include("**/*.rs", "**/Cargo.toml") },
+        fileTree("$truapiDir/rust/crates") { include("**/*.rs", "**/*.js", "**/Cargo.toml") },
         "$truapiDir/Cargo.toml",
         "$truapiDir/Cargo.lock",
     ).withPropertyName("rustSources")
