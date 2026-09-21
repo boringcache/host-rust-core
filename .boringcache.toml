@@ -1,0 +1,5 @@
+workspace = "boringcache/host-rust-core"
+
+[adapters.sccache]
+tag = "validation-series"
+fail-on-cache-error = true

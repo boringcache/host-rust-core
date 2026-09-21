@@ -1,0 +1,45 @@
+name: BoringCache rolling validation
+run-name: host-rust-core rolling validation at ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      series:
+        description: Cache series seeded by the cold and warm validation
+        required: false
+        default: parity-ios-core-20260921-a
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: host-rust-core-boringcache-validation
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  commit:
+    name: ${{ matrix.provider }} commit
+    if: github.repository == 'boringcache/host-rust-core' && github.ref == 'refs/heads/boringcache-validation'
+    runs-on: macos-26-xlarge
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [GitHub, BoringCache]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/boringcache-validation
+        with:
+          provider: ${{ matrix.provider }}
+          phase: commit
+          series: ${{ inputs.series }}

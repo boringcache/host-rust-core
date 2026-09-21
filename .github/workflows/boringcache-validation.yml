@@ -1,0 +1,85 @@
+name: BoringCache validation
+run-name: ${{ inputs.connect && 'host-rust-core OIDC connection' || format('host-rust-core cold and warm at {0}', github.sha) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      connect:
+        description: Connect this validation branch through GitHub OIDC
+        required: false
+        default: false
+        type: boolean
+      series:
+        description: Cache series shared by cold, warm, and rolling jobs
+        required: false
+        default: parity-ios-core-20260921-a
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: host-rust-core-boringcache-validation
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  connect:
+    name: Connect GitHub OIDC
+    if: inputs.connect && github.repository == 'boringcache/host-rust-core' && github.ref == 'refs/heads/boringcache-validation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Install the released BoringCache CLI
+        run: |
+          curl -fsSL https://install.boringcache.com/install.sh -o "$RUNNER_TEMP/install-boringcache.sh"
+          sh "$RUNNER_TEMP/install-boringcache.sh"
+          printf '%s/.local/bin\n' "$HOME" >> "$GITHUB_PATH"
+      - name: Request browser approval
+        run: boringcache ci connect --oidc-provider github-actions
+
+  cold:
+    name: ${{ matrix.provider }} cold
+    if: ${{ !inputs.connect && github.repository == 'boringcache/host-rust-core' && github.ref == 'refs/heads/boringcache-validation' }}
+    runs-on: macos-26-xlarge
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [GitHub, BoringCache]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/boringcache-validation
+        with:
+          provider: ${{ matrix.provider }}
+          phase: cold
+          series: ${{ inputs.series }}
+
+  warm:
+    name: ${{ matrix.provider }} warm
+    if: ${{ !inputs.connect && github.repository == 'boringcache/host-rust-core' && github.ref == 'refs/heads/boringcache-validation' }}
+    needs: cold
+    runs-on: macos-26-xlarge
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [GitHub, BoringCache]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/boringcache-validation
+        with:
+          provider: ${{ matrix.provider }}
+          phase: warm
+          series: ${{ inputs.series }}

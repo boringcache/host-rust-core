@@ -1,0 +1,141 @@
+name: Run cache validation
+description: Compare GitHub and BoringCache sccache storage on the iOS core bootstrap
+
+inputs:
+  provider:
+    description: GitHub or BoringCache
+    required: true
+  phase:
+    description: cold, warm, or commit
+    required: true
+  series:
+    description: Cache series shared by all measured revisions
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Record and verify the upstream source
+      shell: bash
+      env:
+        VALIDATION_SERIES: ${{ inputs.series }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/validation"
+        source_commit=$(cat .github/boringcache-source)
+        git cat-file -e "$source_commit^{commit}"
+        git diff --exit-code "$source_commit" -- . \
+          ':!.boringcache.toml' \
+          ':!.github/boringcache*' \
+          ':!.github/actions/boringcache-validation/**' \
+          ':!.github/workflows/boringcache-*'
+        git rev-parse HEAD > "$RUNNER_TEMP/validation/workflow-commit.txt"
+        printf '%s\n' "$source_commit" > "$RUNNER_TEMP/validation/source-commit.txt"
+        uname -a > "$RUNNER_TEMP/validation/runner.txt"
+        sysctl -n machdep.cpu.brand_string >> "$RUNNER_TEMP/validation/runner.txt" || true
+        test -n "$VALIDATION_SERIES"
+        [[ "$VALIDATION_SERIES" =~ ^[a-zA-Z0-9-]+$ ]]
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+
+        path = Path(".boringcache.toml")
+        path.write_text(path.read_text().replace("validation-series", os.environ["VALIDATION_SERIES"]))
+        PY
+        cp .boringcache.toml "$RUNNER_TEMP/validation/cache-plan.toml"
+
+    - name: Set up the upstream iOS environment
+      uses: ./hosts/ios/.github/actions/install
+
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: "22"
+
+    - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2
+      with:
+        toolchain: nightly
+        components: rustfmt
+
+    - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2
+      with:
+        toolchain: stable
+
+    - name: Install the matched compiler cache client
+      uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+      with:
+        tool: sccache@0.17.0
+
+    - name: Record tool and source identity
+      shell: bash
+      run: |
+        set -euo pipefail
+        xcodebuild -version | tee "$RUNNER_TEMP/validation/xcode.txt"
+        rustc -Vv | tee "$RUNNER_TEMP/validation/rustc.txt"
+        cargo -V | tee "$RUNNER_TEMP/validation/cargo.txt"
+        sccache --version | tee "$RUNNER_TEMP/validation/sccache-version.txt"
+        node --version | tee "$RUNNER_TEMP/validation/node.txt"
+        npm --version | tee "$RUNNER_TEMP/validation/npm.txt"
+        shasum -a 256 Cargo.lock package-lock.json > "$RUNNER_TEMP/validation/inputs.sha256"
+        cargo metadata --locked --no-deps --format-version 1 > "$RUNNER_TEMP/validation/cargo-metadata.json"
+
+    - name: Configure GitHub sccache storage
+      if: inputs.provider == 'GitHub'
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+      env:
+        VALIDATION_PHASE: ${{ inputs.phase }}
+        VALIDATION_SERIES: ${{ inputs.series }}
+      with:
+        script: |
+          core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+          core.exportVariable('ACTIONS_CACHE_SERVICE_V2', 'true');
+          core.exportVariable('SCCACHE_GHA_ENABLED', 'on');
+          core.exportVariable('SCCACHE_GHA_VERSION', process.env.VALIDATION_SERIES);
+          core.exportVariable('SCCACHE_GHA_RW_MODE', process.env.VALIDATION_PHASE === 'warm' ? 'READ_ONLY' : 'READ_WRITE');
+          core.exportVariable('RUSTC_WRAPPER', 'sccache');
+
+    - name: Configure BoringCache sccache storage
+      id: cache
+      if: inputs.provider == 'BoringCache'
+      uses: boringcache/one@9ca311f9b247835b3cc87639321c79bac8018145 # v1.31.0
+      with:
+        cli-version: v1.31.0
+        mode: sccache
+        trust-policy: ${{ inputs.phase == 'warm' && 'restore' || 'publish' }}
+        fail-on-cache-error: true
+        fail-on-cache-miss: ${{ inputs.phase == 'warm' }}
+
+    - name: Run the upstream iOS core bootstrap
+      shell: bash
+      env:
+        VALIDATION_PROVIDER: ${{ inputs.provider }}
+        VALIDATION_PHASE: ${{ inputs.phase }}
+      run: |
+        set -euo pipefail
+        test "$RUSTC_WRAPPER" = sccache
+        sccache --zero-stats
+        started=$SECONDS
+        bash .github/boringcache-build.sh 2>&1 | tee "$RUNNER_TEMP/validation/workload.log"
+        printf '{"elapsed_seconds": %s}\n' "$((SECONDS - started))" > "$RUNNER_TEMP/validation/workload-total.json"
+
+    - name: Retain compiler statistics
+      if: always()
+      shell: bash
+      env:
+        VALIDATION_PROVIDER: ${{ inputs.provider }}
+      run: |
+        sccache --show-stats --stats-format=json > "$RUNNER_TEMP/validation/sccache.json"
+        if [[ "$VALIDATION_PROVIDER" == GitHub ]]; then
+          sccache --stop-server
+        fi
+
+    - name: Retain measurements and cache evidence
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: ${{ inputs.provider }}-${{ inputs.phase }}
+        path: |
+          ${{ runner.temp }}/validation
+          ${{ steps.cache.outputs.evidence-path }}
+        if-no-files-found: error
+        retention-days: 30
