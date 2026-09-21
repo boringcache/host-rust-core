@@ -19,5 +19,6 @@
 // =============================================================================
 
 import { installContainer } from './container.js';
+import { createPermissionAuthorization } from './network-transport.js';
 
-installContainer();
+installContainer(createPermissionAuthorization(window));
