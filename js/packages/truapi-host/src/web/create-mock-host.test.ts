@@ -448,6 +448,80 @@ describe("createMockHost TestHostAPI parity", () => {
     expect(host.getNavigationLog()).toEqual([]);
     expect(host.getConnectionStatus()).toBe("Idle");
   });
+
+  it("connect reports Connected and is refused while disconnected", async () => {
+    const host = createMockHost();
+    await host.callbacks.chain.connect(new Uint8Array(32));
+    expect(host.getConnectionStatus()).toBe("Connected");
+
+    host.simulateDisconnect();
+    // A knob that only relabelled the status would let this connect succeed,
+    // so a suite testing offline behaviour would never see an offline host.
+    await expect(
+      host.callbacks.chain.connect(new Uint8Array(32)),
+    ).rejects.toThrow("mock chain is disconnected");
+    expect(host.getConnectionStatus()).toBe("Disconnected");
+
+    host.simulateReconnect();
+    await host.callbacks.chain.connect(new Uint8Array(32));
+    expect(host.getConnectionStatus()).toBe("Connected");
+  });
+
+  it("setTheme reaches a subscription opened before the change", async () => {
+    const host = createMockHost({ theme: "Light" });
+    const subscription = host.callbacks.theme.subscribeTheme();
+    expect((await subscription.next()).value).toEqual(
+      ok({ name: { tag: "Default" }, variant: "Light" }),
+    );
+
+    // Resume the generator so it is registered as a live subscriber, then
+    // change the theme: a mock that emitted once and parked would hang here.
+    const next = subscription.next();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    host.setTheme("Dark");
+    expect((await next).value).toEqual(
+      ok({ name: { tag: "Default" }, variant: "Dark" }),
+    );
+  });
+
+  it("every fault knob refuses the calls its doc names", async () => {
+    const storage = createMockHost({ faults: { storageError: "disk" } });
+    await expect(storage.callbacks.productStorage.read("k")).rejects.toThrow(
+      "disk",
+    );
+    await expect(
+      storage.callbacks.productStorage.write("k", new Uint8Array([1])),
+    ).rejects.toThrow("disk");
+    await expect(storage.callbacks.productStorage.clear("k")).rejects.toThrow(
+      "disk",
+    );
+    await expect(
+      storage.callbacks.coreStorage.readCoreStorage({ tag: "AuthSession" }),
+    ).rejects.toThrow("disk");
+    await expect(
+      storage.callbacks.coreStorage.writeCoreStorage(
+        { tag: "AuthSession" },
+        new Uint8Array([1]),
+      ),
+    ).rejects.toThrow("disk");
+    await expect(
+      storage.callbacks.coreStorage.clearCoreStorage({ tag: "AuthSession" }),
+    ).rejects.toThrow("disk");
+
+    const navigation = createMockHost({ faults: { navigateError: "blocked" } });
+    await expect(
+      navigation.callbacks.navigation.navigateTo("https://a"),
+    ).rejects.toThrow("blocked");
+    expect(navigation.getNavigationLog()).toEqual([]);
+
+    const notification = createMockHost({
+      faults: { notificationError: "denied" },
+    });
+    await expect(
+      notification.callbacks.notifications.pushNotification({ text: "x" }),
+    ).rejects.toThrow("denied");
+    expect(notification.getNotificationLog()).toEqual([]);
+  });
 });
 
 describe("the notification log", () => {

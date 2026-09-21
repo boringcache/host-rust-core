@@ -1145,6 +1145,11 @@ impl ChatPlatform for MockPlatform {
         _product: &ProductContext,
         request: latest::HostChatCreateRoomRequest,
     ) -> Result<latest::HostChatCreateRoomResponse, latest::HostChatCreateRoomError> {
+        if let Some(reason) = &self.config.faults.chat_error {
+            return Err(latest::HostChatCreateRoomError::Unknown {
+                reason: reason.clone(),
+            });
+        }
         let status = {
             let mut rooms = self.chat_rooms.lock().expect("chat rooms poisoned");
             if rooms.contains_key(&request.room_id) {
@@ -1173,6 +1178,11 @@ impl ChatPlatform for MockPlatform {
         _product: &ProductContext,
         request: latest::HostChatRegisterBotRequest,
     ) -> Result<latest::HostChatRegisterBotResponse, latest::HostChatRegisterBotError> {
+        if let Some(reason) = &self.config.faults.chat_error {
+            return Err(latest::HostChatRegisterBotError::Unknown {
+                reason: reason.clone(),
+            });
+        }
         let mut bots = self.chat_bots.lock().expect("chat bots poisoned");
         let status = if bots.contains_key(&request.bot_id) {
             latest::ChatBotRegistrationStatus::Exists
@@ -1188,6 +1198,11 @@ impl ChatPlatform for MockPlatform {
         _product: &ProductContext,
         request: latest::HostChatPostMessageRequest,
     ) -> Result<latest::HostChatPostMessageResponse, latest::HostChatPostMessageError> {
+        if let Some(reason) = &self.config.faults.chat_error {
+            return Err(latest::HostChatPostMessageError::Unknown {
+                reason: reason.clone(),
+            });
+        }
         // Posting to a room the product never registered is a product bug, and
         // a mock that silently accepted it would hide one.
         if !self
@@ -1768,6 +1783,55 @@ mod tests {
         assert!(
             matches!(err, latest::HostChatPostMessageError::Unknown { reason } if reason.contains("never-created")),
         );
+        assert!(p.posted_chat_messages().is_empty());
+    }
+
+    #[test]
+    fn an_injected_chat_error_refuses_every_chat_entry_point() {
+        let p = MockPlatform::with_config(MockConfig {
+            faults: MockFaults {
+                chat_error: Some("chat down".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let product = chat_product();
+
+        let room = block_on(p.create_chat_room(
+            &product,
+            latest::HostChatCreateRoomRequest {
+                room_id: "lobby".to_string(),
+                name: "lobby room".to_string(),
+                icon: "https://example.invalid/i.png".to_string(),
+            },
+        ))
+        .expect_err("room creation carries the injected reason");
+        assert!(
+            matches!(room, latest::HostChatCreateRoomError::Unknown { reason } if reason == "chat down"),
+        );
+
+        let bot = block_on(p.register_chat_bot(
+            &product,
+            latest::HostChatRegisterBotRequest {
+                bot_id: "greeter".to_string(),
+                name: "Greeter".to_string(),
+                icon: "https://example.invalid/i.png".to_string(),
+            },
+        ))
+        .expect_err("bot registration carries the injected reason");
+        assert!(
+            matches!(bot, latest::HostChatRegisterBotError::Unknown { reason } if reason == "chat down"),
+        );
+
+        // Posting reports the injected reason rather than the unknown-room
+        // rejection it would otherwise hit, so the guard is what refused it.
+        let message =
+            post_text(&p, "lobby", "hi").expect_err("posting carries the injected reason");
+        assert!(
+            matches!(message, latest::HostChatPostMessageError::Unknown { reason } if reason == "chat down"),
+        );
+
+        assert!(p.chat_rooms().is_empty());
         assert!(p.posted_chat_messages().is_empty());
     }
 

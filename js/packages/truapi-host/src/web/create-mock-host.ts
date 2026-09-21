@@ -656,6 +656,10 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   let remotePermissions = remotePermissionsInitial;
   let enforcePermissions = false;
   let currentTheme = theme;
+  // Live theme subscriptions, so `setTheme` reaches a subscribed product the way
+  // the Rust mock's `theme_subscribers` does. A generator that ended after the
+  // first value would make every `setTheme` in a migrating suite a no-op.
+  const themeSubscribers = new Set<(item: HostThemeSubscribeItem) => void>();
   let chainStatus: ChainStatus = "Idle";
   /**
    * One socket per proxied endpoint.
@@ -726,36 +730,44 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   const callbacks: RequiredHostCallbacks = {
     productStorage: {
       async read(key) {
+        if (faults.storageError) throw new Error(faults.storageError);
         return storage.get(productKey(key));
       },
       async write(key, value) {
+        if (faults.storageError) throw new Error(faults.storageError);
         storage.set(productKey(key), value);
       },
       async clear(key) {
+        if (faults.storageError) throw new Error(faults.storageError);
         storage.delete(productKey(key));
       },
     },
 
     coreStorage: {
       async readCoreStorage(key) {
+        if (faults.storageError) throw new Error(faults.storageError);
         return storage.get(coreKey(key));
       },
       async writeCoreStorage(key, value) {
+        if (faults.storageError) throw new Error(faults.storageError);
         storage.set(coreKey(key), value);
       },
       async clearCoreStorage(key) {
+        if (faults.storageError) throw new Error(faults.storageError);
         storage.delete(coreKey(key));
       },
     },
 
     navigation: {
       async navigateTo(url) {
+        if (faults.navigateError) throw new Error(faults.navigateError);
         navigations.push(url);
       },
     },
 
     notifications: {
       async pushNotification(notification) {
+        if (faults.notificationError) throw new Error(faults.notificationError);
         const id = nextNotificationId++;
         pushedNotifications.push({
           id,
@@ -812,6 +824,13 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
 
     chain: {
       async connect(genesisHash): Promise<JsonRpcConnection> {
+        // A simulated disconnect blocks reconnect until `simulateReconnect`,
+        // the way the Rust mock does, so a suite testing recovery sees the
+        // failure it is testing for rather than a connection that succeeds.
+        if (chainStatus === "Disconnected") {
+          throw new Error("mock chain is disconnected");
+        }
+        chainStatus = "Connected";
         // A hashed entry wins; an unhashed one takes whatever is left.
         const proxy =
           chainProxies.find(
@@ -870,8 +889,27 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
         Result<HostThemeSubscribeItem, GenericError>
       > {
         yield ok({ name: { tag: "Default" }, variant: currentTheme });
-        // A live subscription never ends: emit the current theme, then stay open.
-        await new Promise<never>(() => {});
+        // A live subscription never ends: emit the current theme, then every
+        // later one. Buffered rather than awaited directly, so a `setTheme`
+        // landing between yields is delivered instead of dropped.
+        const pending: HostThemeSubscribeItem[] = [];
+        let wake: (() => void) | undefined;
+        const push = (item: HostThemeSubscribeItem) => {
+          pending.push(item);
+          wake?.();
+          wake = undefined;
+        };
+        themeSubscribers.add(push);
+        try {
+          for (;;) {
+            while (pending.length > 0) yield ok(pending.shift()!);
+            await new Promise<void>((resolve) => {
+              wake = resolve;
+            });
+          }
+        } finally {
+          themeSubscribers.delete(push);
+        }
       },
     },
 
@@ -1062,6 +1100,11 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     getTheme: () => currentTheme,
     setTheme: (variant) => {
       currentTheme = variant;
+      const item: HostThemeSubscribeItem = {
+        name: { tag: "Default" },
+        variant,
+      };
+      for (const push of themeSubscribers) push(item);
     },
     getChainStatus: () => chainStatus,
     simulateDisconnect: () => {
