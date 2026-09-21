@@ -4,7 +4,7 @@ import {
   freezeValue,
   reportLockdownFailures,
 } from './freeze.js';
-import { consumeWebRtcPolicy, installWebRtcPolicy } from './webrtc.js';
+import { installWebRtcPolicy } from './webrtc.js';
 import { installFetchGate } from './network.js';
 import { installXhrGate } from './xhr.js';
 import { installWebSocketGate } from './websocket.js';
@@ -21,10 +21,7 @@ export function installContainer(channel?: MessageChannel): void {
 
   installFetchGate(window, _authorize.network);
   installXhrGate(window, _authorize.network);
-  installMediaPolicy(
-    window,
-    (window as any).__truapi_policy__?.mediaAllowed === false ? false : _authorize.media,
-  );
+  installMediaPolicy(window, _authorize.media);
 
   // --- Network: delete (no future permission path) ---
   freezeAndDelete(window, 'EventSource');
@@ -69,11 +66,7 @@ export function installContainer(channel?: MessageChannel): void {
     return _createElement(tagName, options);
   });
 
-  // Hosts without WebRTC support can disable it regardless of product consent.
-  installWebRtcPolicy(
-    window,
-    consumeWebRtcPolicy(window) === false ? false : _authorize.webRtc,
-  );
+  installWebRtcPolicy(window, _authorize.webRtc);
 
   // --- Report: every lock above has been attempted, so a failure can throw ---
   // A lock that did not take is a hole in the sandbox. Reporting last means the
