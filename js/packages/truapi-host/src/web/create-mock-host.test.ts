@@ -515,6 +515,38 @@ describe("createMockHost TestHostAPI parity", () => {
     expect(host.getConnectionStatus()).toBe("Connected");
   });
 
+  it("a new room reaches a live room subscription", async () => {
+    // The room list is a live subscription on Rust, and a product that
+    // subscribes before the first room is created is the normal order.
+    const host = createMockHost();
+    const rooms = host.callbacks.chat!.subscribeChatRooms();
+    await host.callbacks.chat!.createChatRoom(
+      { productId: "p", executionKind: { tag: "Unknown" } },
+      { roomId: "lobby", name: "Lobby", icon: "https://example.invalid/i.png" },
+    );
+
+    const seen = await drain(rooms, 2);
+    expect(seen[1]).toEqual(ok({ rooms: [...host.getChatRooms()] }));
+  });
+
+  it("reset returns the policies and the open operations too", async () => {
+    // `reset` says it returns the mock to its constructed state. A policy that
+    // survives it lets one case govern the next, which is the whole point.
+    const host = createMockHost({ devicePermissions: "allow-all" });
+    host.setPermissionBehavior("deny-all");
+    await host.callbacks.productOperations.beginOperation(
+      { productId: "p", executionKind: { tag: "Unknown" } },
+      "sync",
+    );
+
+    host.reset();
+
+    expect(host.getOpenOperations()).toEqual([]);
+    expect(await host.callbacks.permissions.devicePermission("Camera")).toBe(
+      "AllowAlways",
+    );
+  });
+
   it("setTheme reaches a subscription that has not been read yet", async () => {
     // The change lands before the first `next()`, so nothing has driven the
     // generator body. A subscription that only registers once it is read

@@ -92,13 +92,17 @@ function rustControlSurface(): string[] {
   const source = readFileSync(MOCK_RS, "utf8");
   const start = source.indexOf("impl MockPlatform {");
   expect(start).toBeGreaterThan(-1);
+  // One inherent block, so slicing to the first is the whole surface. A second
+  // one would put methods somewhere this parser never looks, invisible to both
+  // directions of the check below.
+  expect(source.split("impl MockPlatform {").length - 1).toBe(1);
   // The inherent impl ends at the first line that is exactly "}".
   const end = source.indexOf("\n}\n", start);
   expect(end).toBeGreaterThan(start);
   const block = source.slice(start, end);
 
   return [...block.matchAll(/\n    pub (?:async )?fn ([a-z0-9_]+)/g)]
-    .map((match) => match[1])
+    .map((match) => match[1]!)
     .filter((name) => name !== "new" && name !== "with_config");
 }
 

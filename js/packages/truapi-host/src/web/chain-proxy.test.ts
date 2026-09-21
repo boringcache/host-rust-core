@@ -97,6 +97,23 @@ describe("chain proxy", () => {
     if (original) globalThis.WebSocket = original;
   });
 
+  it("a simulated disconnect ends a live response stream", async () => {
+    // A relabelled status leaves the product's stream parked, so a suite
+    // testing reconnect-on-drop never sees the drop it is testing for. The
+    // Rust mock ends every live stream here.
+    const host = createMockHost(PROXY);
+    const connection = await host.callbacks.chain.connect(new Uint8Array(32));
+    FakeSocket.instances[0]!.opened();
+    const reading = connection.responses()[Symbol.asyncIterator]().next();
+
+    host.simulateDisconnect();
+
+    expect(await settledOrNull(reading)).toEqual({
+      value: undefined,
+      done: true,
+    });
+  });
+
   it("a closed connection is not counted as a delivery", async () => {
     // `injectStatement` returns how many subscriptions it reached, and the
     // docstring invites a suite to poll until it is non-zero. Counting ids

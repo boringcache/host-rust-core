@@ -518,6 +518,7 @@ function connectToChain(
   // Injectors are held beside the connection rather than on it: the connection
   // type is generated from the protocol and must not grow test-only members.
   injectors?: Set<(frame: string) => void>,
+  disconnectors?: Set<() => void>,
 ): JsonRpcConnection {
   const socket = new WebSocket(proxy.rpcUrl);
   const queued: string[] = [];
@@ -579,6 +580,7 @@ function connectToChain(
   const finish = () => {
     closed = true;
     injectors?.delete(inject);
+    disconnectors?.delete(finish);
     // A closed connection's subscriptions are gone with it, and leaving the
     // ids behind makes `injectStatement` report deliveries to nobody.
     for (const id of ownStatementSubscriptions)
@@ -588,6 +590,7 @@ function connectToChain(
     // Release every reader, so a stream ends instead of hanging on a drop.
     while (waiting.length > 0) waiting.shift()?.({ value: undefined, done: true });
   };
+  disconnectors?.add(finish);
   socket.addEventListener("close", finish, { once: true });
 
   return {
@@ -690,6 +693,7 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   // chain connections a synthesized notification can be delivered through.
   const statementSubscriptions = new Set<string>();
   const chainInjectors = new Set<(frame: string) => void>();
+  const chainDisconnectors = new Set<() => void>();
   const injectedStatements: string[] = [];
   const loopbackStatements = createLoopbackStatements();
   const usingLoopback = (chainProxies ?? []).some(
@@ -719,6 +723,13 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   // the Rust mock's `theme_subscribers` does. A generator that ended after the
   // first value would make every `setTheme` in a migrating suite a no-op.
   const themeSubscribers = new Set<(item: HostThemeSubscribeItem) => void>();
+  const chatRoomSubscribers = new Set<
+    (item: HostChatListSubscribeItem) => void
+  >();
+  const publishChatRooms = (): void => {
+    const item = { rooms: [...chatRooms.values()] };
+    for (const push of chatRoomSubscribers) push(item);
+  };
   let chainStatus: ChainStatus = "Idle";
   /**
    * One socket per proxied endpoint.
@@ -950,6 +961,7 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
             statementSubscriptions,
             proxy.loopbackStatements ? loopbackStatements : undefined,
             chainInjectors,
+            chainDisconnectors,
           );
           chainStatus = "Connected";
           return connection;
@@ -1021,6 +1033,7 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
           // as a bot registers the bot instead.
           participatingAs: "RoomHost",
         });
+        publishChatRooms();
         return { status: "New" };
       },
       async registerChatBot(_product, request) {
@@ -1047,12 +1060,14 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
         });
         return { messageId };
       },
-      async *subscribeChatRooms(): AsyncGenerator<
-        Result<HostChatListSubscribeItem, GenericError>
-      > {
-        yield ok({ rooms: [...chatRooms.values()] });
-        // A live subscription never ends, matching `subscribeTheme`.
-        await new Promise<never>(() => {});
+      subscribeChatRooms() {
+        return liveSubscription<HostChatListSubscribeItem>(
+          { rooms: [...chatRooms.values()] },
+          (push) => {
+            chatRoomSubscribers.add(push);
+            return () => chatRoomSubscribers.delete(push);
+          },
+        );
       },
     },
 
@@ -1207,6 +1222,10 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     getChainStatus: () => chainStatus,
     simulateDisconnect: () => {
       chainStatus = "Disconnected";
+      // Ending each live stream is what makes this a dropped transport rather
+      // than a relabelled one: a product waiting on responses learns, and the
+      // Rust mock does the same by dropping its disconnectors.
+      for (const disconnect of [...chainDisconnectors]) disconnect();
     },
     simulateReconnect: () => {
       chainStatus = "Idle";
@@ -1255,6 +1274,8 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
       chatRooms.clear();
       chatBots.clear();
       chatMessages.length = 0;
+      // Live subscriptions stay open and see the emptied list, as on Rust.
+      publishChatRooms();
     },
     reset() {
       this.clearNavigationLog();
@@ -1267,7 +1288,16 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
       this.clearPreimages();
       this.clearStorage();
       this.clearChatState();
-      currentTheme = theme;
+      this.clearStatements();
+      openOperations.length = 0;
+      nextOperationId = 0;
+      // Through the setter, so a subscribed product is told rather than left
+      // believing the theme it last saw while `getTheme` reports the default.
+      this.setTheme(theme);
+      // The policies a `setPermissionBehavior` call replaced: leaving them in
+      // place lets one case govern the next, which is what reset is for.
+      devicePermissions = devicePermissionsInitial;
+      remotePermissions = remotePermissionsInitial;
       chainStatus = "Idle";
       enforcePermissions = false;
       nextNotificationId = 1;

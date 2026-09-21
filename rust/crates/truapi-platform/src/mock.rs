@@ -272,6 +272,8 @@ pub struct MockPlatform {
     reviews: Arc<Mutex<Vec<UserConfirmationReview>>>,
     auth_states: Arc<Mutex<Vec<AuthState>>>,
     sent_rpc: Arc<Mutex<Vec<String>>>,
+    /// Starts at 1: the id is what a product cancels by, and one that treats
+    /// 0 as "no id" cannot cancel the first notification it ever schedules.
     next_notification_id: Arc<AtomicU32>,
     /// Explicit per-permission answers, keyed by `Display` form. Set by
     /// `grant_permission` / `revoke_permission`; overrides the config policy.
@@ -325,7 +327,7 @@ impl MockPlatform {
             reviews: Arc::new(Mutex::new(Vec::new())),
             auth_states: Arc::new(Mutex::new(Vec::new())),
             sent_rpc: Arc::new(Mutex::new(Vec::new())),
-            next_notification_id: Arc::new(AtomicU32::new(0)),
+            next_notification_id: Arc::new(AtomicU32::new(1)),
             permission_decisions: Arc::new(Mutex::new(BTreeMap::new())),
             enforce_permissions: Arc::new(AtomicBool::new(false)),
             permission_log: Arc::new(Mutex::new(Vec::new())),
@@ -707,6 +709,22 @@ impl MockPlatform {
             .retain(|subscriber| subscriber.unbounded_send(item.clone()).is_ok());
     }
 
+    /// Push a product key's new value to every live subscriber of that key.
+    fn publish_storage(&self, key: &str, value: Option<Vec<u8>>) {
+        let item = latest::HostLocalStorageChangeItem { value };
+        let mut subscribers = self
+            .storage_subscribers
+            .lock()
+            .expect("storage subscribers poisoned");
+        let Some(senders) = subscribers.get_mut(key) else {
+            return;
+        };
+        senders.retain(|sender| sender.unbounded_send(item.clone()).is_ok());
+        if senders.is_empty() {
+            subscribers.remove(key);
+        }
+    }
+
     /// Return the mock to its freshly-constructed state, keeping the
     /// [`MockConfig`] it was built with.
     ///
@@ -726,8 +744,13 @@ impl MockPlatform {
         self.set_theme(self.config.theme);
         self.simulate_reconnect();
         self.set_enforce_permissions(false);
-        self.next_notification_id.store(0, Ordering::SeqCst);
+        self.next_notification_id.store(1, Ordering::SeqCst);
         self.next_chat_message_id.store(0, Ordering::SeqCst);
+        self.open_operations
+            .lock()
+            .expect("open operations poisoned")
+            .clear();
+        self.next_operation_id.store(0, Ordering::SeqCst);
     }
 }
 
@@ -793,24 +816,6 @@ fn core_key(key: &CoreStorageKey) -> String {
 /// through the core, however well it round-trips against the mock alone.
 fn preimage_key(value: &[u8]) -> Vec<u8> {
     sp_crypto_hashing::blake2_256(value).to_vec()
-}
-
-impl MockPlatform {
-    /// Push a product key's new value to every live subscriber of that key.
-    fn publish_storage(&self, key: &str, value: Option<Vec<u8>>) {
-        let item = latest::HostLocalStorageChangeItem { value };
-        let mut subscribers = self
-            .storage_subscribers
-            .lock()
-            .expect("storage subscribers poisoned");
-        let Some(senders) = subscribers.get_mut(key) else {
-            return;
-        };
-        senders.retain(|sender| sender.unbounded_send(item.clone()).is_ok());
-        if senders.is_empty() {
-            subscribers.remove(key);
-        }
-    }
 }
 
 #[async_trait]
@@ -1516,10 +1521,12 @@ mod tests {
         };
         let id0 = block_on(p.push_notification(make("one"))).unwrap().id;
         let id1 = block_on(p.push_notification(make("two"))).unwrap().id;
-        assert_eq!((id0, id1), (0, 1));
+        // From 1, not 0: a product that reads 0 as "no id" cannot cancel the
+        // first notification it schedules, and the JS mock starts at 1 too.
+        assert_eq!((id0, id1), (1, 2));
         assert_eq!(p.pushed_notifications().len(), 2);
         block_on(p.cancel_notification(id1)).unwrap();
-        assert_eq!(p.cancelled_notifications(), vec![1u32]);
+        assert_eq!(p.cancelled_notifications(), vec![id1]);
     }
 
     #[test]
