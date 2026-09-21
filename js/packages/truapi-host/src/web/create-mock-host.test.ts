@@ -24,7 +24,7 @@ async function drain<T>(
   count: number,
 ): Promise<T[]> {
   const items: T[] = [];
-  for (let n = 0; n < count; n += 1) {
+  for (let taken = 0; taken < count; taken += 1) {
     const next = await Promise.race([
       subscription.next().then((result) => result.value as T),
       new Promise<"dropped">((resolve) =>
