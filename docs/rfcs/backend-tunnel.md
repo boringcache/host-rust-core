@@ -5,7 +5,7 @@ authors: ["@BigTava", "@filvecchiato"]
 status: draft
 ---
 
-# RFC-0025 — Deployer backend tunnel
+# RFC — Deployer backend tunnel
 
 ## Summary
 
