@@ -376,7 +376,7 @@ async fn handle_connection(
     let (mut sink, mut source) = ws.split();
     let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(OUTBOUND_QUEUE_CAP);
     let frame_sink = Arc::new(WsFrameSink::new(out_tx));
-    let product_runtime = Arc::new(runtime_factory.product_runtime(frame_sink));
+    let product_runtime = Arc::new(runtime_factory.product_runtime(frame_sink.clone()));
 
     let pump_logger = logger.clone();
     let pump = tokio::spawn(async move {
@@ -435,6 +435,7 @@ async fn handle_connection(
     }
 
     product_runtime.dispose();
+    frame_sink.close();
     let _ = pump.await;
     logger("truapi.ws_bridge.connection_closed", &peer.to_string());
 }
@@ -475,28 +476,37 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 struct WsFrameSink {
-    outbound: mpsc::Sender<Vec<u8>>,
-    closed: Mutex<bool>,
+    outbound: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
 }
 
 impl WsFrameSink {
     fn new(outbound: mpsc::Sender<Vec<u8>>) -> Self {
         Self {
-            outbound,
-            closed: Mutex::new(false),
+            outbound: Mutex::new(Some(outbound)),
         }
+    }
+
+    /// Drop the sender so the outbound pump's receiver ends.
+    ///
+    /// The runtime and any aborted dispatch may still hold this sink, so
+    /// waiting for the last `Arc` to go would leave the pump parked on a
+    /// channel nobody will ever send on, and with it the connection task, its
+    /// slot against [`MAX_WS_BRIDGE_CONNECTIONS`] and its socket.
+    fn close(&self) {
+        self.outbound.lock().unwrap().take();
     }
 }
 
 impl FrameSink for WsFrameSink {
     fn emit_frame(&self, frame: Vec<u8>) {
-        if *self.closed.lock().unwrap() {
+        let mut outbound = self.outbound.lock().unwrap();
+        let Some(sender) = outbound.as_ref() else {
             return;
-        }
+        };
         // Non-blocking: a full queue means the peer stopped reading, so the
         // connection is treated as closed rather than buffering without bound.
-        if self.outbound.try_send(frame).is_err() {
-            *self.closed.lock().unwrap() = true;
+        if sender.try_send(frame).is_err() {
+            outbound.take();
         }
     }
 }
@@ -682,6 +692,49 @@ mod tests {
             v01::HostFeatureSupportedResponse { supported: true },
         ));
         assert_eq!(response.payload.value, expected.encode());
+
+        bridge.stop();
+    }
+
+    /// A connection whose peer vanishes must release its slot. A product that
+    /// reconnects — which is what a phone returning to the foreground does —
+    /// otherwise walks into [`MAX_WS_BRIDGE_CONNECTIONS`] and is refused for
+    /// the rest of the execution's life, one lost slot per background cycle.
+    #[test]
+    fn a_vanished_peer_releases_its_connection_slot() {
+        let closes = Arc::new(Mutex::new(0usize));
+        let logger: BridgeLogger = {
+            let closes = closes.clone();
+            Arc::new(move |marker, _| {
+                if marker == "truapi.ws_bridge.connection_closed" {
+                    *closes.lock().unwrap() += 1;
+                }
+            })
+        };
+        let (mut bridge, endpoint) =
+            WsBridge::start(0, test_runtime_factory(), logger).expect("start bridge");
+        let url = format!("ws://127.0.0.1:{}/?t={}", endpoint.port, endpoint.token);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        rt.block_on(async {
+            for round in 1..=MAX_WS_BRIDGE_CONNECTIONS + 1 {
+                let (ws, _) = tokio_tungstenite::connect_async(&url).await.expect("dial");
+                drop(ws);
+
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while *closes.lock().unwrap() < round {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "connection {round} never released its slot"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            }
+        });
 
         bridge.stop();
     }
