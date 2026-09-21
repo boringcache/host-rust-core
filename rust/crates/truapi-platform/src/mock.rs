@@ -2151,14 +2151,23 @@ mod tests {
         // looks healthy and simply never carries a room is the one answer a
         // failing host must not give, because it is indistinguishable from a
         // host with nothing to list.
-        let subscribed = p
-            .subscribe_chat_rooms(&product)
+        let mut subscription = p.subscribe_chat_rooms(&product);
+        let subscribed = subscription
             .next()
             .now_or_never()
             .expect("the refusal is ready immediately")
             .expect("an item")
             .expect_err("the subscription carries the injected reason");
         assert_eq!(subscribed.reason, "chat down");
+        // And ends there. A stream that kept the consumer waiting after
+        // refusing is the stalled stream this guard exists to avoid.
+        assert!(
+            subscription
+                .next()
+                .now_or_never()
+                .expect("the end is ready immediately")
+                .is_none()
+        );
 
         assert!(p.chat_rooms().is_empty());
         assert!(p.posted_chat_messages().is_empty());

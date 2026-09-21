@@ -153,6 +153,7 @@ async function* failedSubscription<T>(
  */
 function liveSubscription<T>(
   first: T,
+  closers: Set<() => void>,
   register: (push: (item: T) => void) => () => void,
 ): AsyncGenerator<Result<T, GenericError>> {
   const pending: T[] = [first];
@@ -165,18 +166,28 @@ function liveSubscription<T>(
   });
   // Idempotent because the two paths below overlap: closing a stream that has
   // been iterated runs the generator's `finally` as well as `return`.
+  //
+  // Waking is what lets a parked body finish. Unregistering alone would leave
+  // it waiting on a push that can no longer arrive, so a `return()` queued
+  // behind it, and the `next()` it is parked on, would both hang.
   const release = () => {
     if (released) return;
     released = true;
+    closers.delete(release);
     unregister();
+    wake?.();
+    wake = undefined;
   };
+  closers.add(release);
   const stream = (async function* () {
     try {
       for (;;) {
         while (pending.length > 0) yield ok(pending.shift()!);
+        if (released) return;
         await new Promise<void>((resolve) => {
           wake = resolve;
         });
+        if (released) return;
       }
     } finally {
       release();
@@ -758,12 +769,23 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   // Live theme subscriptions, so `setTheme` reaches a subscribed product the way
   // the Rust mock's `theme_subscribers` does. A generator that ended after the
   // first value would make every `setTheme` in a migrating suite a no-op.
+  /** Ends one live subscription each, so `dispose` can close them all. */
+  const subscriptionClosers = new Set<() => void>();
   const themeSubscribers = new Set<(item: HostThemeSubscribeItem) => void>();
   const chatRoomSubscribers = new Set<
     (item: HostChatListSubscribeItem) => void
   >();
+  /**
+   * Entries in key order, which is the order the Rust mock's `BTreeMap`
+   * yields. Insertion order would put a different list in the subscription
+   * payload than the sibling host sends for the same rooms.
+   */
+  const byKey = <T>(entries: Map<string, T>): T[] =>
+    [...entries.entries()]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([, value]) => value);
   const publishChatRooms = (): void => {
-    const item = { rooms: [...chatRooms.values()] };
+    const item = { rooms: byKey(chatRooms) };
     for (const push of chatRoomSubscribers) push(item);
   };
   let chainStatus: ChainStatus = "Idle";
@@ -802,11 +824,25 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
   // Product keys are namespaced from core slots so neither can shadow the other.
   // This in-JS key scheme is internal and independent from the Rust MockPlatform's
   // (state never crosses the boundary), so the two need not match byte-for-byte.
+  // What they do have to share is which slots are distinct: keying on the tag
+  // alone would put every product's manifest in one slot, so a test writing one
+  // product's and reading another's reads back the wrong one here and a miss on
+  // Rust.
   const productKey = (key: string): string => `product:${key}`;
   const coreKey = (key: CoreStorageKey): string =>
-    key.tag === "PermissionAuthorization"
-      ? `core:permission:${key.value.productId}:${JSON.stringify(key.value.request)}`
-      : `core:${key.tag}`;
+    key.value === undefined
+      ? `core:${key.tag}`
+      : // Entries sorted, so a payload built field-by-field in a different
+        // order still addresses the slot it addressed before.
+        `core:${key.tag}:${JSON.stringify(key.value, (_, inner: unknown) =>
+          inner !== null && typeof inner === "object" && !Array.isArray(inner)
+            ? Object.fromEntries(
+                Object.entries(inner as Record<string, unknown>).sort(
+                  ([left], [right]) => left.localeCompare(right),
+                ),
+              )
+            : inner,
+        )}`;
   const granted = (policy: PermissionPolicy): boolean => policy === "allow-all";
   // A mock policy is two-valued, so a grant is durable and a refusal is
   // durable. `AllowOnce` is a host answer the mock has no knob to ask for.
@@ -867,6 +903,7 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
         const current = storage.get(productKey(key));
         return liveSubscription<HostLocalStorageChangeItem>(
           { value: current && scale.bytesToHex(current) },
+          subscriptionClosers,
           (push) => {
             const subscribers =
               storageSubscribers.get(key) ??
@@ -1066,6 +1103,7 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
       subscribeTheme() {
         return liveSubscription<HostThemeSubscribeItem>(
           { name: { tag: "Default" }, variant: currentTheme },
+          subscriptionClosers,
           (push) => {
             themeSubscribers.add(push);
             return () => themeSubscribers.delete(push);
@@ -1119,7 +1157,8 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
           return failedSubscription<HostChatListSubscribeItem>(faults.chatError);
         }
         return liveSubscription<HostChatListSubscribeItem>(
-          { rooms: [...chatRooms.values()] },
+          { rooms: byKey(chatRooms) },
+          subscriptionClosers,
           (push) => {
             chatRoomSubscribers.add(push);
             return () => chatRoomSubscribers.delete(push);
@@ -1247,13 +1286,11 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     },
     dispose() {
       this.reset();
-      // A subscription abandoned without being closed keeps its registration:
-      // nothing unwinds a generator whose body never ran, and nothing collects
-      // one still parked on `next()`. Dropping the sets bounds that to the
-      // life of the host.
-      themeSubscribers.clear();
-      storageSubscribers.clear();
-      chatRoomSubscribers.clear();
+      // Ending each stream rather than just dropping its registration: a
+      // consumer parked on `next()` has to learn the host is gone, and a
+      // registration dropped underneath it would leave it waiting forever.
+      for (const close of [...subscriptionClosers]) close();
+      for (const disconnect of [...chainDisconnectors]) disconnect();
     },
     cancelledNotifications: () => [...cancelledNotifications],
     getPermissionLog: () => [...permissionLog],
@@ -1295,8 +1332,8 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
       chainStatus = "Idle";
     },
     getOpenOperations: () => [...openOperations],
-    getChatRooms: () => [...chatRooms.values()],
-    getChatBots: () => [...chatBots.values()],
+    getChatRooms: () => byKey(chatRooms),
+    getChatBots: () => byKey(chatBots),
     getChatMessageLog: () => [...chatMessages],
     seedPreimage(value) {
       const key = preimageKey(value);

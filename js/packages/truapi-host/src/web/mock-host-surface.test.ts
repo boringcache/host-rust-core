@@ -12,7 +12,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { createMockHost } from "./create-mock-host.js";
+import { createMockHost, MOCK_GENESIS } from "./create-mock-host.js";
 
 const MOCK_RS = fileURLToPath(
   new URL(
@@ -168,6 +168,45 @@ describe("mock host surface agreement", () => {
       `two Rust MockPlatform methods map to the same JS name: ` +
         `${collisions.join(", ")}. Rename one, or give it its own alias.`,
     ).toEqual([]);
+  });
+
+  it("serves the same placeholder genesis hashes as the Rust mock", () => {
+    // Both mocks declare these three chains by default, so a fixture naming a
+    // chain by hash has to mean the same chain to either. The values are
+    // written out independently in each language and nothing else compares
+    // them.
+    const source = readFileSync(MOCK_RS, "utf8");
+    const rustHashes = Object.fromEntries(
+      [
+        ...source.matchAll(
+          /pub const ([A-Z_]+): truapi::Bytes32 = \[0x([0-9a-f]{2}); 32\];/g,
+        ),
+      ].map(([, name, byte]) => [name!, `0x${byte!.repeat(32)}`]),
+    );
+
+    expect(rustHashes).toEqual({
+      PEOPLE: MOCK_GENESIS.people,
+      BULLETIN: MOCK_GENESIS.bulletin,
+      ASSET_HUB: MOCK_GENESIS.assetHub,
+    });
+  });
+
+  it("keys permissions on the tag the generated TypeScript uses", () => {
+    // The Rust mock maps each permission variant to a decision key by hand.
+    // Codegen emits the variant identifier verbatim as the TypeScript tag, so
+    // the key has to be spelled exactly like the variant. Renaming a variant
+    // updates the match pattern and leaves the string beside it compiling and
+    // silently disagreeing, which is the drift this whole mock exists to stop.
+    const source = readFileSync(MOCK_RS, "utf8");
+    const arms = [
+      ...source.matchAll(
+        /^\s+(?:Request|Permission)::([A-Za-z0-9]+)(?: \{ \.\. \})? => "([^"]+)",$/gm,
+      ),
+    ].map(([, variant, key]) => ({ variant, key }));
+
+    // A regex that matched nothing would make this pass forever.
+    expect(arms.length).toBe(14);
+    expect(arms.filter(({ variant, key }) => variant !== key)).toEqual([]);
   });
 
   it("reads a whole Rust surface, so the check cannot pass vacuously", () => {

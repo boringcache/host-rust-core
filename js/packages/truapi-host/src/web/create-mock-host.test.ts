@@ -1,8 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { err, ok } from "neverthrow";
 
+import type { ChatRoom } from "@parity/truapi";
 import type { CoreStorageKey } from "../generated/host-callbacks.js";
-import { createMockHost, mockRuntimeConfig } from "./create-mock-host.js";
+import {
+  createMockHost,
+  MOCK_GENESIS,
+  mockRuntimeConfig,
+} from "./create-mock-host.js";
 import { createWebWorkerPairingHostRuntime } from "./index.js";
 
 /** Lowercase hex without `0x`. */
@@ -515,6 +520,88 @@ describe("createMockHost TestHostAPI parity", () => {
     expect(host.getConnectionStatus()).toBe("Connected");
   });
 
+  it("serves the three mock chains by default", async () => {
+    // The Rust mock declares the same three. A suite that routes on a chain
+    // has to be answered the same way by either, and dropping one here would
+    // otherwise only show up as a chain-routed call failing much later.
+    const host = createMockHost();
+    expect(await host.callbacks.features.supportedChains()).toEqual({
+      network: "mock",
+      chains: [
+        { identifier: "People", genesisHash: MOCK_GENESIS.people },
+        { identifier: "Bulletin", genesisHash: MOCK_GENESIS.bulletin },
+        { identifier: "AssetHub", genesisHash: MOCK_GENESIS.assetHub },
+      ],
+    });
+  });
+
+  it("keys a remote permission on its tag, not the domains it names", async () => {
+    // The Rust mock asserts the same thing. Keying on the domains would make
+    // the grant below cover only the exact list it was issued for, so it could
+    // never be set up before knowing what the product would ask for.
+    const host = createMockHost();
+    const ask = (domains: string[]) =>
+      host.callbacks.permissions.remotePermission({
+        permission: { tag: "Remote", value: { domains } },
+      });
+
+    host.revokePermission("Remote");
+    expect(await ask(["a.example"])).toBe("Deny");
+    expect(await ask(["b.example", "c.example"])).toBe("Deny");
+
+    host.grantPermission("Remote");
+    expect(await ask(["d.example"])).toBe("AllowAlways");
+  });
+
+  it("addresses each core storage slot separately", async () => {
+    // Keying on the variant alone would put every product's manifest in one
+    // slot, so a test writing one and reading another reads back the wrong
+    // value instead of finding nothing.
+    const host = createMockHost();
+    const { coreStorage } = host.callbacks;
+    const manifest = (productId: string) =>
+      ({ tag: "ProductManifest", value: { productId } }) as const;
+
+    await coreStorage.writeCoreStorage(manifest("a.dot"), new Uint8Array([1]));
+    await coreStorage.writeCoreStorage(manifest("b.dot"), new Uint8Array([2]));
+
+    expect(await coreStorage.readCoreStorage(manifest("a.dot"))).toEqual(
+      new Uint8Array([1]),
+    );
+    expect(
+      await coreStorage.readCoreStorage(manifest("unwritten.dot")),
+    ).toBeUndefined();
+  });
+
+  it("lists chat rooms in id order, as the Rust mock does", async () => {
+    // Insertion order would put a different list in the subscription payload
+    // than the sibling host sends for the same rooms, and that list is
+    // protocol payload, not just an assertion oracle.
+    const host = createMockHost();
+    const product = {
+      productId: "p",
+      executionKind: { tag: "Unknown" } as const,
+    };
+    for (const roomId of ["zulu", "alpha", "mike"]) {
+      await host.callbacks.chat!.createChatRoom(product, {
+        roomId,
+        name: roomId,
+        icon: "https://example.invalid/i.png",
+      });
+    }
+
+    expect(host.getChatRooms().map((room) => room.roomId)).toEqual([
+      "alpha",
+      "mike",
+      "zulu",
+    ]);
+    const rooms = host.callbacks.chat!.subscribeChatRooms();
+    const [seeded] = await drain(rooms, 1);
+    expect(
+      seeded!._unsafeUnwrap().rooms.map((room: ChatRoom) => room.roomId),
+    ).toEqual(["alpha", "mike", "zulu"]);
+  });
+
   it("simulateDisconnect ends a live response stream, not just the status", async () => {
     // A knob that relabelled the status and refused reconnect would still
     // leave a product parked on `responses()` forever, which is the one thing
@@ -534,6 +621,26 @@ describe("createMockHost TestHostAPI parity", () => {
     ).toBe("ended");
   });
 
+  it("closing a subscription that is parked on a read settles both promises", async () => {
+    // Unregistering the push without waking the body leaves it waiting for a
+    // change that can no longer reach it, so the close and the read it was
+    // parked on would both hang rather than end the stream.
+    const host = createMockHost();
+    const themes = host.callbacks.theme.subscribeTheme();
+    await drain(themes, 1);
+    const parked = themes.next();
+    const closed = themes.return(undefined);
+    host.setTheme("Dark");
+
+    expect(
+      await Promise.race([
+        Promise.all([parked, closed]).then(() => "settled"),
+        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
+      ]),
+    ).toBe("settled");
+    expect((await parked).done).toBe(true);
+  });
+
   it("closing one subscription leaves the others live", async () => {
     // One `release` serves both the generator's `finally` and `return`, so a
     // close that dropped the wrong push would silence a bystander instead.
@@ -550,22 +657,30 @@ describe("createMockHost TestHostAPI parity", () => {
     ]);
   });
 
-  it("dispose drops subscribers that were never closed", async () => {
-    // Nothing unwinds a stream still parked on `next()`, so a host reused
-    // across a suite would carry the previous case's subscribers.
+  it("dispose ends subscriptions that were never closed", async () => {
+    // Nothing unwinds a stream still parked on `next()`, so a consumer has to
+    // be told the host is gone. Dropping the registration alone would leave it
+    // parked forever, which is indistinguishable from a host with no changes
+    // to report.
     const host = createMockHost();
     const themes = host.callbacks.theme.subscribeTheme();
+    const stored = host.callbacks.productStorage.subscribeStorage("k");
     await drain(themes, 1);
+    await drain(stored, 1);
+    const parked = [themes.next(), stored.next()];
 
     host.dispose();
-    // `dispose` resets first, and reset republishes the restored theme through
-    // the setter, so that item is expected. Everything after it is not.
-    await drain(themes, 1);
-    host.setTheme("Dark");
 
-    await expect(drain(themes, 1)).rejects.toThrow(
-      "subscription delivered 0 of 1 items",
-    );
+    expect(
+      await Promise.race([
+        Promise.all(parked).then((results) =>
+          results.every((result) => result.done) ? "ended" : "yielded",
+        ),
+        new Promise<"parked">((resolve) =>
+          setTimeout(() => resolve("parked"), 50),
+        ),
+      ]),
+    ).toBe("ended");
   });
 
   it("a new room reaches a live room subscription", async () => {
@@ -691,12 +806,24 @@ describe("createMockHost TestHostAPI parity", () => {
     const confirmation = createMockHost({
       faults: { confirmationError: "no ui" },
     });
+    const review = {
+      tag: "ResourceAllocation",
+      value: { callingProductId: "mock.dot", resources: [] },
+    } as const;
     await expect(
-      confirmation.callbacks.userConfirmation.confirmUserAction({
-        tag: "ResourceAllocation",
-        value: { callingProductId: "mock.dot", resources: [] },
-      }),
+      confirmation.callbacks.userConfirmation.confirmUserAction(review),
     ).rejects.toThrow("no ui");
+    // One knob answers both entry points, as on Rust.
+    await expect(
+      confirmation.callbacks.userConfirmation.confirmPermission(review),
+    ).rejects.toThrow("no ui");
+    // Unlike a refused permission prompt, the review is recorded before the
+    // throw. Both mocks do this, so a suite reading the log sees the question
+    // that could not be put to the user rather than losing it.
+    expect(confirmation.confirmations()).toEqual([
+      "ResourceAllocation",
+      "ResourceAllocation",
+    ]);
 
     const product = {
       productId: "p",
@@ -712,20 +839,24 @@ describe("createMockHost TestHostAPI parity", () => {
     ).rejects.toThrow("chat down");
     await expect(
       chat.callbacks.chat!.registerChatBot(product, {
-        roomId: "r",
-        name: "B",
+        botId: "greeter",
+        name: "Greeter",
+        icon: "https://example.invalid/i.png",
       }),
     ).rejects.toThrow("chat down");
     await expect(
       chat.callbacks.chat!.postChatMessage(product, {
         roomId: "r",
-        payload: new Uint8Array([1]),
+        payload: { tag: "Text", value: { text: "hi" } },
       }),
     ).rejects.toThrow("chat down");
     // The subscription reports the same fault rather than opening a stream
     // that looks healthy and never carries a room.
     const rooms = chat.callbacks.chat!.subscribeChatRooms();
     expect(await drain(rooms, 1)).toEqual([err({ reason: "chat down" })]);
+    // And ends there. A stream that kept the consumer waiting after refusing
+    // is the stalled stream this guard exists to avoid.
+    expect((await rooms.next()).done).toBe(true);
   });
 });
 
