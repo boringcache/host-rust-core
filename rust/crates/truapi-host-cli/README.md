@@ -152,6 +152,8 @@ itself:
 
 That script installs the SDK bridge and the shared `js/container` sandbox
 synchronously. Keep it before application scripts, without `async` or `defer`.
+It preserves the SDK's existing `__HOST_API_PORT__` interface, so the product
+does not need to update its SDK dependency.
 The SDK and sandbox share one host WebSocket and its temporary permissions.
 `/script` uses the same fetch and WebSocket permission checks in Bun, and the
 XHR wrapper when that API is available. Dev keeps automatic approvals, and the
@@ -488,9 +490,10 @@ Rust decides Allow once, Allow always or Deny; domain grants cover all ports.
 Public SDK calls and permission checks share one product execution.
 
 Scripts retain Bun/Node filesystem, environment, subprocess and import access.
-These checks apply to patched web APIs, not native networking APIs, so this is
-not operating-system isolation. Dev retains the full browser container and its
-first blocking bootstrap tag.
+Both CLI flows use ordinary SDK authorization requests to test permissions on
+patched web APIs. Product code can deliberately bypass these development checks,
+including through native networking in Bun. Native hosts retain their separate
+authorization protection.
 
 The runner injects three globals before running it:
 

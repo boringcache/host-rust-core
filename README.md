@@ -266,13 +266,15 @@ reaches it through a development-only `<script>` tag:
 )}
 ```
 
-The host serves that script itself, so the page needs no package, no imports,
+The host serves that script itself, so the page needs no SDK update, no imports,
 and no environment variables. It installs the SDK bridge and the shared browser
 container before product code runs. Keep the tag before application scripts, without `async` or `defer`.
 The container shares one connection for SDK calls and permission checks. Reload
 the page after a disconnect. It routes fetch, XHR and WebSocket permission checks to Rust.
 WebRTC and camera/microphone access use the same live permission checks.
-`/script` shares these wrappers for the APIs available in Bun. TCP frame
+`/script` shares these wrappers for the APIs available in Bun. CLI permission
+checks support development testing; product code can deliberately bypass them.
+Native hosts retain their separate authorization protection. TCP frame
 connections are accepted only from loopback peers, and browser WebSocket
 origins must also name localhost or a loopback IP. WebSocket is not subject to
 CORS, and confirmations here are auto-approved.

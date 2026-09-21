@@ -2,7 +2,11 @@ import { afterAll, beforeAll, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createContext, runInContext } from "node:vm";
 import {
+  createClient,
+  createMessagePortProvider,
+  createTransport,
   decodeWireMessage,
   encodeWireMessage,
   MESSAGE_TYPE_RESPONSE,
@@ -59,12 +63,14 @@ it("resolves the packaged runner without a source checkout", async () => {
   }
 });
 
-it("runs installed TypeScript with host access and shared web permissions", async () => {
+it("shares web permissions with installed scripts and the existing browser SDK", async () => {
   const authorizations: unknown[] = [];
   const decisions: boolean[] = [];
   const requests: string[] = [];
   let granted = false;
   let connections = 0;
+  let respond = true;
+  let closeHost = () => {};
   const server = Bun.serve<{ frames: boolean }>({
     hostname: "127.0.0.1",
     port: 0,
@@ -80,7 +86,10 @@ it("runs installed TypeScript with host access and shared web permissions", asyn
     },
     websocket: {
       open(socket) {
-        if (socket.data.frames) connections++;
+        if (socket.data.frames) {
+          connections++;
+          closeHost = () => socket.close();
+        }
       },
       message(socket, message) {
         if (!socket.data.frames) {
@@ -90,6 +99,7 @@ it("runs installed TypeScript with host access and shared web permissions", asyn
         const request = decodeWireMessage(
           new Uint8Array(message as Buffer),
         )._unsafeUnwrap();
+        if (!respond) return;
         let allowed = true;
         if (
           request.payload.methodId ===
@@ -187,9 +197,6 @@ it("runs installed TypeScript with host access and shared web permissions", asyn
         authorizations,
         decisions,
         connections,
-        container:
-          (await readFile(join(directory, "sandbox-assets/container.js")))
-            .length > 0,
       },
       error,
     ).toEqual({
@@ -199,7 +206,6 @@ it("runs installed TypeScript with host access and shared web permissions", asyn
       requests: ["/allowed"],
       decisions: [true, false, true],
       connections: 1,
-      container: true,
       authorizations: Array(3).fill({
         tag: "V1",
         value: {
@@ -207,6 +213,94 @@ it("runs installed TypeScript with host access and shared web permissions", asyn
         },
       }),
     });
+    class BrowserSocket extends WebSocket {}
+    for (const [name, descriptor] of Object.entries(
+      Object.getOwnPropertyDescriptors(WebSocket.prototype),
+    )) {
+      if (name !== "constructor")
+        Object.defineProperty(BrowserSocket.prototype, name, descriptor);
+    }
+    const events = new EventTarget();
+    const context = createContext({
+      MessageChannel,
+      MessagePort,
+      MessageEvent,
+      Event,
+      EventTarget,
+      CloseEvent,
+      WebSocket: BrowserSocket,
+      TextEncoder,
+      TextDecoder,
+      URL,
+      Uint8Array,
+      ArrayBuffer,
+      Request,
+      Response,
+      AbortController,
+      AbortSignal,
+      DOMException,
+      Blob,
+      fetch,
+      setTimeout,
+      clearTimeout,
+      navigator: {},
+      document: { createElement: () => ({}) },
+      location: { href: "https://product.example/" },
+      addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
+      __truapi_localhost: { url: `ws://127.0.0.1:${server.port}/frames` },
+    });
+    runInContext("window = globalThis", context);
+    runInContext(
+      await readFile(join(directory, "sandbox-assets/container.js"), "utf8"),
+      context,
+    );
+    const provider = createMessagePortProvider(context.__HOST_API_PORT__);
+    const transport = createTransport(provider);
+    const client = createClient(transport);
+    const permission = {
+      permission: { tag: "Remote" as const, value: { domains: ["127.0.0.1"] } },
+    };
+    try {
+      expect(
+        (
+          await client.permissions.requestRemotePermission(permission)
+        )._unsafeUnwrap(),
+      ).toEqual({ granted: true });
+      const url = `http://127.0.0.1:${server.port}/browser`;
+      expect(await (await context.fetch(url)).text()).toBe("http-ok");
+      await expect(context.fetch(url)).rejects.toThrow(
+        "Network access is not allowed",
+      );
+      respond = false;
+      const sdk = Promise.resolve(
+        client.permissions.requestRemotePermission(permission),
+      ).then(
+        (result) => result.isErr(),
+        () => true,
+      );
+      const denied = context.fetch(url).catch((error: Error) => error.message);
+      closeHost();
+      expect({
+        sdkFailed: await sdk,
+        denied: await denied,
+        port: context.__HOST_API_PORT__,
+        requests,
+        decisions,
+        connections,
+      }).toEqual({
+        sdkFailed: true,
+        denied: "Network access is not allowed",
+        port: undefined,
+        requests: ["/allowed", "/browser"],
+        decisions: [true, false, true, true, false],
+        connections: 2,
+      });
+    } finally {
+      events.dispatchEvent(new Event("pagehide"));
+      transport.dispose();
+      provider.dispose();
+    }
   } finally {
     clearTimeout(timeout);
     child.kill();
@@ -288,6 +382,7 @@ it("keeps browser SDK calls and one-use permissions on the same connection", asy
       navigator: {},
       location: { href: 'https://product.example/' },
       addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
       __truapi_localhost: { url: 'ws://127.0.0.1:${server.port}/frames' },
     });
     await import('./sandbox-assets/container.js');

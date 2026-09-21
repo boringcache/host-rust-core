@@ -9,11 +9,11 @@ import { installFetchGate } from './network.js';
 import { installXhrGate } from './xhr.js';
 import { installWebSocketGate } from './websocket.js';
 import { installMediaPolicy } from './media.js';
-import { createPermissionAuthorization } from './network-transport.js';
+import type { createPermissionAuthorization } from './network-transport.js';
 
-export function installContainer(channel?: MessageChannel): void {
-  const _authorize = createPermissionAuthorization(window, channel);
+export type PermissionAuthorization = ReturnType<typeof createPermissionAuthorization>;
 
+export function installContainer(_authorize: PermissionAuthorization): void {
   const _bridgeUrl: string | undefined = (window as any).__truapi_localhost?.url;
   const _webSocketBackend = (window as any).__truapi_websocket_connect__;
   freezeAndDelete(window, '__truapi_websocket_connect__');

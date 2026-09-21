@@ -6,7 +6,7 @@ import {
   type ProductAccountId,
   type TrUApiClient,
 } from "../../../../js/packages/truapi/src/index.ts";
-import { createPermissionAuthorization } from "../../../../js/container/src/network-transport.ts";
+import { createCliAuthorization } from "./permissions.ts";
 import { installFetchGate } from "../../../../js/container/src/network.ts";
 import { installWebSocketGate } from "../../../../js/container/src/websocket.ts";
 import { installXhrGate } from "../../../../js/container/src/xhr.ts";
@@ -53,7 +53,8 @@ async function main() {
       derivationIndex: { tag: "Index", value: index },
     }),
   };
-  globalThis.truapi = createClient(createTransport(provider));
+  const transport = createTransport(provider);
+  globalThis.truapi = createClient(transport);
   globalThis.host = context;
   globalThis.assert = (condition: unknown, ...message: unknown[]) => {
     if (condition) return;
@@ -67,18 +68,7 @@ async function main() {
     throw new Error(detail || "assertion failed");
   };
 
-  const NativeMessageEvent = MessageEvent;
-  const port = {
-    postMessage: provider.postMessage.bind(provider),
-    onmessage: null as ((event: MessageEvent) => void) | null,
-    onmessageerror: null as (() => void) | null,
-  };
-  provider.subscribe((data) =>
-    port.onmessage?.(new NativeMessageEvent("message", { data })),
-  );
-  provider.subscribeClose?.(() => port.onmessageerror?.());
-  Object.assign(globalThis, { __truapi_network_port__: port });
-  const authorization = createPermissionAuthorization(globalThis);
+  const authorization = createCliAuthorization(transport);
   installFetchGate(globalThis, authorization.network);
   installWebSocketGate(globalThis, authorization.network);
   installXhrGate(globalThis, authorization.network);
@@ -97,6 +87,7 @@ async function main() {
     if (typeof module.default === "function") await module.default(context);
   } finally {
     clearTimeout(timer);
+    transport.dispose();
     provider.dispose();
   }
 }
