@@ -22,13 +22,12 @@ fn js_string_literal(value: &str) -> String {
 mod tests {
     use super::*;
 
-    fn config_line(script: &str, needle: &str) -> String {
+    fn endpoint_line(script: &str) -> &str {
         script
             .lines()
-            .find(|line| line.contains(needle))
-            .unwrap_or_else(|| panic!("the script declares {needle}"))
+            .find(|line| line.trim_start().starts_with("var endpoint ="))
+            .expect("the script declares the endpoint")
             .trim()
-            .to_owned()
     }
 
     #[test]
@@ -36,7 +35,7 @@ mod tests {
         let script = script("ws://127.0.0.1:9955/?t=abc", "abc");
 
         assert_eq!(
-            config_line(&script, "var endpoint ="),
+            endpoint_line(&script),
             r#"var endpoint = { url: "ws://127.0.0.1:9955/?t=abc", token: "abc" };"#
         );
     }
@@ -46,7 +45,7 @@ mod tests {
         let script = script(r#"ws://x";alert(1);//"#, "");
 
         assert_eq!(
-            config_line(&script, "var endpoint ="),
+            endpoint_line(&script),
             r#"var endpoint = { url: "ws://x\";alert(1);//", token: "" };"#
         );
     }
@@ -56,7 +55,7 @@ mod tests {
         let script = script("ws://x\u{2028}y\u{2029}z", "");
 
         assert_eq!(
-            config_line(&script, "var endpoint ="),
+            endpoint_line(&script),
             r#"var endpoint = { url: "ws://x\u2028y\u2029z", token: "" };"#
         );
     }

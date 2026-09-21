@@ -8,21 +8,16 @@
   var RETRY_BASE_MS = 250;
   // Keep retries within the SDK's 20s wait for a replacement port.
   var RETRY_MAX_MS = 5000;
-  var VACANCY_POLL_MS = 50;
-  // Stop polling when the SDK's 20s port wait has expired.
-  var VACANCY_MAX_POLLS = 400;
 
   var live = null;
   var paused = false;
-  var attempt = 0;
+  var retryDelay = RETRY_BASE_MS;
   var timer = null;
-  var vacancyPolls = 0;
 
   // Each socket has its own core runtime, so frames and request ids cannot
   // move from a retired port to its replacement.
   function createConnection() {
     var socket = null;
-    var started = false;
     var queue = [];
     var connection;
 
@@ -31,9 +26,7 @@
       onmessageerror: null,
 
       postMessage: function(message) {
-        if (!started) {
-          port.start();
-        }
+        port.start();
 
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(message);
@@ -43,8 +36,7 @@
       },
 
       start: function() {
-        if (started) return;
-        started = true;
+        if (socket !== null || live !== connection) return;
 
         try {
           // Product code can mutate endpoint.url; the container only admits
@@ -57,7 +49,7 @@
         socket.binaryType = "arraybuffer";
 
         socket.onopen = function() {
-          attempt = 0;
+          retryDelay = RETRY_BASE_MS;
           var pending = queue;
           queue = [];
           pending.forEach(function(message) {
@@ -71,11 +63,7 @@
           }
         };
 
-        socket.onerror = function() {
-          retire(connection);
-        };
-
-        socket.onclose = function() {
+        socket.onerror = socket.onclose = function() {
           retire(connection);
         };
       },
@@ -90,7 +78,6 @@
 
     connection = {
       port: port,
-      retired: false,
       stale: function() {
         return socket !== null && socket.readyState >= WebSocket.CLOSING;
       }
@@ -101,9 +88,8 @@
 
   // The SDK uses onmessageerror as the port's close signal.
   function retire(connection) {
-    if (connection.retired) return;
-    connection.retired = true;
-    if (live === connection) live = null;
+    if (live !== connection) return;
+    live = null;
 
     var notify = connection.port.onmessageerror;
     if (typeof notify === "function") {
@@ -111,35 +97,15 @@
       notify();
     }
 
-    scheduleRepublish();
-  }
-
-  function scheduleRepublish() {
     if (paused || timer !== null) return;
-
-    var delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, attempt));
-    attempt += 1;
-    timer = setTimeout(republish, delay);
-  }
-
-  function republish() {
-    timer = null;
-    if (paused || live !== null) return;
-
-    // The SDK must release its old port before adopting a replacement.
-    if (window.__HOST_API_PORT__ !== undefined) {
-      if (vacancyPolls < VACANCY_MAX_POLLS) {
-        vacancyPolls += 1;
-        timer = setTimeout(republish, VACANCY_POLL_MS);
-      }
-      return;
-    }
-
-    publish();
+    timer = setTimeout(publish, retryDelay);
+    retryDelay = Math.min(RETRY_MAX_MS, retryDelay * 2);
   }
 
   function publish() {
-    vacancyPolls = 0;
+    timer = null;
+    if (paused || live !== null || window.__HOST_API_PORT__) return;
+
     live = createConnection();
     window.__HOST_API_PORT__ = live.port;
     window.dispatchEvent(new Event('truapi-native-ready'));
@@ -158,8 +124,7 @@
 
   function resume() {
     paused = false;
-    attempt = 0;
-    vacancyPolls = 0;
+    retryDelay = RETRY_BASE_MS;
 
     if (live !== null) {
       if (live.stale()) {
@@ -171,7 +136,7 @@
     if (timer !== null) {
       clearTimeout(timer);
     }
-    republish();
+    publish();
   }
 
   window.__truapi_localhost = endpoint;

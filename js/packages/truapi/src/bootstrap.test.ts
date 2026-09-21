@@ -30,7 +30,7 @@ interface BootstrapWindow {
 
 type BootstrapEntry = (
     window: BootstrapWindow,
-    webSocket: typeof WebSocket,
+    webSocket: typeof FakeSocket,
     event: typeof Event,
     setTimeout: (handler: () => void, delay: number) => number,
     clearTimeout: (id: number) => void,
@@ -85,10 +85,6 @@ function installBootstrap(existingPort?: HostPort) {
         }
     }
 
-    class FakeEvent {
-        constructor(readonly type: string) {}
-    }
-
     const win: BootstrapWindow = {
         __HOST_API_PORT__: existingPort,
         dispatchEvent(event) {
@@ -108,8 +104,8 @@ function installBootstrap(existingPort?: HostPort) {
 
     entry(
         win,
-        TrackedSocket as unknown as typeof WebSocket,
-        FakeEvent as unknown as typeof Event,
+        TrackedSocket,
+        Event,
         (handler, delay) => {
             nextTimerId += 1;
             delays.push(delay);
@@ -127,13 +123,10 @@ function installBootstrap(existingPort?: HostPort) {
         readyEvents,
         delays,
 
-        /** Fire every pending timer `rounds` times, so a self-rescheduling poll advances. */
-        advance(rounds = 40): void {
-            for (let round = 0; round < rounds; round += 1) {
-                const due = [...timers.values()];
-                timers.clear();
-                for (const run of due) run();
-            }
+        advance(): void {
+            const due = [...timers.values()];
+            timers.clear();
+            for (const run of due) run();
         },
 
         // SDK cleanup closes the port before clearing its global reference.
@@ -266,12 +259,20 @@ describe("localhost bridge bootstrap", () => {
         host.sockets[1]!.open();
 
         retired.close();
+        host.sockets[0]!.onerror?.();
+        host.sockets[0]!.onclose?.();
+        host.advance();
         current.postMessage(Uint8Array.of(7));
 
         expect({
+            port: host.win.__HOST_API_PORT__,
             liveState: host.sockets[1]!.readyState,
             delivered: host.sockets[1]!.sent,
-        }).toEqual({ liveState: FakeSocket.OPEN, delivered: [Uint8Array.of(7)] });
+        }).toEqual({
+            port: current,
+            liveState: FakeSocket.OPEN,
+            delivered: [Uint8Array.of(7)],
+        });
     });
 
     /** A bridge that stays down must not become a dial storm. */
@@ -282,7 +283,7 @@ describe("localhost bridge bootstrap", () => {
         host.sockets[0]!.close();
 
         for (let attempt = 0; attempt < 7; attempt += 1) {
-            host.advance(1);
+            host.advance();
             host.adopt();
             host.sockets[host.sockets.length - 1]!.close();
         }
