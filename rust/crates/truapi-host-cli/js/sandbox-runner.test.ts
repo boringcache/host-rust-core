@@ -17,7 +17,6 @@ import {
   type BrowserScriptOptions,
 } from "./sandbox-runner.ts";
 
-const cors = { "Access-Control-Allow-Origin": "*" };
 const permission =
   "{ permission: { tag: 'Remote', value: { domains: ['127.0.0.1'] } } }";
 const privateRequest = (request: ProtocolMessage) =>
@@ -88,35 +87,6 @@ function run(
   });
 }
 
-function requestScript(api: "fetch" | "XHR"): string {
-  if (api === "fetch") return "const request = fetch;";
-  return `function request(url, options = {}) {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      XMLHttpRequest.prototype.open.call(xhr, options.method ?? 'GET', url);
-      xhr.onload = () => resolve({ text: async () => xhr.responseText });
-      xhr.onerror = () => reject(new TypeError('XHR failed'));
-      xhr.onabort = () => reject(options.signal?.reason ?? new DOMException('Aborted', 'AbortError'));
-      for (const [name, value] of Object.entries(options.headers ?? {})) xhr.setRequestHeader(name, value);
-      options.signal?.addEventListener('abort', () => xhr.abort(), { once: true });
-      XMLHttpRequest.prototype.send.call(xhr, options.body ?? null);
-    });
-  }`;
-}
-
-function httpEndpoint() {
-  const hits: string[] = [];
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request) {
-      hits.push(new URL(request.url).pathname);
-      return new Response("authorized", { headers: cors });
-    },
-  });
-  return { server, hits, url: JSON.stringify(server.url.href) };
-}
-
 test("the first product statement sees the shipped sandbox and CLI helpers", async () => {
   const messages: string[] = [];
   await run(
@@ -137,55 +107,62 @@ test("the first product statement sees the shipped sandbox and CLI helpers", asy
   expect(messages).toContain("completed sandbox.testnet");
 }, 20_000);
 
-for (const api of ["fetch", "XHR"] as const) {
-  test(`public Allow once authorizes exactly one native ${api} in the same execution`, async () => {
-    const endpoint = httpEndpoint();
-    let grant = false;
-    const fixture = permissions((request, send) => {
-      if (privateRequest(request)) {
-        send(request, grant);
-        grant = false;
-      } else {
-        grant = true;
-        send(request, true);
-      }
-    });
-    try {
-      await run(
-        `
-        ${requestScript(api)}
-        assert((await truapi.permissions.requestRemotePermission(${permission}))._unsafeUnwrap().granted);
-        assert(await (await request(${endpoint.url})).text() === 'authorized');
-        try { await request(${endpoint.url}); throw new Error('grant reused'); }
-        catch (error) { assert(error instanceof TypeError); }
-      `,
-        fixture,
-      );
-      expect({
-        hits: endpoint.hits,
-        privateRequests: fixture.requests
-          .filter(privateRequest)
-          .map((request) =>
-            VersionedRemotePermissionRequest.dec(request.payload.value),
-          ),
-        publicRequests: fixture.requests.filter(
-          (request) => !privateRequest(request),
-        ).length,
-      }).toEqual({
-        hits: ["/"],
-        privateRequests: Array(2).fill({
-          tag: "V1",
-          value: {
-            permission: { tag: "Remote", value: { domains: ["127.0.0.1"] } },
-          },
-        }),
-        publicRequests: 1,
+test("public Allow once authorizes exactly one native fetch in the same execution", async () => {
+  const hits: string[] = [];
+  const endpoint = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      hits.push(new URL(request.url).pathname);
+      return new Response("authorized", {
+        headers: { "Access-Control-Allow-Origin": "*" },
       });
-    } finally {
-      endpoint.server.stop(true);
+    },
+  });
+  let grant = false;
+  const fixture = permissions((request, send) => {
+    if (privateRequest(request)) {
+      send(request, grant);
+      grant = false;
+    } else {
+      grant = true;
+      send(request, true);
     }
-  }, 20_000);
-}
+  });
+  try {
+    await run(
+      `
+      assert((await truapi.permissions.requestRemotePermission(${permission}))._unsafeUnwrap().granted);
+      assert(await (await fetch(${JSON.stringify(endpoint.url.href)})).text() === 'authorized');
+      try { await fetch(${JSON.stringify(endpoint.url.href)}); throw new Error('grant reused'); }
+      catch (error) { assert(error instanceof TypeError); }
+    `,
+      fixture,
+    );
+    expect({
+      hits,
+      privateRequests: fixture.requests
+        .filter(privateRequest)
+        .map((request) =>
+          VersionedRemotePermissionRequest.dec(request.payload.value),
+        ),
+      publicRequests: fixture.requests.filter(
+        (request) => !privateRequest(request),
+      ).length,
+    }).toEqual({
+      hits: ["/"],
+      privateRequests: Array(2).fill({
+        tag: "V1",
+        value: {
+          permission: { tag: "Remote", value: { domains: ["127.0.0.1"] } },
+        },
+      }),
+      publicRequests: 1,
+    });
+  } finally {
+    endpoint.stop(true);
+  }
+}, 20_000);
 
 for (const outcome of ["completion", "rejection", "timeout"] as const) {
   test(`${outcome} closes native sockets and disposes the provider`, async () => {

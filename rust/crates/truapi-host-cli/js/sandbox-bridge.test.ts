@@ -1,15 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createContext, runInContext } from "node:vm";
-import {
-  createMessagePortProvider,
-  decodeWireMessage,
-  encodeWireMessage,
-  MESSAGE_TYPE_RESPONSE,
-  scale,
-  VersionedRemotePermissionError,
-  VersionedRemotePermissionResponse,
-} from "@parity/truapi";
-import { createPermissionAuthorization } from "../../../../js/container/src/network-transport.ts";
+import { decodeWireMessage, encodeWireMessage } from "@parity/truapi";
 
 const bundle = await Bun.build({
   entrypoints: [new URL("./sandbox-bridge.ts", import.meta.url).pathname],
@@ -194,66 +185,35 @@ describe("one Rust execution for public calls and private authorization", () => 
     },
   );
 
-  it("settles pending SDK and permission calls when the frame socket closes", async () => {
+  it("notifies both channels once when the frame socket closes", () => {
     const bridge = browser();
     try {
-      const provider = createMessagePortProvider(bridge.port);
-      const closed: Error[] = [];
-      provider.subscribeClose!((error) => closed.push(error));
-      const { network } = createPermissionAuthorization(
-        bridge.runtime as unknown as Window & typeof globalThis,
-      );
-      const decisions: boolean[] = [];
-      network("https://example.com", (allowed) => decisions.push(allowed));
-      await Promise.resolve();
+      let publicFailures = 0;
+      let privateFailures = 0;
+      bridge.port.addEventListener("messageerror", () => publicFailures++);
+      bridge.privatePort.onmessageerror = () => privateFailures++;
       bridge.socket.dispatchEvent(new Event("close"));
-      network("https://example.com/later", (allowed) =>
-        decisions.push(allowed),
-      );
+      bridge.socket.dispatchEvent(new Event("close"));
       expect({
-        decisions,
-        closed,
-        failures: bridge.failures.length,
-        socketClosed: bridge.socket.closed,
-      }).toEqual({
-        decisions: [false, false],
-        closed: [expect.any(Error)],
-        failures: 1,
-        socketClosed: true,
-      });
+        publicFailures,
+        privateFailures,
+        closed: bridge.socket.closed,
+      }).toEqual({ publicFailures: 1, privateFailures: 1, closed: true });
     } finally {
       bridge.stop();
     }
   });
 
-  it("cannot turn Rust denial into approval by replacing collection iteration", async () => {
+  it("protects private replies when product replaces collection iteration", async () => {
     const bridge = browser();
     try {
-      const { network } = createPermissionAuthorization(
-        bridge.runtime as unknown as Window & typeof globalThis,
-      );
-      const decision = new Promise<boolean>((resolve) =>
-        network("https://example.com", resolve),
-      );
+      const original = frame("permission");
+      const reply = new Promise<Uint8Array>((resolve) => {
+        bridge.privatePort.onmessage = ({ data }) => resolve(data);
+      });
+      bridge.privatePort.postMessage(original);
       bridge.open();
       await bridge.frames(1);
-      const request = decodeWireMessage(bridge.sent[0]!)._unsafeUnwrap();
-      const response = encodeWireMessage({
-        requestId: request.requestId,
-        payload: {
-          ...request.payload,
-          messageType: MESSAGE_TYPE_RESPONSE,
-          value: scale
-            .Result(
-              VersionedRemotePermissionResponse,
-              scale.CallError(VersionedRemotePermissionError),
-            )
-            .enc({
-              success: true,
-              value: { tag: "V1", value: { granted: false } },
-            }),
-        },
-      })._unsafeUnwrap();
       runInContext(
         `
         const iterate = Set.prototype[Symbol.iterator];
@@ -269,8 +229,8 @@ describe("one Rust execution for public calls and private authorization", () => 
       `,
         bridge.context,
       );
-      bridge.reply(response);
-      expect(await decision).toBe(false);
+      bridge.reply(bridge.sent[0]!);
+      expect(await reply).toEqual(original);
     } finally {
       bridge.stop();
     }

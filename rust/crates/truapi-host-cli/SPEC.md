@@ -215,9 +215,11 @@ the running binary continues using the runner from its own version directory.
 A release archive ships `runner.js`, `sandbox-assets/` (combined bridge/container,
 browser SDK and script bootstrap), and matching
 `node_modules/{playwright-core,esbuild-wasm}` beside the binary. The browser
-assets use the existing `js/container` source and the same esbuild compiler used
-by native iOS packaging. The runtime builder is the portable WebAssembly
-package. Installed execution does not need a source checkout.
+assets use the existing `js/container` source. Both dev and source scripts read
+prebuilt assets from `target/dist/sandbox-assets`; installed execution reads
+those beside its runner. `make cli-runner` builds the assets with esbuild.
+The portable WebAssembly compiler prepares product scripts at runtime.
+Installed execution does not need a source checkout.
 
 Bun executes the trusted launcher and prepares product modules. Product code
 executes in Chromium by default. Missing browser assets, browser installation,

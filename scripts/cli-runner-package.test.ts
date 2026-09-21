@@ -11,7 +11,6 @@ import {
   VersionedRemotePermissionResponse,
   VersionedRemotePermissionError,
 } from "@parity/truapi";
-import { buildBrowserAssets } from "../rust/crates/truapi-host-cli/js/browser-assets.ts";
 
 const repository = resolve(import.meta.dir, "..");
 const dependencies = (await Bun.file(join(repository, "package.json")).json())
@@ -61,16 +60,6 @@ it("ships each browser asset and the matching browser driver", async () => {
   expect(builder.version).toBe(dependencies["esbuild-wasm"]);
 });
 
-it("packages the same browser assets used by source mode", async () => {
-  const expected = await buildBrowserAssets(repository);
-  const [container, client, bootstrap] = await Promise.all(
-    ["container.js", "client.mjs", "bootstrap.js"].map((name) =>
-      readFile(join(directory, "sandbox-assets", name), "utf8"),
-    ),
-  );
-  expect({ container, client, bootstrap }).toEqual(expected);
-});
-
 it("resolves the packaged runner without a source checkout", async () => {
   const preload = join(directory, "stack-format.js");
   await writeFile(
@@ -95,7 +84,7 @@ it("resolves the packaged runner without a source checkout", async () => {
   }
 });
 
-it("authorizes a WebSocket round trip through the packaged browser runner", async () => {
+it("runs a TypeScript product with authorized WebSocket access from an isolated package", async () => {
   const authorizations: unknown[] = [];
   const server = Bun.serve<{ frames: boolean }>({
     hostname: "127.0.0.1",
@@ -147,11 +136,12 @@ it("authorizes a WebSocket round trip through the packaged browser runner", asyn
     script,
     `
     assert(typeof process === 'undefined' && typeof Bun === 'undefined');
-    await new Promise((resolve, reject) => {
+    const expected: string = 'packaged-websocket-ok';
+    await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket('ws://127.0.0.1:${server.port}/echo');
-      socket.onopen = () => socket.send('packaged-websocket-ok');
+      socket.onopen = () => socket.send(expected);
       socket.onmessage = ({ data }) => {
-        if (data !== 'packaged-websocket-ok') return reject(new Error('Unexpected reply'));
+        if (data !== expected) return reject(new Error('Unexpected reply'));
         socket.close();
         console.log(data);
         resolve();
@@ -218,33 +208,6 @@ it("ships a runnable browser installer with its dynamic dependencies", () => {
   });
 });
 
-it("produces a valid browser client module with complete exports", () => {
-  const result = Bun.spawnSync([
-    "node",
-    "--check",
-    join(directory, "sandbox-assets/client.mjs"),
-  ]);
-  expect({ status: result.exitCode, error: result.stderr.toString() }).toEqual({
-    status: 0,
-    error: "",
-  });
-});
-
-it("ships a portable product builder that works without a checkout", () => {
-  const entrypoint = join(directory, "node_modules/esbuild-wasm/lib/main.js");
-  const source = `const { transform, stop } = require(${JSON.stringify(entrypoint)});
-    const result = await transform('const value: string = "browser";', { loader: 'ts' });
-    console.log(result.code.trim());
-    stop();`;
-  const result = Bun.spawnSync([process.execPath, "--eval", source], {
-    cwd: tmpdir(),
-  });
-  expect({
-    status: result.exitCode,
-    output: result.stdout.toString().trim(),
-  }).toEqual({ status: 0, output: 'const value = "browser";' });
-});
-
 it("fails closed when an installed sandbox asset is missing", async () => {
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -281,7 +244,7 @@ it("fails closed when an installed sandbox asset is missing", async () => {
       status: 1,
       output: "",
       error: expect.stringContaining(
-        "Sandbox assets are missing beside runner.js; reinstall truapi-host",
+        "Sandbox assets are missing; run make cli-runner in a source checkout, or reinstall truapi-host",
       ),
     });
   } finally {

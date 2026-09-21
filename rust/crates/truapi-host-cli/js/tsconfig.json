@@ -17,7 +17,6 @@
   "include": [
     "runner.ts",
     "browser-bootstrap.ts",
-    "browser-assets.ts",
     "browser-sandbox.ts",
     "sandbox-*.ts",
     "../../../../scripts/build-cli-runner.ts",

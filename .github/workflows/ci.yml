@@ -677,6 +677,7 @@ jobs:
           echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/truapi-browsers" >> "$GITHUB_ENV"
           npm ci --ignore-scripts
           npm run build --prefix js/packages/truapi
+          make cli-runner
 
       - name: Test product preparation
         run: |

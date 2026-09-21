@@ -1,7 +1,12 @@
 // Product scripts run in the shared browser container by default.
-import type {
-  ProductAccountId,
-  TrUApiClient,
+import { pathToFileURL } from "node:url";
+import { inspect } from "node:util";
+import { wsProvider } from "./ws-provider.ts";
+import {
+  createClient,
+  createTransport,
+  type ProductAccountId,
+  type TrUApiClient,
 } from "../../../../js/packages/truapi/src/index.ts";
 
 /// The host context injected alongside `truapi`. It only exposes what a script
@@ -32,6 +37,48 @@ function requireEnv(name: string): string {
   return value;
 }
 
+async function runTrustedScript(
+  frameUrl: string,
+  productId: string,
+  scriptPath: string,
+): Promise<void> {
+  const provider = wsProvider(frameUrl);
+  const client = createClient(createTransport(provider));
+  const context: HostContext = {
+    productId,
+    productAccount: (index = 0) => ({
+      dotNsIdentifier: productId,
+      derivationIndex: { tag: "Index", value: index },
+    }),
+  };
+  globalThis.truapi = client;
+  globalThis.host = context;
+  globalThis.assert = (condition: unknown, ...message: unknown[]) => {
+    if (condition) return;
+    const detail = message
+      .map((value) =>
+        typeof value === "string"
+          ? value
+          : inspect(value, { colors: false, depth: 5 }),
+      )
+      .join(" ");
+    throw new Error(detail || "assertion failed");
+  };
+  const timer = setTimeout(() => {
+    console.error(`[runner] timed out connecting to ${frameUrl}`);
+    process.exit(2);
+  }, 15_000);
+  try {
+    await provider.opened;
+    clearTimeout(timer);
+    const module = await import(pathToFileURL(scriptPath).href);
+    if (typeof module.default === "function") await module.default(context);
+  } finally {
+    clearTimeout(timer);
+    provider.dispose();
+  }
+}
+
 async function main() {
   const frameUrl = requireEnv("TRUAPI_FRAME_URL");
   const productId = requireEnv("TRUAPI_PRODUCT_ID");
@@ -46,7 +93,6 @@ async function main() {
     console.error(
       "[runner] Trusted script mode: running with host Bun capabilities",
     );
-    const { runTrustedScript } = await import("./trusted-runner.ts");
     await runTrustedScript(frameUrl, productId, scriptPath);
   } else {
     const { runSandboxScript } = await import("./sandbox-runner.ts");

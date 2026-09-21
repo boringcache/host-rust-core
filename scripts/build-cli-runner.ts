@@ -1,7 +1,7 @@
 import { cp, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { buildBrowserAssets } from "../rust/crates/truapi-host-cli/js/browser-assets.ts";
+import { build } from "esbuild-wasm";
 
 const repository = resolve(import.meta.dir, "..");
 const destination = resolve(process.argv[2] ?? join(repository, "target/dist"));
@@ -36,14 +36,39 @@ try {
     throw new Error(`Cannot bundle runner: ${runner.logs.join("\n")}`);
   }
   await Bun.write(join(staging, "runner.js"), runner.outputs[0]);
-  const assets = await buildBrowserAssets(repository);
-  for (const [name, source] of [
-    ["container.js", assets.container],
-    ["client.mjs", assets.client],
-    ["bootstrap.js", assets.bootstrap],
-  ]) {
-    await Bun.write(join(staging, "sandbox-assets", name), source);
-  }
+  await Promise.all(
+    (
+      [
+        [
+          "container.js",
+          "rust/crates/truapi-host-cli/js/browser-sandbox.ts",
+          "iife",
+        ],
+        ["client.mjs", "js/packages/truapi/src/index.ts", "esm"],
+        [
+          "bootstrap.js",
+          "rust/crates/truapi-host-cli/js/browser-bootstrap.ts",
+          "esm",
+        ],
+      ] as const
+    ).map(async ([name, entrypoint, format]) => {
+      const result = await build({
+        entryPoints: [join(repository, entrypoint)],
+        absWorkingDir: repository,
+        bundle: true,
+        platform: "browser",
+        target: format === "iife" ? "es2020" : "es2022",
+        format,
+        external: name === "bootstrap.js" ? ["@parity/truapi"] : [],
+        define: { "process.env.NODE_ENV": '"production"' },
+        write: false,
+      });
+      await Bun.write(
+        join(staging, "sandbox-assets", name),
+        result.outputFiles[0].contents,
+      );
+    }),
+  );
   for (const [name, directory] of packages) {
     await cp(directory, join(staging, "node_modules", name), {
       recursive: true,

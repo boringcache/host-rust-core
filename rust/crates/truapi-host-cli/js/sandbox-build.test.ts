@@ -44,21 +44,23 @@ test("rejects imports of host capabilities", async () => {
   );
 });
 
-test("does not bundle files outside the product directory", async () => {
-  const { directory, script } = await fixture(
-    'import secret from "../secret.json"; console.log(secret);',
-  );
-  await writeFile(join(directory, "secret.json"), '{"secret":"host-only"}');
-  await expect(buildProductScript(script)).rejects.toThrow(/outside.*product/);
-});
-
-test("symlinks cannot bring host files into the product bundle", async () => {
+test.each([
+  ["parent traversal", "../secret.json"],
+  ["file symlink", "./secret.json"],
+  ["dependency directory symlink", "./node_modules/secret.json"],
+])("rejects host files reached through %s", async (_, importPath) => {
   const { directory, product, script } = await fixture(
-    'import secret from "./secret.json"; console.log(secret);',
+    `import secret from "${importPath}"; console.log(secret);`,
   );
-  await writeFile(join(directory, "secret.json"), '{"secret":"host-only"}');
-  await symlink(join(directory, "secret.json"), join(product, "secret.json"));
-  await expect(buildProductScript(script)).rejects.toThrow(/outside.*product/);
+  const secret = join(directory, "secret.json");
+  await writeFile(secret, '{"secret":"host-only"}');
+  if (importPath === "./secret.json")
+    await symlink(secret, join(product, "secret.json"));
+  if (importPath === "./node_modules/secret.json")
+    await symlink(directory, join(product, "node_modules"));
+  await expect(buildProductScript(script)).rejects.toThrow(
+    /outside.*product|dependency.*symlink/,
+  );
 });
 
 test("never embeds inherited environment secrets", async () => {
@@ -73,22 +75,6 @@ test("never embeds inherited environment secrets", async () => {
   } finally {
     delete process.env.TRUAPI_BUILD_SECRET;
   }
-});
-
-test("dependency directory symlinks cannot expand the product input boundary", async () => {
-  const { directory, product, script } = await fixture(
-    'import secret from "./node_modules/secret.json"; console.log(secret);',
-  );
-  const privateDirectory = join(directory, "private");
-  await mkdir(privateDirectory);
-  await writeFile(
-    join(privateDirectory, "secret.json"),
-    '{"secret":"host-only"}',
-  );
-  await symlink(privateDirectory, join(product, "node_modules"));
-  await expect(buildProductScript(script)).rejects.toThrow(
-    /outside.*product|dependency.*symlink/,
-  );
 });
 
 test("product macros cannot execute with launcher privileges", async () => {
