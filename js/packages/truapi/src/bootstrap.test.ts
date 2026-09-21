@@ -36,21 +36,21 @@ function installBootstrap(existing: Partial<BootstrapWindow> = {}) {
     return { win, events };
 }
 
-describe("localhost endpoint bootstrap", () => {
-    it("publishes only the endpoint and webview mark when announcing host readiness", () => {
+describe("localhost bootstrap", () => {
+    it("publishes the endpoint and compatibility port without lifecycle hooks", () => {
         const host = installBootstrap();
 
         expect({
             endpoint: host.win.__truapi_localhost,
             mark: host.win.__HOST_WEBVIEW_MARK__,
-            port: host.win.__HOST_API_PORT__,
+            port: typeof host.win.__HOST_API_PORT__,
             pause: host.win.__pauseConnections__,
             resume: host.win.__resumeConnections__,
             events: host.events,
         }).toEqual({
             endpoint: { url: "ws://127.0.0.1:9955/?t=token", token: "token" },
             mark: true,
-            port: undefined,
+            port: "object",
             pause: undefined,
             resume: undefined,
             events: ["truapi-native-ready"],

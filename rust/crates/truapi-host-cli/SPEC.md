@@ -476,9 +476,10 @@ The JavaScript is the one every native host injects, rendered by
 `window.__truapi_localhost`, sets the native-webview marker, and dispatches
 `truapi-native-ready`. HTTP and WebSocket share the same TCP port. The TrUAPI SDK
 opens the connection on the first API call. After a disconnect, the next call
-opens a new connection. The bootstrap owns no sockets or retry timers. Products
-must use an SDK version that supports this endpoint. Production builds must
-omit the tag.
+opens a new connection. Older SDKs use a `window.__HOST_API_PORT__` adapter that
+opens one socket when used and buffers messages until it opens. It has no retry
+timers, reconnection, or lifecycle hooks; a disconnect requires reloading the
+page. Production builds must omit the tag.
 
 On Unix the wrapped command is the leader of a process group retained by the
 CLI. A natural direct-launcher exit preserves its status and still cleans up

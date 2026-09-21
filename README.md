@@ -191,7 +191,7 @@ control of quota and of whether the bytes are backed up or encrypted.
 
 1. The protocol is defined as Rust traits in [`rust/crates/truapi/`](rust/crates/truapi/), with each trait tagged `#[wire_trait(id = N)]` and each method tagged `#[wire(id = N)]` for a stable byte-level `(trait, method)` dispatch table. Every method's doc comment must carry a ` ```ts ` example, which codegen extracts into the playground's EXAMPLE tab; the build fails if any method is missing one.
 2. `truapi-codegen` reads rustdoc JSON for that crate and generates the TypeScript client under git-ignored paths in `js/packages/truapi/`.
-3. Higher-level SDKs wrap the typed client; the transport encodes SCALE frames and ships them over `MessagePort` (or `postMessage` in iframe mode) to the host.
+3. Higher-level SDKs wrap the typed client; the transport encodes SCALE frames and ships them over WebSocket, `MessagePort`, or `postMessage` in iframe mode to the host.
 4. The host decodes the frame, dispatches to the matching trait method, encodes the response, and ships it back.
 
 Wire ids are append-only per trait: a trait id is never reassigned and a method id is never renumbered or reused within its trait, so deployed products stay compatible across protocol revisions. New methods take the next free method ids in their own trait and leave every other trait untouched. Trait 255 is permanently reserved for a correlated protocol error, allowing either peer to reject API messages introduced after it was released instead of leaving the caller pending.
@@ -267,8 +267,9 @@ reaches it through a development-only `<script>` tag:
 The host serves the same bootstrap script as the native hosts. It publishes the
 WebSocket URL and token in `window.__truapi_localhost`; the TrUAPI SDK opens the
 connection on the first API call. After a disconnect, the next call opens a new
-connection without reloading the page. Products must use an SDK version that
-supports this endpoint. The script needs no imports or environment variables.
+connection without reloading the page. Older SDKs use the provided
+`window.__HOST_API_PORT__` adapter and require a page reload after a disconnect.
+The script needs no imports or environment variables.
 TCP frame connections are accepted only from loopback peers, and browser
 WebSocket origins must also name localhost or a loopback IP. WebSocket is not
 subject to CORS, and confirmations here are auto-approved.

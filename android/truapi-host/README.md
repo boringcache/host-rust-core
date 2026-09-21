@@ -66,7 +66,7 @@ The public surface lives in [`src/main/kotlin/io/parity/truapi/TrUAPIHost.kt`](s
 - `HostBridge` - callback bundle the embedding app implements. Splits device permissions, remote permissions, navigation, push, feature support, action and permission confirmations, and both storage backends.
 - `HostStorage` - product-scoped read/write/clear interface the host backs with its own persistence.
 - `HostCoreStorage` - core-owned read/write/clear interface for auth session, pairing identity, and persisted permission decisions (`key` is a SCALE-encoded `CoreStorageKey`).
-- `LocalhostBridgeBootstrap` - publishes the product's host port, replaces it after a disconnect, and provides the app lifecycle hooks.
+- `LocalhostBridgeBootstrap` - publishes the WebSocket endpoint and a port adapter for SDKs that do not support the endpoint.
 - `TrUAPIHostRuntime` - process-owned runtime whose product executions share one authentication session. Open a connection per executable with `openProductExecution`, which returns a `TrUAPIProductExecution` holding its own token on the runtime's shared WS bridge, permission authorization, theme/preimage/chain notifications, and the Chat controls below.
 - `ChatHostBridge` - native Chat storage and UI, implemented by hosts that serve the Chat modality and passed to `openProductExecution`. Hosts without it pass nothing and Chat calls answer unsupported.
 - `PocketHostBridge` - the host's Pocket card collection, implemented by hosts with a Pocket surface and passed as `pocket` to `openProductExecution`. The execution then offers `notifyPocketCardsChanged`. `removeCard` decides and removes together, returning `NativePocketRemoval.Removed`, `Absent` or `Privileged`, so a card cannot be pinned between the check and the removal. Like Chat, Pocket is reachable only from a Worker execution with an active session, so without `activateLocalSession` every Pocket call answers `Denied`. Hosts without the bridge pass nothing and Pocket calls answer unsupported.
@@ -149,7 +149,7 @@ On the execution: `publishChatAction` delivers a user's action back to the produ
 
 ```text
 product app in WebView
-  Uint8Array frames via @parity/truapi's WebSocket transport
+  Uint8Array frames over the localhost WebSocket
            |
            v   ws://127.0.0.1:<port>/?t=<token>
 TrUAPIProductExecution.startWsBridge()
@@ -157,7 +157,7 @@ TrUAPIProductExecution.startWsBridge()
   → Rust dispatcher
 ```
 
-The bootstrap publishes the WebSocket URL and token in `window.__truapi_localhost`. Products must use an updated `@parity/truapi` SDK that supports this endpoint. The SDK connects on the first API call; after a disconnect, the next call opens a new connection.
+The bootstrap publishes the WebSocket URL and token in `window.__truapi_localhost`. The `@parity/truapi` SDK connects on the first API call; after a disconnect, the next call opens a new connection. Older SDKs use the provided `window.__HOST_API_PORT__` adapter and require a page reload after a disconnect.
 
 The Rust core handles the wire protocol directly. Outbound responses and host-side capability callbacks (`navigateTo`, `pushNotification`, `cancelNotification`, `devicePermission`, `remotePermission`, `authStateChanged`, core storage, chain JSON-RPC, `confirmUserAction`, `confirmPermission`, preimage lookup, theme, `featureSupported`, `storage`) reach the embedder through `HostBridge`. Bulletin preimage build/sign/submit now happens inside the core, so the host only serves `lookupPreimage`.
 

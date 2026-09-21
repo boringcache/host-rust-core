@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import type { TrUApiClient } from "./generated/index.js";
+import { createClient, type TrUApiClient } from "./generated/index.js";
+import { createTransport } from "./client.js";
 import * as T from "./generated/types.js";
 import * as S from "./scale.js";
-import { decodeWireMessage, encodeWireMessage, MESSAGE_TYPE_RESPONSE } from "./transport.js";
+import {
+    createMessagePortProvider,
+    decodeWireMessage,
+    encodeWireMessage,
+    MESSAGE_TYPE_RESPONSE,
+} from "./transport.js";
 
 const SOURCE = readFileSync(
     new URL(
@@ -31,9 +37,17 @@ class FakeSocket extends EventTarget {
     binaryType = "";
     readyState: number = FakeSocket.CONNECTING;
     readonly sent: Uint8Array[] = [];
+    onopen: (() => void) | null = null;
+    onclose: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onmessage: ((event: MessageEvent) => void) | null = null;
 
     constructor(readonly url: string) {
         super();
+        this.addEventListener("open", () => this.onopen?.());
+        this.addEventListener("close", () => this.onclose?.());
+        this.addEventListener("error", () => this.onerror?.());
+        this.addEventListener("message", (event) => this.onmessage?.(event as MessageEvent));
     }
 
     open(): void {
@@ -47,7 +61,7 @@ class FakeSocket extends EventTarget {
     }
 
     answerHandshake(): void {
-        const request = decodeWireMessage(this.sent[0]!);
+        const request = decodeWireMessage(this.sent.at(-1)!);
         if (request.isErr()) throw request.error;
         const response = encodeWireMessage({
             requestId: request.value.requestId,
@@ -142,6 +156,9 @@ describe("endpoint recovery through the real SDK", () => {
         host = installHost();
         const sandbox = await importSandbox();
         expect(host.sockets).toEqual([]);
+        host.win.__HOST_API_PORT__!.start = () => {
+            throw new Error("the updated SDK must not start the compatibility port");
+        };
 
         const statuses: string[] = [];
         sandbox.subscribeConnectionStatus((status) => statuses.push(status));
@@ -309,5 +326,97 @@ describe("endpoint recovery through the real SDK", () => {
         current.answerHandshake();
         expect((await response).isOk()).toBe(true);
         expect(host.sockets).toHaveLength(2);
+    });
+});
+
+describe("port compatibility for older SDKs", () => {
+    it("buffers startup requests and completes a handshake through the port transport", async () => {
+        host = installHost();
+        expect(host.sockets).toEqual([]);
+        const port = host.win.__HOST_API_PORT__!;
+        const provider = createMessagePortProvider(port);
+        const client = createClient(createTransport(provider));
+        const response = client.system.handshake();
+        await settle();
+        const socket = host.sockets[0]!;
+
+        expect({ sockets: host.sockets.length, sent: socket.sent }).toEqual({
+            sockets: 1, sent: [],
+        });
+        socket.open();
+        socket.answerHandshake();
+        expect((await response).isOk()).toBe(true);
+
+        const next = client.system.handshake();
+        socket.answerHandshake();
+        expect((await next).isOk()).toBe(true);
+        provider.dispose();
+    });
+
+    it("uses the original host endpoint even if product code changes the published metadata", () => {
+        host = installHost();
+        host.win.__truapi_localhost!.url = "ws://127.0.0.1:1234";
+        const port = host.win.__HOST_API_PORT__!;
+        port.start();
+        port.start();
+
+        expect(host.sockets.map((socket) => socket.url)).toEqual([BRIDGE_URL]);
+    });
+
+    it.each(["error", "close"])("fails pending requests on %s without reconnecting or replaying startup frames", async (event) => {
+        host = installHost();
+        const port = host.win.__HOST_API_PORT__!;
+        const provider = createMessagePortProvider(port);
+        const client = createClient(createTransport(provider));
+        const pending = Promise.resolve(client.system.handshake()).then(
+            () => null,
+            (error: unknown) => error,
+        );
+        const errors: Error[] = [];
+        provider.subscribeClose?.((error) => errors.push(error));
+        await settle();
+        const socket = host.sockets[0]!;
+        socket.dispatchEvent(new Event(event));
+
+        expect(await pending).toBeInstanceOf(Error);
+        port.start();
+        port.postMessage(new Uint8Array([1]));
+        socket.dispatchEvent(new Event("open"));
+        socket.dispatchEvent(new Event("error"));
+        expect({
+            errors: errors.length,
+            sockets: host.sockets.length,
+            state: socket.readyState,
+            sent: socket.sent,
+        }).toEqual({
+            errors: 1,
+            sockets: 1,
+            state: FakeSocket.CLOSED,
+            sent: [],
+        });
+    });
+
+    it("closing an unused port prevents it from opening a connection", () => {
+        host = installHost();
+        const port = host.win.__HOST_API_PORT__!;
+        port.close();
+        port.start();
+        port.postMessage(new Uint8Array([1]));
+
+        expect(host.sockets).toEqual([]);
+    });
+
+    it("a constructor failure permanently closes the adapter", () => {
+        host = installHost();
+        const port = host.win.__HOST_API_PORT__!;
+        globalThis.WebSocket = class {
+            constructor() {
+                throw new Error("connection refused");
+            }
+        } as unknown as typeof WebSocket;
+
+        expect(() => port.start()).toThrow("connection refused");
+        expect(() => port.start()).not.toThrow();
+        expect(() => port.postMessage(new Uint8Array([1]))).not.toThrow();
     });
 });
