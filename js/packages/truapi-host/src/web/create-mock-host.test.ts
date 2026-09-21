@@ -12,6 +12,35 @@ function hex(bytes: Uint8Array): string {
   );
 }
 
+/**
+ * The next `count` items of `subscription`, or a failure naming how many
+ * arrived.
+ *
+ * A dropped item parks the iterator, and waiting on it would end the test as a
+ * timeout, which reads as a flake. Racing a timer names the behaviour instead.
+ */
+async function drain<T>(
+  subscription: AsyncIterator<T>,
+  count: number,
+): Promise<T[]> {
+  const items: T[] = [];
+  for (let n = 0; n < count; n += 1) {
+    const next = await Promise.race([
+      subscription.next().then((result) => result.value as T),
+      new Promise<"dropped">((resolve) =>
+        setTimeout(() => resolve("dropped"), 50),
+      ),
+    ]);
+    if (next === "dropped") {
+      throw new Error(
+        `subscription delivered ${items.length} of ${count} items`,
+      );
+    }
+    items.push(next as T);
+  }
+  return items;
+}
+
 describe("createMockHost callbacks", () => {
   it("product storage round-trips and is namespaced from core", async () => {
     const { callbacks } = createMockHost();
@@ -46,9 +75,9 @@ describe("createMockHost callbacks", () => {
       devicePermissions: "allow-all",
       remotePermissions: "deny-all",
     });
-    expect(
-      await callbacks.permissions.devicePermission("Notifications"),
-    ).toBe("AllowAlways");
+    expect(await callbacks.permissions.devicePermission("Notifications")).toBe(
+      "AllowAlways",
+    );
     expect(
       await callbacks.permissions.remotePermission({
         permission: { tag: "WebRtc" },
@@ -73,7 +102,9 @@ describe("createMockHost callbacks", () => {
       .subscribeTheme()
       [Symbol.asyncIterator]()
       .next();
-    expect(theme.value).toEqual(ok({ name: { tag: "Default" }, variant: "Light" }));
+    expect(theme.value).toEqual(
+      ok({ name: { tag: "Default" }, variant: "Light" }),
+    );
   });
 
   it("records navigations and assigns monotonic notification ids", async () => {
@@ -175,9 +206,9 @@ describe("createMockHost callbacks", () => {
       devicePermissions: "deny-all",
       remotePermissions: "allow-all",
     });
-    expect(
-      await callbacks.permissions.devicePermission("Notifications"),
-    ).toBe("Deny");
+    expect(await callbacks.permissions.devicePermission("Notifications")).toBe(
+      "Deny",
+    );
     expect(
       await callbacks.permissions.remotePermission({
         permission: { tag: "WebRtc" },
@@ -211,7 +242,9 @@ describe("createMockHost callbacks", () => {
         [Symbol.asyncIterator]()
         .next()
         .then(() => "yielded" as const),
-      new Promise<"parked">((resolve) => setTimeout(() => resolve("parked"), 20)),
+      new Promise<"parked">((resolve) =>
+        setTimeout(() => resolve("parked"), 20),
+      ),
     ]);
     expect(outcome).toBe("parked");
   });
@@ -288,15 +321,25 @@ describe("createMockHost control surface", () => {
     // Two reviews of the same kind with different payloads: a kind-only
     // recording cannot tell these apart.
     const host = createMockHost();
-    await host.callbacks.userConfirmation.confirmUserAction(review("first.dot"));
-    await host.callbacks.userConfirmation.confirmUserAction(review("second.dot"));
+    await host.callbacks.userConfirmation.confirmUserAction(
+      review("first.dot"),
+    );
+    await host.callbacks.userConfirmation.confirmUserAction(
+      review("second.dot"),
+    );
 
     expect(host.confirmations()).toEqual([
       "ResourceAllocation",
       "ResourceAllocation",
     ]);
     expect(
-      host.reviews().map((r) => (r as { value: { callingProductId: string } }).value.callingProductId),
+      host
+        .reviews()
+        .map(
+          (r) =>
+            (r as { value: { callingProductId: string } }).value
+              .callingProductId,
+        ),
     ).toEqual(["first.dot", "second.dot"]);
   });
 
@@ -320,13 +363,13 @@ describe("createMockHost control surface", () => {
   it("denies whatever was not explicitly granted when enforcing", async () => {
     const host = createMockHost();
     host.setEnforcePermissions(true);
-    expect(
-      await host.callbacks.permissions.devicePermission("Camera"),
-    ).toBe("Deny");
+    expect(await host.callbacks.permissions.devicePermission("Camera")).toBe(
+      "Deny",
+    );
     host.grantPermission("Camera");
-    expect(
-      await host.callbacks.permissions.devicePermission("Camera"),
-    ).toBe("AllowAlways");
+    expect(await host.callbacks.permissions.devicePermission("Camera")).toBe(
+      "AllowAlways",
+    );
   });
 
   it("records the surface, key and answer of every permission prompt", async () => {
@@ -372,9 +415,9 @@ describe("createMockHost control surface", () => {
     expect(host.getGrantedPermissions()).toEqual([]);
     expect(host.getPreimages()).toEqual([]);
     expect(host.getTheme()).toBe("Dark");
-    expect(
-      await host.callbacks.permissions.devicePermission("Camera"),
-    ).toBe("AllowAlways");
+    expect(await host.callbacks.permissions.devicePermission("Camera")).toBe(
+      "AllowAlways",
+    );
   });
 });
 
@@ -416,9 +459,9 @@ describe("createMockHost TestHostAPI parity", () => {
   it("setPermissionBehavior switches the fallback for both prompts", async () => {
     const host = createMockHost();
     host.setPermissionBehavior("deny-all");
-    expect(
-      await host.callbacks.permissions.devicePermission("Camera"),
-    ).toBe("Deny");
+    expect(await host.callbacks.permissions.devicePermission("Camera")).toBe(
+      "Deny",
+    );
     expect(
       await host.callbacks.permissions.remotePermission({
         permission: { tag: "ChainSubmit" },
@@ -426,9 +469,9 @@ describe("createMockHost TestHostAPI parity", () => {
     ).toBe("Deny");
     // An explicit grant still wins over the policy.
     host.grantPermission("Camera");
-    expect(
-      await host.callbacks.permissions.devicePermission("Camera"),
-    ).toBe("AllowAlways");
+    expect(await host.callbacks.permissions.devicePermission("Camera")).toBe(
+      "AllowAlways",
+    );
   });
 
   it("getConnectionStatus and dispose track and release state", async () => {
@@ -441,6 +484,17 @@ describe("createMockHost TestHostAPI parity", () => {
     host.dispose();
     expect(host.getNavigationLog()).toEqual([]);
     expect(host.getConnectionStatus()).toBe("Idle");
+  });
+
+  it("a connect that fails leaves the status alone", async () => {
+    // Reporting Connected for a dial that threw makes the mock disagree with
+    // itself, and a suite asserting an offline host reads it as online.
+    const host = createMockHost({ chainProxies: [{ rpcUrl: "not a url" }] });
+    await expect(
+      host.callbacks.chain.connect(new Uint8Array(32)),
+    ).rejects.toThrow();
+
+    expect(host.getChainStatus()).toBe("Idle");
   });
 
   it("connect reports Connected and is refused while disconnected", async () => {
@@ -461,21 +515,29 @@ describe("createMockHost TestHostAPI parity", () => {
     expect(host.getConnectionStatus()).toBe("Connected");
   });
 
-  it("setTheme reaches a subscription opened before the change", async () => {
+  it("setTheme reaches a subscription that has not been read yet", async () => {
+    // The change lands before the first `next()`, so nothing has driven the
+    // generator body. A subscription that only registers once it is read
+    // drops this one and then parks on "Light" forever.
     const host = createMockHost({ theme: "Light" });
     const subscription = host.callbacks.theme.subscribeTheme();
-    expect((await subscription.next()).value).toEqual(
-      ok({ name: { tag: "Default" }, variant: "Light" }),
-    );
-
-    // Resume the generator so it is registered as a live subscriber, then
-    // change the theme: a mock that emitted once and parked would hang here.
-    const next = subscription.next();
-    await new Promise((resolve) => setTimeout(resolve, 0));
     host.setTheme("Dark");
-    expect((await next).value).toEqual(
+
+    expect(await drain(subscription, 2)).toEqual([
+      ok({ name: { tag: "Default" }, variant: "Light" }),
       ok({ name: { tag: "Default" }, variant: "Dark" }),
-    );
+    ]);
+  });
+
+  it("a write reaches a subscription that has not been read yet", async () => {
+    const host = createMockHost();
+    const subscription = host.callbacks.productStorage.subscribeStorage("k");
+    await host.callbacks.productStorage.write("k", new Uint8Array([1, 2, 3]));
+
+    expect(await drain(subscription, 2)).toEqual([
+      ok({ value: undefined }),
+      ok({ value: "0x010203" }),
+    ]);
   });
 
   it("every fault knob refuses the calls its doc names", async () => {
@@ -599,7 +661,9 @@ describe("statement injection through the chain connection", () => {
     const original = globalThis.WebSocket;
     FakeSocket.instances = [];
     (globalThis as { WebSocket: unknown }).WebSocket = FakeSocket;
-    const host = createMockHost({ chainProxies: [{ rpcUrl: "ws://chain.test" }] });
+    const host = createMockHost({
+      chainProxies: [{ rpcUrl: "ws://chain.test" }],
+    });
     const conn = await host.callbacks.chain.connect(new Uint8Array(32));
     (globalThis as { WebSocket: unknown }).WebSocket = original;
     return { host, conn, socket: FakeSocket.instances[0]! };
@@ -667,7 +731,9 @@ describe("reading back submitted statements", () => {
       send() {}
       close() {}
     };
-    const host = createMockHost({ chainProxies: [{ rpcUrl: "ws://chain.test" }] });
+    const host = createMockHost({
+      chainProxies: [{ rpcUrl: "ws://chain.test" }],
+    });
     const conn = await host.callbacks.chain.connect(new Uint8Array(32));
     (globalThis as { WebSocket: unknown }).WebSocket = original;
 

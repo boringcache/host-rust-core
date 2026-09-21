@@ -89,7 +89,7 @@ export interface LoopbackStatements {
   submitted(): string[];
   /** Deliver `statement` as if it had been submitted by someone else. */
   inject(statement: string): number;
-  /** Drop the record of what was submitted and injected. */
+  /** Drop the record of what was submitted. */
   clear(): void;
 }
 
@@ -172,8 +172,10 @@ export function createLoopbackStatements(): LoopbackStatements {
     },
     submitted: () => [...submissions],
     inject: (statement) => {
+      // Not recorded as a submission: `submitted()` is how a suite sees what
+      // the product sent, and an injection is the host standing in for someone
+      // else. `MockHost.getInjectedStatements` keeps the injection record.
       const encoded = statement.startsWith("0x") ? statement : `0x${statement}`;
-      submissions.push(encoded);
       return deliver(encoded);
     },
     clear: () => {

@@ -97,10 +97,39 @@ describe("chain proxy", () => {
     if (original) globalThis.WebSocket = original;
   });
 
+  it("a closed connection is not counted as a delivery", async () => {
+    // `injectStatement` returns how many subscriptions it reached, and the
+    // docstring invites a suite to poll until it is non-zero. Counting ids
+    // whose connection is gone makes that poll succeed on a delivery to
+    // nobody, so the suite goes on to wait for a statement that never arrives.
+    const host = createMockHost(PROXY);
+    const connection = await host.callbacks.chain.connect(new Uint8Array(32));
+    const socket = FakeSocket.instances[0]!;
+    socket.opened();
+    connection.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "sub-request",
+        method: "statement_subscribeStatement",
+        params: [null],
+      }),
+    );
+    socket.deliver(
+      JSON.stringify({ jsonrpc: "2.0", id: "sub-request", result: "sub-1" }),
+    );
+    expect(host.injectStatement(new Uint8Array([1, 2, 3]))).toBe(1);
+
+    socket.close();
+
+    expect(host.injectStatement(new Uint8Array([4, 5, 6]))).toBe(0);
+  });
+
   it("a lease does not observe another lease's inbound frames", async () => {
     const host = createMockHost(PROXY);
     const first = await host.callbacks.chain.connect(new Uint8Array(32));
-    const second = await host.callbacks.chain.connect(new Uint8Array(32).fill(9));
+    const second = await host.callbacks.chain.connect(
+      new Uint8Array(32).fill(9),
+    );
 
     // Deliberately tolerant of there being only one socket: if the leases ever
     // share a transport again, this test must fail on the frame crossing over,
@@ -135,7 +164,9 @@ describe("chain proxy", () => {
   it("each lease sends on its own socket", async () => {
     const host = createMockHost(PROXY);
     const first = await host.callbacks.chain.connect(new Uint8Array(32));
-    const second = await host.callbacks.chain.connect(new Uint8Array(32).fill(9));
+    const second = await host.callbacks.chain.connect(
+      new Uint8Array(32).fill(9),
+    );
     const socketA = FakeSocket.instances[0];
     const socketB = FakeSocket.instances[1] ?? FakeSocket.instances[0];
     socketA.opened();
@@ -158,7 +189,9 @@ describe("chain proxy", () => {
   it("closing a lease closes its socket and leaves the other running", async () => {
     const host = createMockHost(PROXY);
     const first = await host.callbacks.chain.connect(new Uint8Array(32));
-    const second = await host.callbacks.chain.connect(new Uint8Array(32).fill(9));
+    const second = await host.callbacks.chain.connect(
+      new Uint8Array(32).fill(9),
+    );
     const socketA = FakeSocket.instances[0];
     const socketB = FakeSocket.instances[1] ?? FakeSocket.instances[0];
 

@@ -135,6 +135,40 @@ export interface NotificationLogEntry {
   timestamp: number;
 }
 
+/**
+ * An open subscription seeded with `first`, live from the moment it is created.
+ *
+ * `register` is called here rather than from inside the generator, whose body
+ * does not run until its first `next()`. A change landing before that would
+ * reach no subscriber and is never re-sent, so the consumer would park on a
+ * value that is already stale. The Rust `MockPlatform` registers its sender
+ * synchronously for the same reason.
+ */
+function liveSubscription<T>(
+  first: T,
+  register: (push: (item: T) => void) => () => void,
+): AsyncGenerator<Result<T, GenericError>> {
+  const pending: T[] = [first];
+  let wake: (() => void) | undefined;
+  const unregister = register((item: T) => {
+    pending.push(item);
+    wake?.();
+    wake = undefined;
+  });
+  return (async function* () {
+    try {
+      for (;;) {
+        while (pending.length > 0) yield ok(pending.shift()!);
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      }
+    } finally {
+      unregister();
+    }
+  })();
+}
+
 /** One operation a product began and has not ended. */
 export interface OpenOperation {
   /** Product that began it. */
@@ -517,6 +551,7 @@ function connectToChain(
   });
 
   /** Record the subscription id the chain assigned to a statement subscribe. */
+  const ownStatementSubscriptions = new Set<string>();
   const recordStatementSubscription = (text: string) => {
     try {
       const frame = JSON.parse(text) as {
@@ -529,6 +564,7 @@ function connectToChain(
         typeof frame.result === "string"
       ) {
         statementSubscriptions?.add(frame.result);
+        ownStatementSubscriptions.add(frame.result);
       }
     } catch {
       // A frame that is not JSON is not a subscribe reply; the core still gets
@@ -543,6 +579,11 @@ function connectToChain(
   const finish = () => {
     closed = true;
     injectors?.delete(inject);
+    // A closed connection's subscriptions are gone with it, and leaving the
+    // ids behind makes `injectStatement` report deliveries to nobody.
+    for (const id of ownStatementSubscriptions)
+      statementSubscriptions?.delete(id);
+    ownStatementSubscriptions.clear();
     loopback?.release(deliver);
     // Release every reader, so a stream ends instead of hanging on a drop.
     while (waiting.length > 0) waiting.shift()?.({ value: undefined, done: true });
@@ -775,36 +816,22 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
         storage.delete(productKey(key));
         publishStorage(key, undefined);
       },
-      async *subscribeStorage(key): AsyncGenerator<
-        Result<HostLocalStorageChangeItem, GenericError>
-      > {
-        // Seed the current value before registering, so a subscriber that never
-        // sees a write still sees what it subscribed to.
+      subscribeStorage(key) {
         const current = storage.get(productKey(key));
-        yield ok({ value: current && scale.bytesToHex(current) });
-        const pending: HostLocalStorageChangeItem[] = [];
-        let wake: (() => void) | undefined;
-        const push = (item: HostLocalStorageChangeItem) => {
-          pending.push(item);
-          wake?.();
-          wake = undefined;
-        };
-        const subscribers =
-          storageSubscribers.get(key) ??
-          new Set<(item: HostLocalStorageChangeItem) => void>();
-        storageSubscribers.set(key, subscribers);
-        subscribers.add(push);
-        try {
-          for (;;) {
-            while (pending.length > 0) yield ok(pending.shift()!);
-            await new Promise<void>((resolve) => {
-              wake = resolve;
-            });
-          }
-        } finally {
-          subscribers.delete(push);
-          if (subscribers.size === 0) storageSubscribers.delete(key);
-        }
+        return liveSubscription<HostLocalStorageChangeItem>(
+          { value: current && scale.bytesToHex(current) },
+          (push) => {
+            const subscribers =
+              storageSubscribers.get(key) ??
+              new Set<(item: HostLocalStorageChangeItem) => void>();
+            storageSubscribers.set(key, subscribers);
+            subscribers.add(push);
+            return () => {
+              subscribers.delete(push);
+              if (subscribers.size === 0) storageSubscribers.delete(key);
+            };
+          },
+        );
       },
     },
 
@@ -907,7 +934,6 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
         if (chainStatus === "Disconnected") {
           throw new Error("mock chain is disconnected");
         }
-        chainStatus = "Connected";
         // A hashed entry wins; an unhashed one takes whatever is left.
         const proxy =
           chainProxies.find(
@@ -916,14 +942,19 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
               normalizeHash(candidate.genesisHash) === normalizeHash(genesisHash),
           ) ?? chainProxies.find((candidate) => candidate.genesisHash === undefined);
         if (proxy) {
-          return connectToChain(
+          // After the dial, not before: a proxy that fails to open must leave
+          // the status alone rather than report a connection that is not there.
+          const connection = connectToChain(
             proxy,
             sentRpc,
             statementSubscriptions,
             proxy.loopbackStatements ? loopbackStatements : undefined,
             chainInjectors,
           );
+          chainStatus = "Connected";
+          return connection;
         }
+        chainStatus = "Connected";
         return {
           send(request) {
             sentRpc.push(request);
@@ -969,31 +1000,14 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     },
 
     theme: {
-      async *subscribeTheme(): AsyncGenerator<
-        Result<HostThemeSubscribeItem, GenericError>
-      > {
-        yield ok({ name: { tag: "Default" }, variant: currentTheme });
-        // A live subscription never ends: emit the current theme, then every
-        // later one. Buffered rather than awaited directly, so a `setTheme`
-        // landing between yields is delivered instead of dropped.
-        const pending: HostThemeSubscribeItem[] = [];
-        let wake: (() => void) | undefined;
-        const push = (item: HostThemeSubscribeItem) => {
-          pending.push(item);
-          wake?.();
-          wake = undefined;
-        };
-        themeSubscribers.add(push);
-        try {
-          for (;;) {
-            while (pending.length > 0) yield ok(pending.shift()!);
-            await new Promise<void>((resolve) => {
-              wake = resolve;
-            });
-          }
-        } finally {
-          themeSubscribers.delete(push);
-        }
+      subscribeTheme() {
+        return liveSubscription<HostThemeSubscribeItem>(
+          { name: { tag: "Default" }, variant: currentTheme },
+          (push) => {
+            themeSubscribers.add(push);
+            return () => themeSubscribers.delete(push);
+          },
+        );
       },
     },
 

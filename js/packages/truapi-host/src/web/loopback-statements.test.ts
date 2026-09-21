@@ -117,4 +117,18 @@ describe("the in-page statement store", () => {
     store.clear();
     expect(store.submitted()).toEqual([]);
   });
+
+  it("does not count an injection as a submission", () => {
+    // `submitted()` is how a suite sees what the product sent. Counting an
+    // injection there lets a test assert the product submitted something while
+    // the host was the only one that acted.
+    const store = createLoopbackStatements();
+    const { frames } = subscribe(store, null);
+    const afterSubscribe = frames.length;
+    store.inject(statement([TOPIC_A]));
+
+    expect(store.submitted()).toEqual([]);
+    // Still delivered, so this is about the record and not a dropped statement.
+    expect(frames.length).toBe(afterSubscribe + 1);
+  });
 });
