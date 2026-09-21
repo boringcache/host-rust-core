@@ -149,7 +149,7 @@ On the execution: `publishChatAction` delivers a user's action back to the produ
 
 ```text
 product app in WebView
-  Uint8Array frames via @parity/truapi's injected host port
+  Uint8Array frames via @parity/truapi's WebSocket transport
            |
            v   ws://127.0.0.1:<port>/?t=<token>
 TrUAPIProductExecution.startWsBridge()
@@ -157,7 +157,9 @@ TrUAPIProductExecution.startWsBridge()
   → Rust dispatcher
 ```
 
-The product running in the `WebView` opens a `WebSocket` to the localhost port + token returned by `startWsBridge`. From there the Rust core handles the wire protocol directly. Outbound responses and host-side capability callbacks (`navigateTo`, `pushNotification`, `cancelNotification`, `devicePermission`, `remotePermission`, `authStateChanged`, core storage, chain JSON-RPC, `confirmUserAction`, `confirmPermission`, preimage lookup, theme, `featureSupported`, `storage`) reach the embedder through `HostBridge`. Bulletin preimage build/sign/submit now happens inside the core, so the host only serves `lookupPreimage`.
+The bootstrap publishes the WebSocket URL and token in `window.__truapi_localhost`. Products must use an updated `@parity/truapi` SDK that supports this endpoint. The SDK connects on the first API call; after a disconnect, the next call opens a new connection.
+
+The Rust core handles the wire protocol directly. Outbound responses and host-side capability callbacks (`navigateTo`, `pushNotification`, `cancelNotification`, `devicePermission`, `remotePermission`, `authStateChanged`, core storage, chain JSON-RPC, `confirmUserAction`, `confirmPermission`, preimage lookup, theme, `featureSupported`, `storage`) reach the embedder through `HostBridge`. Bulletin preimage build/sign/submit now happens inside the core, so the host only serves `lookupPreimage`.
 
 ## Permissions split
 
@@ -389,8 +391,7 @@ runtime.notifyChainClosed(chainConnectionId)
 // DOCUMENT-START script so it runs in the destination document before the page
 // scripts — `evaluateJavascript` runs in the CURRENT document, which the
 // following `loadUrl` replaces, so the product would lose the endpoint. Scope
-// it to the product origin. The SDK uses `window.__HOST_API_PORT__`, which the
-// bootstrap replaces after a disconnect so later calls can reconnect.
+// it to the product origin.
 // Android's current embedding does not install the shared container, so it
 // does not yet enforce its per-fetch or per-peer-connection Rust permission checks.
 val bootstrap = LocalhostBridgeBootstrap.script(endpoint.port, endpoint.token)

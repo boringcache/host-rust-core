@@ -264,15 +264,14 @@ reaches it through a development-only `<script>` tag:
 )}
 ```
 
-The host serves that script itself, so the page needs no package, no imports,
-and no environment variables. It shares the native hosts' bootstrap and preserves
-an existing `window.__HOST_API_PORT__`. If its socket disconnects, it publishes a
-fresh port so the SDK can reconnect without a page reload. Retries back off and
-pause with the app; resume preserves connections that are still opening.
-TCP frame connections are accepted only from
-loopback peers, and browser WebSocket origins must also name localhost or a
-loopback IP. WebSocket is not subject to
-CORS, and confirmations here are auto-approved.
+The host serves the same bootstrap script as the native hosts. It publishes the
+WebSocket URL and token in `window.__truapi_localhost`; the TrUAPI SDK opens the
+connection on the first API call. After a disconnect, the next call opens a new
+connection without reloading the page. Products must use an SDK version that
+supports this endpoint. The script needs no imports or environment variables.
+TCP frame connections are accepted only from loopback peers, and browser
+WebSocket origins must also name localhost or a loopback IP. WebSocket is not
+subject to CORS, and confirmations here are auto-approved.
 
 The CLI owns the wrapped command's process group on Unix. On shutdown it sends
 SIGTERM to the group, waits up to five seconds, then sends SIGKILL if a

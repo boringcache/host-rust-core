@@ -473,14 +473,12 @@ The product includes a development-only blocking tag before product code:
 
 The JavaScript is the one every native host injects, rendered by
 `truapi_server::bootstrap`. It stores the WebSocket URL and token in
-`window.__truapi_localhost` and exposes a messaging port at
-`window.__HOST_API_PORT__`. HTTP and WebSocket share the same TCP port.
-The script also sets the native-webview marker, installs the
-`window.__pauseConnections__` / `window.__resumeConnections__` lifecycle hooks,
-and dispatches `truapi-native-ready`. Frames posted before the WebSocket opens
-are queued. A socket that dies takes its port with it and a fresh one is
-published with bounded backoff, so a page survives the host restarting.
-Production builds must omit the tag.
+`window.__truapi_localhost`, sets the native-webview marker, and dispatches
+`truapi-native-ready`. HTTP and WebSocket share the same TCP port. The TrUAPI SDK
+opens the connection on the first API call. After a disconnect, the next call
+opens a new connection. The bootstrap owns no sockets or retry timers. Products
+must use an SDK version that supports this endpoint. Production builds must
+omit the tag.
 
 On Unix the wrapped command is the leader of a process group retained by the
 CLI. A natural direct-launcher exit preserves its status and still cleans up

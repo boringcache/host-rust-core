@@ -145,8 +145,6 @@ class TrUAPIDiagnosticsTest {
                             null,
                         )
                     } else {
-                        // Reloaded page: inject the bridge bootstrap. The
-                        // transport calls port.start() once it reads the port.
                         view.evaluateJavascript(bootstrap, null)
                     }
                 }

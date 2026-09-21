@@ -29,6 +29,8 @@ export type ConnectionStatus = "disconnected" | "connecting" | "connected";
 
 declare global {
   interface Window {
+    /** Localhost WebSocket endpoint published by native hosts and the CLI. */
+    __truapi_localhost?: { url: string; token: string };
     /** Set by webview hosts (Polkadot Desktop / Mobile) to mark the embedding. */
     __HOST_WEBVIEW_MARK__?: boolean;
     /** Injected by webview hosts to carry the host-side `MessagePort`. */
@@ -36,11 +38,15 @@ declare global {
   }
 }
 
-/** Endpoint set by {@link connectWebSocketHost}, and the host when present. */
+/** Endpoint explicitly selected by {@link connectWebSocketHost}. */
 let webSocketEndpoint: string | null = null;
 
 function hostWindow(): Window | null {
   return typeof window === "undefined" ? null : window;
+}
+
+function hostWebSocketEndpoint(): string | null {
+  return webSocketEndpoint ?? hostWindow()?.__truapi_localhost?.url ?? null;
 }
 
 /** A closed port a host locked in place, so it survived being dropped. */
@@ -79,9 +85,8 @@ function isIframe(): boolean {
  * injected host message port. Synchronous, so it can gate hot paths.
  */
 export function isCorrectEnvironment(): boolean {
-  // An endpoint handed to `connectWebSocketHost` is the host, wherever the code
-  // runs: a plain browser tab against a loopback socket, or a script in Node.
-  if (webSocketEndpoint !== null) return true;
+  // An explicit or injected endpoint also identifies a host outside an iframe.
+  if (hostWebSocketEndpoint() !== null) return true;
   const win = hostWindow();
   if (!win) return false;
   if (isIframe()) return true;
@@ -263,7 +268,10 @@ function createIframeCompatibilityProvider(
  * Build the {@link WireProvider} matching the detected environment (iframe or
  * webview). `onEstablished` fires once the host channel is live.
  */
-function createSandboxProvider(onEstablished: () => void): WireProvider {
+function createSandboxProvider(
+  endpoint: string | null,
+  onEstablished: () => void,
+): WireProvider {
   // Both branches settle off a promise, so the pipe may be dead by then.
   let closed = false;
   const established = () => {
@@ -276,8 +284,8 @@ function createSandboxProvider(onEstablished: () => void): WireProvider {
     return provider;
   };
 
-  if (webSocketEndpoint !== null) {
-    const provider = watchClose(createWebSocketProvider(webSocketEndpoint));
+  if (endpoint !== null) {
+    const provider = watchClose(createWebSocketProvider(endpoint));
     provider.opened.then(established, () => {});
     return provider;
   }
@@ -295,7 +303,8 @@ function createSandboxProvider(onEstablished: () => void): WireProvider {
   return provider;
 }
 
-let cachedClient: TrUApiClient | null = null;
+let cachedConnection: { client: TrUApiClient; endpoint: string | null } | null =
+  null;
 let status: ConnectionStatus = "disconnected";
 const statusListeners = new Set<(status: ConnectionStatus) => void>();
 
@@ -315,18 +324,24 @@ function setStatus(next: ConnectionStatus): void {
  * so the next call renegotiates.
  */
 export function getClientSync(): TrUApiClient | null {
-  if (cachedClient) return cachedClient;
+  if (cachedConnection) return cachedConnection.client;
   if (!isCorrectEnvironment()) return null;
   try {
-    const provider = createSandboxProvider(() => setStatus("connected"));
-    cachedClient = createClient(createTransport(provider));
+    const endpoint = hostWebSocketEndpoint();
+    const provider = createSandboxProvider(endpoint, () =>
+      setStatus("connected"),
+    );
+    cachedConnection = {
+      client: createClient(createTransport(provider)),
+      endpoint,
+    };
     provider.subscribeClose?.(() => {
       // Cleared first: a listener may call getClientSync from the notify below.
-      cachedClient = null;
-      if (webSocketEndpoint === null) forgetHostPort();
+      cachedConnection = null;
+      if (endpoint === null) forgetHostPort();
       setStatus("disconnected");
     });
-    return cachedClient;
+    return cachedConnection?.client ?? null;
   } catch {
     return null;
   }
@@ -352,7 +367,7 @@ export function getClientSync(): TrUApiClient | null {
  * a different endpoint is accepted.
  */
 export function connectWebSocketHost(url: string): TrUApiClient | null {
-  if (cachedClient !== null && webSocketEndpoint !== url) {
+  if (cachedConnection !== null && cachedConnection.endpoint !== url) {
     throw new Error(
       "connectWebSocketHost must be called before the TrUAPI client is created",
     );

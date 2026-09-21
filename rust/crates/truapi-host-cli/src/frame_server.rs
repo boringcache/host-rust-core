@@ -854,7 +854,7 @@ mod tests {
             script.contains(&format!(r#"{{ url: "{endpoint}", token: "" }}"#)),
             "{script}"
         );
-        assert!(script.contains("window.__HOST_API_PORT__ = live.port;"));
+        assert!(script.contains("window.__truapi_localhost = endpoint;"));
 
         let missing = fetch("/nope", endpoint).await?;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"), "{missing}");

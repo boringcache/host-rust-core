@@ -1,9 +1,8 @@
 // ============================================================================
 // TrUAPI mode lockdown. Runs AFTER LocalhostBridgeBootstrap (native injects
-// the bootstrap first), which publishes the bridge endpoint on
-// window.__truapi_localhost and exposes __HOST_API_PORT__ /
+// the bootstrap first), which publishes window.__truapi_localhost and
 // __HOST_WEBVIEW_MARK__.
-// The bootstrap dials its WebSocket lazily (inside port.start()), so
+// The SDK connects when the product first uses its client, so
 // window.WebSocket must remain constructible for exactly the bridge URL.
 //
 // Hosts must inject this script into EVERY frame, not just the main frame. A

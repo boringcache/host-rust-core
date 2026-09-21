@@ -9,8 +9,8 @@
 // `LocalhostBridgeBootstrap` helper used to publish an execution's WS endpoint.
 //
 // Products running inside a `WKWebView` connect to the Rust core via the
-// localhost WebSocket bridge. The bootstrap publishes its endpoint and the
-// `window.__HOST_API_PORT__` messaging port used by `@parity/truapi`.
+// localhost WebSocket bridge. The bootstrap publishes its endpoint in
+// `window.__truapi_localhost` for `@parity/truapi` to connect.
 
 import Foundation
 
@@ -108,7 +108,7 @@ public struct ProductExecutionConfig: Sendable, Equatable {
 /// Bootstrap helper for the native localhost WebSocket bridge that a product
 /// execution starts when the cdylib is built with the `ws-bridge` feature.
 public enum LocalhostBridgeBootstrap {
-    /// Publishes the host port and lifecycle hooks, replacing the port after a disconnect.
+    /// Publishes the WebSocket endpoint for the product's SDK.
     /// Inject at document start, before the container and product scripts.
     public static func script(port: UInt16, token: String) -> String {
         localhostBridgeBootstrapScript(port: port, token: token)

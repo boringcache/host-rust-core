@@ -1,15 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import type { TrUApiClient } from "./generated/index.js";
+import * as T from "./generated/types.js";
+import * as S from "./scale.js";
+import { decodeWireMessage, encodeWireMessage, MESSAGE_TYPE_RESPONSE } from "./transport.js";
 
-/**
- * Recovery driven through the real SDK rather than a stand-in for it.
- *
- * `bootstrap.test.ts` models what the SDK does to a port it was handed. These
- * run the shipped script against the actual `sandbox.ts` and `transport.ts`, so
- * a wrong model of that handover fails here instead of passing everywhere and
- * breaking on a phone, and they repeat the cycle enough times to catch state
- * that only drifts after the first recovery.
- */
 const SOURCE = readFileSync(
     new URL(
         "../../../../rust/crates/truapi-server/src/bootstrap/localhost-bridge.js",
@@ -17,10 +12,7 @@ const SOURCE = readFileSync(
     ),
     "utf8",
 );
-
 const BRIDGE_URL = "ws://127.0.0.1:9955/?t=token";
-
-/** Enough repetitions that a leak or a counter that never resets shows up. */
 const CYCLES = 200;
 
 let importCounter = 0;
@@ -31,61 +23,56 @@ async function importSandbox(): Promise<typeof import("./sandbox.js")> {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-async function until(predicate: () => boolean, what: string): Promise<void> {
-    for (let turn = 0; turn < 500 && !predicate(); turn += 1) await settle();
-    if (!predicate()) throw new Error(`timed out waiting for ${what}`);
-}
-
-class FakeSocket {
+class FakeSocket extends EventTarget {
     static readonly CONNECTING = 0;
     static readonly OPEN = 1;
-    static readonly CLOSING = 2;
     static readonly CLOSED = 3;
 
     binaryType = "";
     readyState: number = FakeSocket.CONNECTING;
     readonly sent: Uint8Array[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((event: { data: ArrayBuffer }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    onclose: (() => void) | null = null;
 
-    constructor(readonly url: string) {}
+    constructor(readonly url: string) {
+        super();
+    }
 
     open(): void {
         this.readyState = FakeSocket.OPEN;
-        this.onopen?.();
+        this.dispatchEvent(new Event("open"));
     }
 
     send(frame: Uint8Array): void {
+        if (this.readyState !== FakeSocket.OPEN) throw new Error("socket is not open");
         this.sent.push(frame);
+    }
+
+    answerHandshake(): void {
+        const request = decodeWireMessage(this.sent[0]!);
+        if (request.isErr()) throw request.error;
+        const response = encodeWireMessage({
+            requestId: request.value.requestId,
+            payload: {
+                ...request.value.payload,
+                messageType: MESSAGE_TYPE_RESPONSE,
+                value: S.Result(
+                    T.VersionedHostHandshakeResponse,
+                    S.CallError(T.VersionedHostHandshakeError),
+                ).enc({ success: true, value: { tag: "V1", value: undefined } }),
+            },
+        });
+        if (response.isErr()) throw response.error;
+        this.dispatchEvent(new MessageEvent("message", { data: response.value.buffer }));
     }
 
     close(): void {
         if (this.readyState === FakeSocket.CLOSED) return;
         this.readyState = FakeSocket.CLOSED;
-        this.onclose?.();
+        this.dispatchEvent(new Event("close"));
     }
 }
 
-type BootstrapEntry = (
-    window: unknown,
-    webSocket: typeof FakeSocket,
-    event: typeof Event,
-    setTimeout: (handler: () => void, delay: number) => number,
-    clearTimeout: (id: number) => void,
-) => void;
-
-/**
- * A top-level marked webview, the shape a native host presents, with the
- * shipped bootstrap already run against it. The bootstrap gets its own timer so
- * the backoff does not make the test wait; `sandbox.ts` keeps the real one.
- */
 function installHost() {
     const sockets: FakeSocket[] = [];
-    const delays: number[] = [];
-    const timers = new Map<number, () => void>();
-    let nextTimerId = 0;
     let refuseConnections = false;
 
     class TrackedSocket extends FakeSocket {
@@ -93,75 +80,42 @@ function installHost() {
             super(url);
             sockets.push(this);
             if (refuseConnections) {
-                // A refused dial reaches the page as an error, never an open.
-                queueMicrotask(() => this.close());
+                queueMicrotask(() => this.dispatchEvent(new Event("error")));
             }
         }
     }
 
     const priorWindow = globalThis.window;
     const priorDocument = globalThis.document;
+    const priorWebSocket = globalThis.WebSocket;
     const win = {
         location: {},
-        addEventListener() {},
-        removeEventListener() {},
-        setInterval: () => 0,
-        clearInterval() {},
         dispatchEvent: () => true,
     } as unknown as Window & typeof globalThis;
     (win as unknown as { top: unknown }).top = win;
     globalThis.window = win;
     globalThis.document = { referrer: "" } as Document;
+    globalThis.WebSocket = TrackedSocket as unknown as typeof WebSocket;
 
     const source = SOURCE.replace("__TRUAPI_BRIDGE_URL__", JSON.stringify(BRIDGE_URL)).replace(
         "__TRUAPI_BRIDGE_TOKEN__",
         JSON.stringify("token"),
     );
-    const entry = new Function(
-        "window",
-        "WebSocket",
-        "Event",
-        "setTimeout",
-        "clearTimeout",
-        source,
-    ) as unknown as BootstrapEntry;
-
-    entry(
-        win,
-        TrackedSocket,
-        Event,
-        (handler, delay) => {
-            nextTimerId += 1;
-            delays.push(delay);
-            timers.set(nextTimerId, () => {
-                timers.delete(nextTimerId);
-                handler();
-            });
-            // Real asynchrony, no real wait: ordering still has to be right.
-            queueMicrotask(() => timers.get(nextTimerId)?.());
-            return nextTimerId;
-        },
-        (id) => {
-            timers.delete(id);
-        },
-    );
-
-    const hooks = win as unknown as {
-        __HOST_API_PORT__?: unknown;
-        __pauseConnections__: () => void;
-        __resumeConnections__: () => void;
-    };
+    const entry = new Function("window", "Event", source) as (
+        window: Window,
+        event: typeof Event,
+    ) => void;
+    entry(win, Event);
 
     return {
         win,
-        hooks,
         sockets,
-        delays,
-        pendingTimers: () => timers.size,
         refuse(value: boolean) {
             refuseConnections = value;
         },
         restore() {
+            for (const socket of sockets) socket.close();
+            globalThis.WebSocket = priorWebSocket;
             if (priorWindow === undefined) {
                 delete (globalThis as { window?: unknown }).window;
             } else {
@@ -183,171 +137,177 @@ afterEach(() => {
     host = null;
 });
 
-describe("bridge recovery through the real SDK", () => {
-    /**
-     * The reported failure is that a product never recovers, so one cycle only
-     * proves the first recovery. Repeating it is what catches a port that is
-     * published but never adopted, a backoff that never resets, or a timer or
-     * socket that accumulates per cycle.
-     */
-    it("recovers a live client every time the socket dies", async () => {
+describe("endpoint recovery through the real SDK", () => {
+    it("connects only when consumed and reports connected only after the socket opens", async () => {
         host = installHost();
         const sandbox = await importSandbox();
+        expect(host.sockets).toEqual([]);
+
+        const statuses: string[] = [];
+        sandbox.subscribeConnectionStatus((status) => statuses.push(status));
+        const client = sandbox.getClientSync();
+        if (!client) throw new Error("the SDK did not detect the injected endpoint");
+        const socket = host.sockets[0]!;
+        const response = client.system.handshake();
+
+        expect({ statuses, sent: socket.sent, url: socket.url }).toEqual({
+            statuses: ["connecting"],
+            sent: [],
+            url: BRIDGE_URL,
+        });
+
+        socket.open();
+        socket.answerHandshake();
+        expect((await response).isOk()).toBe(true);
+        expect(statuses).toEqual(["connecting", "connected"]);
+    });
+
+    it("recovers across repeated disconnects and settles pending requests and subscriptions", async () => {
+        host = installHost();
+        const sandbox = await importSandbox();
+        const clients = new Set<TrUApiClient>();
         const statuses: string[] = [];
         sandbox.subscribeConnectionStatus((status) => statuses.push(status));
 
-        const ports = new Set<unknown>();
         for (let cycle = 0; cycle < CYCLES; cycle += 1) {
             const client = sandbox.getClientSync();
-            expect(client).not.toBeNull();
-
-            await until(() => host!.sockets.length === cycle + 1, `socket ${cycle + 1}`);
-            ports.add(host.win.__HOST_API_PORT__);
+            if (!client) throw new Error(`no client for recovery ${cycle}`);
+            clients.add(client);
+            expect(sandbox.getClientSync()).toBe(client);
             const socket = host.sockets[cycle]!;
             socket.open();
 
-            // A real request through the real transport: reaching the socket is
-            // what proves this cycle's wire is carrying frames again. It never
-            // answers, and the close below settles it.
-            void Promise.resolve(client?.system.handshake()).then(
-                () => {},
-                () => {},
-            );
-            await until(() => socket.sent.length > 0, `a frame on socket ${cycle + 1}`);
+            const response = client.system.handshake();
+            socket.answerHandshake();
+            expect((await response).isOk()).toBe(true);
 
-            socket.close();
-            await until(
-                () => statuses.at(-1) === "disconnected",
-                `the SDK to report cycle ${cycle + 1} closed`,
+            const pending = Promise.resolve(client.system.handshake()).then(
+                () => null,
+                (error: unknown) => error,
             );
+            const subscriptionErrors: Error[] = [];
+            client.account.connectionStatusSubscribe().subscribe({
+                error: (error) => subscriptionErrors.push(error),
+            });
+            socket.close();
+
+            const error = await pending;
+            expect(error).toBeInstanceOf(Error);
+            expect({
+                causes: subscriptionErrors.map((error) => error.cause),
+                status: statuses.at(-1),
+            }).toEqual({
+                causes: [error],
+                status: "disconnected",
+            });
         }
 
         expect({
             sockets: host.sockets.length,
-            distinctPorts: ports.size,
-            endpoints: new Set(host.sockets.map((socket) => socket.url)).size,
-            everySocketCarriedAFrame: host.sockets.every((socket) => socket.sent.length > 0),
+            clients: clients.size,
+            endpoints: [...new Set(host.sockets.map((socket) => socket.url))],
+            everySocketClosed: host.sockets.every((socket) => socket.readyState === FakeSocket.CLOSED),
         }).toEqual({
             sockets: CYCLES,
-            distinctPorts: CYCLES,
-            endpoints: 1,
-            everySocketCarriedAFrame: true,
+            clients: CYCLES,
+            endpoints: [BRIDGE_URL],
+            everySocketClosed: true,
         });
     });
 
-    /**
-     * Every cycle above ends in a successful open, so the backoff must return to
-     * its floor each time. A delay that only ever grows would still pass a
-     * single-recovery test and then sit at the 5s cap on a real device.
-     */
-    it("returns the backoff to its floor after each successful open", async () => {
+    it("retries on demand after refused connections without requiring lifecycle hooks", async () => {
         host = installHost();
         const sandbox = await importSandbox();
-
-        for (let cycle = 0; cycle < 10; cycle += 1) {
-            sandbox.getClientSync();
-            await until(() => host!.sockets.length === cycle + 1, `socket ${cycle + 1}`);
-            const socket = host.sockets[cycle]!;
-            socket.open();
-            socket.close();
-            await settle();
-        }
-
-        expect(new Set(host.delays)).toEqual(new Set([250]));
-    });
-
-    /**
-     * A bridge that stays down must neither spin nor give up: the delay climbs
-     * to the cap, stays there, and the next open still recovers. The bootstrap
-     * dials only when the SDK adopts the port it published, so the product
-     * asking again is what drives each attempt.
-     */
-    it("climbs to the cap while the bridge refuses, then recovers", async () => {
-        host = installHost();
-        const sandbox = await importSandbox();
-
-        sandbox.getClientSync();
-        await until(() => host.sockets.length === 1, "the first socket");
-        host.sockets[0]!.open();
         host.refuse(true);
-        host.sockets[0]!.close();
 
-        for (let turn = 0; turn < 400 && host.delays.length < 8; turn += 1) {
-            sandbox.getClientSync();
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+            const client = sandbox.getClientSync();
+            if (!client) throw new Error("no client for a refused connection");
+            const pending = Promise.resolve(client.system.handshake()).then(
+                () => null,
+                (error: unknown) => error,
+            );
+            expect(await pending).toBeInstanceOf(Error);
             await settle();
+            expect(host.sockets).toHaveLength(attempt + 1);
         }
-        expect(host.delays.length).toBeGreaterThanOrEqual(8);
 
         host.refuse(false);
-        const beforeRecovery = host.sockets.length;
-        for (let turn = 0; turn < 400 && host.sockets.length === beforeRecovery; turn += 1) {
-            sandbox.getClientSync();
-            await settle();
-        }
-        const recovered = host.sockets[host.sockets.length - 1]!;
-        recovered.open();
+        const client = sandbox.getClientSync();
+        if (!client) throw new Error("the SDK did not retry the endpoint");
+        const socket = host.sockets[10]!;
+        socket.open();
+        const response = client.system.handshake();
+        socket.answerHandshake();
 
-        expect({
-            climbed: host.delays.slice(0, 6),
-            cappedAfterwards: host.delays.slice(6).every((delay) => delay === 5000),
-            recoveredOpen: recovered.readyState,
-        }).toEqual({
-            climbed: [250, 500, 1000, 2000, 4000, 5000],
-            cappedAfterwards: true,
-            recoveredOpen: FakeSocket.OPEN,
+        expect((await response).isOk()).toBe(true);
+        expect({ sockets: host.sockets.length, frames: socket.sent.length }).toEqual({
+            sockets: 11,
+            frames: 1,
         });
     });
 
-    /**
-     * The reported sequence: the socket dies while the app is backgrounded, so
-     * the host has already paused the page and no redial may be scheduled
-     * behind its back. Recovery has to come from the resume hook the host calls
-     * on the way back, and the product's next host call has to land.
-     */
-    it("recovers when the socket dies while the host has the page paused", async () => {
+    it("allows an explicit endpoint to override the injected one before connecting", async () => {
         host = installHost();
         const sandbox = await importSandbox();
+        const endpoint = "ws://127.0.0.1:1234";
+        const client = sandbox.connectWebSocketHost(endpoint);
 
-        sandbox.getClientSync();
-        await until(() => host.sockets.length === 1, "the first socket");
-        host.sockets[0]!.open();
-
-        host.hooks.__pauseConnections__();
-        host.sockets[0]!.close();
-        await settle();
-        const whilePaused = {
-            port: host.hooks.__HOST_API_PORT__,
-            sockets: host.sockets.length,
-        };
-
-        host.hooks.__resumeConnections__();
-        const client = sandbox.getClientSync();
-        await until(() => host.sockets.length === 2, "a socket after the host resumed");
-        host.sockets[1]!.open();
-        void Promise.resolve(client?.system.handshake()).then(
-            () => {},
-            () => {},
-        );
-        await until(() => host.sockets[1]!.sent.length > 0, "a frame after the host resumed");
-
-        expect(whilePaused).toEqual({ port: undefined, sockets: 1 });
+        expect({
+            client: sandbox.getClientSync(),
+            urls: host.sockets.map((socket) => socket.url),
+        }).toEqual({ client, urls: [endpoint] });
     });
 
-    /** A recovered page must not be left holding timers that keep firing. */
-    it("leaves no pending timer once the bridge is healthy again", async () => {
+    it("compares explicit endpoint selection with the live connection, not changed host metadata", async () => {
         host = installHost();
         const sandbox = await importSandbox();
+        const client = sandbox.getClientSync();
+        const changedEndpoint = "ws://127.0.0.1:1234";
+        host.win.__truapi_localhost = { url: changedEndpoint, token: "changed" };
 
+        expect(() => sandbox.connectWebSocketHost(changedEndpoint))
+            .toThrow("before the TrUAPI client is created");
+        expect(sandbox.connectWebSocketHost(BRIDGE_URL)).toBe(client);
+        expect(host.sockets.map((socket) => socket.url)).toEqual([BRIDGE_URL]);
+    });
+
+    it("does not remove an unrelated host port when its endpoint is removed before close", async () => {
+        host = installHost();
+        const sandbox = await importSandbox();
         sandbox.getClientSync();
-        await until(() => host.sockets.length === 1, "the first socket");
-        host.sockets[0]!.open();
-        host.sockets[0]!.close();
+        const channel = new MessageChannel();
+        host.win.__HOST_API_PORT__ = channel.port1;
+        delete host.win.__truapi_localhost;
 
+        try {
+            host.sockets[0]!.close();
+            expect(host.win.__HOST_API_PORT__).toBe(channel.port1);
+        } finally {
+            channel.port1.close();
+            channel.port2.close();
+        }
+    });
+
+    it("ignores late close and error events from a replaced connection", async () => {
+        host = installHost();
+        const sandbox = await importSandbox();
         sandbox.getClientSync();
-        await until(() => host.sockets.length === 2, "the replacement socket");
-        host.sockets[1]!.open();
-        await settle();
+        const retired = host.sockets[0]!;
+        retired.open();
+        retired.close();
 
-        expect(host.pendingTimers()).toBe(0);
+        const client = sandbox.getClientSync();
+        if (!client) throw new Error("the SDK did not replace the closed client");
+        const current = host.sockets[1]!;
+        current.open();
+        retired.dispatchEvent(new Event("error"));
+        retired.dispatchEvent(new Event("close"));
+        expect(sandbox.getClientSync()).toBe(client);
+
+        const response = client.system.handshake();
+        current.answerHandshake();
+        expect((await response).isOk()).toBe(true);
+        expect(host.sockets).toHaveLength(2);
     });
 });

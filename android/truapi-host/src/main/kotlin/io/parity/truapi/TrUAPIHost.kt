@@ -20,8 +20,8 @@
 // Products running inside a `WebView` connect to the Rust core via the
 // localhost WebSocket bridge. Start it with `execution.startWsBridge()` and load
 // the product page with a `LocalhostBridgeBootstrap.script(...)` snippet
-// injected at document start so `@parity/truapi` can use
-// `window.__HOST_API_PORT__`.
+// injected at document start so `@parity/truapi` can connect to the endpoint in
+// `window.__truapi_localhost`.
 
 package io.parity.truapi
 
@@ -684,7 +684,7 @@ private class PocketCallbackAdapter(private val bridge: PocketHostBridge) : Nati
  */
 object LocalhostBridgeBootstrap {
     /**
-     * Publishes the host port and lifecycle hooks, replacing the port after a disconnect.
+     * Publishes the WebSocket endpoint for the product's SDK.
      * Inject at document start, before the container and product scripts.
      */
     fun script(port: UShort, token: String): String =
