@@ -94,7 +94,7 @@ function callbackRequest(
 
 function startSubscription<T>(
   name: SubscriptionName,
-  payload: Uint8Array | null,
+  payload: Uint8Array | string | null,
   sendItem: (value: T) => void,
   sendError: (error: GenericError) => void,
 ): () => void {
@@ -685,6 +685,9 @@ ctx.addEventListener("message", (ev: MessageEvent<MainToWorker>) => {
     case "getSessionChatIdentityKey":
       handleGetSessionChatIdentityKey(msg.requestId);
       break;
+    case "getDeviceStatementKey":
+      handleGetDeviceStatementKey(msg.requestId);
+      break;
     case "getDeviceEncryptionKey":
       void handleGetDeviceEncryptionKey(msg.requestId);
       break;
@@ -946,6 +949,33 @@ function handleGetSessionChatIdentityKey(requestId: number): void {
   } catch (err) {
     postToMain({
       kind: "sessionChatIdentityKeyResponse",
+      requestId,
+      ok: false,
+      error: errorMessage(err),
+    });
+  }
+}
+
+function handleGetDeviceStatementKey(requestId: number): void {
+  if (!runtime) {
+    postToMain({
+      kind: "deviceStatementKeyResponse",
+      requestId,
+      ok: false,
+      error: "getDeviceStatementKey received before runtime is ready",
+    });
+    return;
+  }
+  try {
+    postToMain({
+      kind: "deviceStatementKeyResponse",
+      requestId,
+      ok: true,
+      key: runtime.deviceStatementKey(),
+    });
+  } catch (err) {
+    postToMain({
+      kind: "deviceStatementKeyResponse",
       requestId,
       ok: false,
       error: errorMessage(err),
