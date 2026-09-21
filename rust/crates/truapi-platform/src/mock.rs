@@ -229,9 +229,10 @@ pub struct MockConfig {
     pub confirm_user_actions: bool,
     /// Chains the mock reports serving (RFC 0026).
     ///
-    /// Empty by default. An empty set type-checks and then fails every
-    /// chain-routed call, so a test that exercises one must declare the chain
-    /// here with the same genesis hash its runtime config carries.
+    /// Defaults to the three [`mock_genesis`] chains, the same set the
+    /// TypeScript mock declares, so a suite written against either one is
+    /// answered the same way. Replace it to exercise a host serving fewer
+    /// chains, declaring each with the genesis hash its runtime config carries.
     pub supported_chains: crate::HostChainSet,
     /// Chain connection behavior.
     pub chain: ChainBehavior,
@@ -248,10 +249,7 @@ impl Default for MockConfig {
             theme: latest::ThemeVariant::Dark,
             language_tag: "en".to_string(),
             confirm_user_actions: true,
-            supported_chains: crate::HostChainSet {
-                network: "mock".to_string(),
-                chains: Vec::new(),
-            },
+            supported_chains: mock_genesis::chain_set(),
             chain: ChainBehavior::Silent,
             faults: MockFaults::default(),
         }
@@ -413,8 +411,9 @@ impl MockPlatform {
 
     /// Answer `permission` with a grant, whatever the configured policy says.
     ///
-    /// The key is the permission's `Display` form -- `"camera"`, or
-    /// `"access to example.com"` for a [`latest::RemotePermission::Remote`].
+    /// The key is the permission's SCALE variant tag -- `"Camera"`, or
+    /// `"Remote"` for a [`latest::RemotePermission::Remote`] whatever domains
+    /// it names.
     pub fn grant_permission(&self, permission: impl Into<String>) {
         self.permission_decisions
             .lock()
@@ -993,6 +992,78 @@ impl Notifications for MockPlatform {
     }
 }
 
+/// Placeholder genesis hashes for the chains a mock host serves.
+///
+/// The TypeScript mock exports the same three under `MOCK_GENESIS`, byte for
+/// byte, so a fixture naming a chain by hash means the same chain to both.
+/// They are placeholders and match no real network.
+pub mod mock_genesis {
+    /// Genesis hash the mock reports for the people chain.
+    pub const PEOPLE: truapi::Bytes32 = [0x11; 32];
+    /// Genesis hash the mock reports for the bulletin chain.
+    pub const BULLETIN: truapi::Bytes32 = [0x22; 32];
+    /// Genesis hash the mock reports for the asset hub chain.
+    pub const ASSET_HUB: truapi::Bytes32 = [0x33; 32];
+
+    /// The chain set a mock host serves by default.
+    pub fn chain_set() -> crate::HostChainSet {
+        use truapi::latest::ChainIdentifier;
+        crate::HostChainSet {
+            network: "mock".to_string(),
+            chains: vec![
+                crate::HostChainEntry {
+                    identifier: ChainIdentifier::People,
+                    genesis_hash: PEOPLE,
+                },
+                crate::HostChainEntry {
+                    identifier: ChainIdentifier::Bulletin,
+                    genesis_hash: BULLETIN,
+                },
+                crate::HostChainEntry {
+                    identifier: ChainIdentifier::AssetHub,
+                    genesis_hash: ASSET_HUB,
+                },
+            ],
+        }
+    }
+}
+
+/// Decision key for a device permission: the SCALE variant tag.
+///
+/// The `Display` impls render prose for a person to read, so they are the
+/// wrong thing to store a grant under. The generated TypeScript mock keys on
+/// these same tags, which is what lets one suite drive both mocks.
+fn device_permission_key(request: &latest::HostDevicePermissionRequest) -> &'static str {
+    use latest::HostDevicePermissionRequest as Request;
+    match request {
+        Request::Notifications => "Notifications",
+        Request::Camera => "Camera",
+        Request::Microphone => "Microphone",
+        Request::Bluetooth => "Bluetooth",
+        Request::NFC => "NFC",
+        Request::Location => "Location",
+        Request::Clipboard => "Clipboard",
+        Request::OpenUrl => "OpenUrl",
+        Request::Biometrics => "Biometrics",
+    }
+}
+
+/// Decision key for a remote permission: the SCALE variant tag.
+///
+/// `Remote` renders its domain list through `Display`, so keying on that form
+/// would make the key depend on what the product asked for and leave the
+/// permission impossible to grant ahead of the request.
+fn remote_permission_key(permission: &latest::RemotePermission) -> &'static str {
+    use latest::RemotePermission as Permission;
+    match permission {
+        Permission::Remote { .. } => "Remote",
+        Permission::WebRtc => "WebRtc",
+        Permission::ChainSubmit => "ChainSubmit",
+        Permission::PreimageSubmit => "PreimageSubmit",
+        Permission::StatementSubmit => "StatementSubmit",
+    }
+}
+
 /// A mock policy is two-valued, so a grant is durable and a refusal is durable.
 /// `AllowOnce` is a host answer the mock has no knob to ask for.
 fn decision(granted: bool) -> PermissionDecision {
@@ -1016,7 +1087,7 @@ impl Permissions for MockPlatform {
         }
         Ok(decision(self.decide_permission(
             PermissionKind::Device,
-            request.to_string(),
+            device_permission_key(&request).to_string(),
             self.config.device_permissions,
         )))
     }
@@ -1032,7 +1103,7 @@ impl Permissions for MockPlatform {
         }
         Ok(decision(self.decide_permission(
             PermissionKind::Remote,
-            request.permission.to_string(),
+            remote_permission_key(&request.permission).to_string(),
             self.config.remote_permissions,
         )))
     }
@@ -1351,6 +1422,14 @@ impl ChatPlatform for MockPlatform {
         &self,
         _product: &ProductContext,
     ) -> BoxStream<'static, Result<latest::HostChatListSubscribeItem, latest::GenericError>> {
+        // The other chat calls fail with this reason, so the subscription
+        // reports it too rather than handing back a stream that looks healthy
+        // and never carries the rooms a failing host would refuse to list.
+        if let Some(reason) = &self.config.faults.chat_error {
+            return Box::pin(stream::iter([Err(latest::GenericError {
+                reason: reason.clone(),
+            })]));
+        }
         let (sender, receiver) = mpsc::unbounded();
         // Seed the current list before registering, so a subscriber that never
         // sees a change still sees the state it subscribed to.
@@ -1834,7 +1913,7 @@ mod tests {
             &p,
             latest::HostDevicePermissionRequest::Camera
         ));
-        p.grant_permission(latest::HostDevicePermissionRequest::Camera.to_string());
+        p.grant_permission("Camera");
         assert!(device_request(
             &p,
             latest::HostDevicePermissionRequest::Camera
@@ -1844,21 +1923,18 @@ mod tests {
             &p,
             latest::HostDevicePermissionRequest::Microphone
         ));
-        assert_eq!(
-            p.granted_permissions(),
-            vec![latest::HostDevicePermissionRequest::Camera.to_string()]
-        );
+        assert_eq!(p.granted_permissions(), vec!["Camera".to_string()]);
     }
 
     #[test]
     fn an_explicit_revoke_overrides_an_allow_all_policy() {
         let p = MockPlatform::new();
         assert!(remote_request(&p, latest::RemotePermission::ChainSubmit));
-        p.revoke_permission(latest::RemotePermission::ChainSubmit.to_string());
+        p.revoke_permission("ChainSubmit");
         assert!(!remote_request(&p, latest::RemotePermission::ChainSubmit));
         assert!(p.granted_permissions().is_empty());
         // Dropping the override restores the policy rather than leaving a denial.
-        p.reset_permission(&latest::RemotePermission::ChainSubmit.to_string());
+        p.reset_permission("ChainSubmit");
         assert!(remote_request(&p, latest::RemotePermission::ChainSubmit));
     }
 
@@ -1870,7 +1946,7 @@ mod tests {
             !device_request(&p, latest::HostDevicePermissionRequest::Camera),
             "enforcing must not fall back to the allow-all policy",
         );
-        p.grant_permission(latest::HostDevicePermissionRequest::Camera.to_string());
+        p.grant_permission("Camera");
         assert!(device_request(
             &p,
             latest::HostDevicePermissionRequest::Camera
@@ -1883,8 +1959,11 @@ mod tests {
 
     #[test]
     fn the_permission_log_records_surface_key_and_answer() {
+        // The keys are spelled out rather than derived from the permission,
+        // because a test that builds them the same way the mock does would
+        // agree with any key space the mock happened to pick.
         let p = MockPlatform::new();
-        p.revoke_permission(latest::HostDevicePermissionRequest::Camera.to_string());
+        p.revoke_permission("Camera");
         device_request(&p, latest::HostDevicePermissionRequest::Camera);
         remote_request(&p, latest::RemotePermission::ChainSubmit);
 
@@ -1892,17 +1971,54 @@ mod tests {
             p.permission_log(),
             vec![
                 PermissionLogEntry {
-                    tag: latest::HostDevicePermissionRequest::Camera.to_string(),
+                    tag: "Camera".to_string(),
                     approved: false,
                     kind: PermissionKind::Device,
                 },
                 PermissionLogEntry {
-                    tag: latest::RemotePermission::ChainSubmit.to_string(),
+                    tag: "ChainSubmit".to_string(),
                     approved: true,
                     kind: PermissionKind::Remote,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn permissions_are_keyed_by_variant_tag_not_display_prose() {
+        // The TypeScript mock keys on the SCALE tag, so a suite written once
+        // against either mock has to reach the same decision here. `Display`
+        // renders "camera" for a person to read, and keying on that would make
+        // the grant below silently miss.
+        let p = MockPlatform::new();
+        p.revoke_permission("Camera");
+        assert!(!device_request(
+            &p,
+            latest::HostDevicePermissionRequest::Camera
+        ));
+
+        p.grant_permission("Camera");
+        assert!(device_request(
+            &p,
+            latest::HostDevicePermissionRequest::Camera
+        ));
+
+        // A grant that keyed on `Display` would read "access to a.example",
+        // so it could never be issued before knowing the domains asked for,
+        // and would not cover a second request naming different ones.
+        p.revoke_permission("Remote");
+        assert!(!remote_request(
+            &p,
+            latest::RemotePermission::Remote {
+                domains: vec!["a.example".to_string()],
+            }
+        ));
+        assert!(!remote_request(
+            &p,
+            latest::RemotePermission::Remote {
+                domains: vec!["b.example".to_string(), "c.example".to_string()],
+            }
+        ));
     }
 
     fn chat_product() -> ProductContext {
@@ -2030,6 +2146,19 @@ mod tests {
         assert!(
             matches!(message, latest::HostChatPostMessageError::Unknown { reason } if reason == "chat down"),
         );
+
+        // The subscription is an entry point too. Handing back a stream that
+        // looks healthy and simply never carries a room is the one answer a
+        // failing host must not give, because it is indistinguishable from a
+        // host with nothing to list.
+        let subscribed = p
+            .subscribe_chat_rooms(&product)
+            .next()
+            .now_or_never()
+            .expect("the refusal is ready immediately")
+            .expect("an item")
+            .expect_err("the subscription carries the injected reason");
+        assert_eq!(subscribed.reason, "chat down");
 
         assert!(p.chat_rooms().is_empty());
         assert!(p.posted_chat_messages().is_empty());
@@ -2205,14 +2334,24 @@ mod tests {
 
     #[test]
     fn declared_supported_chains_are_what_the_mock_reports() {
-        // An empty set type-checks and then fails every chain-routed call, so
-        // the declared set is what a chain test has to be able to control.
+        // The default set is spelled out rather than compared against
+        // `mock_genesis::chain_set()`, because the TypeScript mock declares
+        // these same three and a suite written against either has to be
+        // answered the same way.
         let p = MockPlatform::new();
-        assert!(
-            block_on(p.supported_chains())
-                .expect("default set")
+        let default_set = block_on(p.supported_chains()).expect("default set");
+        assert_eq!(default_set.network, "mock");
+        assert_eq!(
+            default_set
                 .chains
-                .is_empty()
+                .iter()
+                .map(|entry| (entry.identifier, entry.genesis_hash))
+                .collect::<Vec<_>>(),
+            vec![
+                (latest::ChainIdentifier::People, [0x11; 32]),
+                (latest::ChainIdentifier::Bulletin, [0x22; 32]),
+                (latest::ChainIdentifier::AssetHub, [0x33; 32]),
+            ]
         );
 
         let p = MockPlatform::with_config(MockConfig {

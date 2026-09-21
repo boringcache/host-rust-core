@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { ok } from "neverthrow";
+import { err, ok } from "neverthrow";
 
 import type { CoreStorageKey } from "../generated/host-callbacks.js";
 import { createMockHost, mockRuntimeConfig } from "./create-mock-host.js";
@@ -515,6 +515,59 @@ describe("createMockHost TestHostAPI parity", () => {
     expect(host.getConnectionStatus()).toBe("Connected");
   });
 
+  it("simulateDisconnect ends a live response stream, not just the status", async () => {
+    // A knob that relabelled the status and refused reconnect would still
+    // leave a product parked on `responses()` forever, which is the one thing
+    // a dropped transport must not look like.
+    const host = createMockHost();
+    const connection = await host.callbacks.chain.connect(new Uint8Array(32));
+    const responses = connection.responses();
+    const ended = responses.next();
+
+    host.simulateDisconnect();
+
+    expect(
+      await Promise.race([
+        ended.then((result) => (result.done ? "ended" : "yielded")),
+        new Promise<"parked">((resolve) => setTimeout(() => resolve("parked"), 50)),
+      ]),
+    ).toBe("ended");
+  });
+
+  it("closing one subscription leaves the others live", async () => {
+    // One `release` serves both the generator's `finally` and `return`, so a
+    // close that dropped the wrong push would silence a bystander instead.
+    const host = createMockHost();
+    const closed = host.callbacks.theme.subscribeTheme();
+    const live = host.callbacks.theme.subscribeTheme();
+    await drain(live, 1);
+    await closed.return(undefined);
+
+    host.setTheme("Dark");
+
+    expect(await drain(live, 1)).toEqual([
+      ok({ name: { tag: "Default" }, variant: "Dark" }),
+    ]);
+  });
+
+  it("dispose drops subscribers that were never closed", async () => {
+    // Nothing unwinds a stream still parked on `next()`, so a host reused
+    // across a suite would carry the previous case's subscribers.
+    const host = createMockHost();
+    const themes = host.callbacks.theme.subscribeTheme();
+    await drain(themes, 1);
+
+    host.dispose();
+    // `dispose` resets first, and reset republishes the restored theme through
+    // the setter, so that item is expected. Everything after it is not.
+    await drain(themes, 1);
+    host.setTheme("Dark");
+
+    await expect(drain(themes, 1)).rejects.toThrow(
+      "subscription delivered 0 of 1 items",
+    );
+  });
+
   it("a new room reaches a live room subscription", async () => {
     // The room list is a live subscription on Rust, and a product that
     // subscribes before the first room is created is the normal order.
@@ -609,6 +662,70 @@ describe("createMockHost TestHostAPI parity", () => {
       notification.callbacks.notifications.pushNotification({ text: "x" }),
     ).rejects.toThrow("denied");
     expect(notification.getNotificationLog()).toEqual([]);
+
+    const permission = createMockHost({
+      faults: { permissionError: "no prompt" },
+    });
+    await expect(
+      permission.callbacks.permissions.devicePermission("Camera"),
+    ).rejects.toThrow("no prompt");
+    await expect(
+      permission.callbacks.permissions.remotePermission({
+        permission: { tag: "ChainSubmit" },
+      }),
+    ).rejects.toThrow("no prompt");
+    // A refused prompt was never answered, so it is not a recorded decision.
+    expect(permission.getPermissionLog()).toEqual([]);
+
+    const feature = createMockHost({ faults: { featureError: "unknown" } });
+    await expect(
+      feature.callbacks.features.featureSupported({
+        tag: "Chain",
+        value: { genesisHash: "0x00" },
+      }),
+    ).rejects.toThrow("unknown");
+    await expect(feature.callbacks.features.supportedChains()).rejects.toThrow(
+      "unknown",
+    );
+
+    const confirmation = createMockHost({
+      faults: { confirmationError: "no ui" },
+    });
+    await expect(
+      confirmation.callbacks.userConfirmation.confirmUserAction({
+        tag: "ResourceAllocation",
+        value: { callingProductId: "mock.dot", resources: [] },
+      }),
+    ).rejects.toThrow("no ui");
+
+    const product = {
+      productId: "p",
+      executionKind: { tag: "Unknown" } as const,
+    };
+    const chat = createMockHost({ faults: { chatError: "chat down" } });
+    await expect(
+      chat.callbacks.chat!.createChatRoom(product, {
+        roomId: "r",
+        name: "R",
+        icon: "https://example.invalid/i.png",
+      }),
+    ).rejects.toThrow("chat down");
+    await expect(
+      chat.callbacks.chat!.registerChatBot(product, {
+        roomId: "r",
+        name: "B",
+      }),
+    ).rejects.toThrow("chat down");
+    await expect(
+      chat.callbacks.chat!.postChatMessage(product, {
+        roomId: "r",
+        payload: new Uint8Array([1]),
+      }),
+    ).rejects.toThrow("chat down");
+    // The subscription reports the same fault rather than opening a stream
+    // that looks healthy and never carries a room.
+    const rooms = chat.callbacks.chat!.subscribeChatRooms();
+    expect(await drain(rooms, 1)).toEqual([err({ reason: "chat down" })]);
   });
 });
 

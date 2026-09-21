@@ -20,7 +20,7 @@
 // seed retrievable content with the returned `insertPreimage`.
 
 import { blake2b } from "@noble/hashes/blake2.js";
-import { ok } from "neverthrow";
+import { err, ok } from "neverthrow";
 
 import { scale } from "@parity/truapi";
 
@@ -135,6 +135,13 @@ export interface NotificationLogEntry {
   timestamp: number;
 }
 
+/** A subscription that reports an injected fault instead of opening. */
+async function* failedSubscription<T>(
+  reason: string,
+): AsyncGenerator<Result<T, GenericError>> {
+  yield err({ reason });
+}
+
 /**
  * An open subscription seeded with `first`, live from the moment it is created.
  *
@@ -150,12 +157,20 @@ function liveSubscription<T>(
 ): AsyncGenerator<Result<T, GenericError>> {
   const pending: T[] = [first];
   let wake: (() => void) | undefined;
+  let released = false;
   const unregister = register((item: T) => {
     pending.push(item);
     wake?.();
     wake = undefined;
   });
-  return (async function* () {
+  // Idempotent because the two paths below overlap: closing a stream that has
+  // been iterated runs the generator's `finally` as well as `return`.
+  const release = () => {
+    if (released) return;
+    released = true;
+    unregister();
+  };
+  const stream = (async function* () {
     try {
       for (;;) {
         while (pending.length > 0) yield ok(pending.shift()!);
@@ -164,9 +179,24 @@ function liveSubscription<T>(
         });
       }
     } finally {
-      unregister();
+      release();
     }
   })();
+  // `return`/`throw` release directly rather than relying on that `finally`.
+  // A generator whose body has never run has nothing to unwind, so closing a
+  // subscription created but not yet iterated would otherwise leave it
+  // registered and pushing into a queue no one reads.
+  const close = stream.return.bind(stream);
+  const fail = stream.throw.bind(stream);
+  stream.return = (value) => {
+    release();
+    return close(value);
+  };
+  stream.throw = (error) => {
+    release();
+    return fail(error);
+  };
+  return stream;
 }
 
 /** One operation a product began and has not ended. */
@@ -385,7 +415,13 @@ export interface MockHost {
   getConnectionStatus(): ChainStatus;
   /** Switch the answer both permission prompts fall back to. */
   setPermissionBehavior(behavior: PermissionPolicy): void;
-  /** Release the mock's state. Equivalent to {@link MockHost.reset} here. */
+  /**
+   * Release the mock's state and drop every live subscription.
+   *
+   * {@link MockHost.reset} leaves subscriptions open and tells them what
+   * changed; this ends them, so a host kept across a suite does not carry a
+   * previous case's subscribers.
+   */
   dispose(): void;
   /** Permission answers the mock gave, in order. */
   getPermissionLog(): PermissionLogEntry[];
@@ -967,24 +1003,39 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
           return connection;
         }
         chainStatus = "Connected";
+        // A proxied connection registers its disconnector inside
+        // `connectToChain`; this one is held by nothing else, so it registers
+        // its own. Without it `simulateDisconnect` would leave the stream below
+        // parked and only the reported status would change.
+        let dropped: (() => void) | undefined;
+        const transportDropped = new Promise<void>((resolve) => {
+          dropped = resolve;
+        });
+        const disconnect = () => dropped?.();
+        chainDisconnectors.add(disconnect);
         return {
           send(request) {
             sentRpc.push(request);
           },
           async *responses(): AsyncGenerator<string> {
-            for (const frame of chainResponses) {
-              yield frame;
-            }
-            if (chainResponses.length === 0 && !chainClosed) {
-              // Silent: never yields, so chain-dependent flows park. `chainClosed`
-              // instead ends the stream here for fail-fast disconnect tests.
-              await new Promise<never>(() => {});
+            try {
+              for (const frame of chainResponses) {
+                yield frame;
+              }
+              if (chainResponses.length === 0 && !chainClosed) {
+                // Silent: yields nothing, so chain-dependent flows park until
+                // the transport drops. `chainClosed` instead ends the stream
+                // here for fail-fast disconnect tests.
+                await transportDropped;
+              }
+            } finally {
+              chainDisconnectors.delete(disconnect);
             }
           },
           // The mock holds no real transport, so releasing the lease is a no-op.
           // Note: a Silent connection whose `responses()` stream is already parked
           // stays parked after close() — tests that need the stream to terminate use
-          // `chainClosed` (or scripted frames), not close().
+          // `simulateDisconnect`, `chainClosed`, or scripted frames, not close().
           close() {},
         };
       },
@@ -1061,6 +1112,12 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
         return { messageId };
       },
       subscribeChatRooms() {
+        // The other chat calls fail with this reason, so the subscription
+        // reports it too rather than handing back a stream that looks healthy
+        // and never carries the rooms a failing host would refuse to list.
+        if (faults.chatError) {
+          return failedSubscription<HostChatListSubscribeItem>(faults.chatError);
+        }
         return liveSubscription<HostChatListSubscribeItem>(
           { rooms: [...chatRooms.values()] },
           (push) => {
@@ -1190,6 +1247,13 @@ export function createMockHost(config: MockHostConfig = {}): MockHost {
     },
     dispose() {
       this.reset();
+      // A subscription abandoned without being closed keeps its registration:
+      // nothing unwinds a generator whose body never ran, and nothing collects
+      // one still parked on `next()`. Dropping the sets bounds that to the
+      // life of the host.
+      themeSubscribers.clear();
+      storageSubscribers.clear();
+      chatRoomSubscribers.clear();
     },
     cancelledNotifications: () => [...cancelledNotifications],
     getPermissionLog: () => [...permissionLog],
