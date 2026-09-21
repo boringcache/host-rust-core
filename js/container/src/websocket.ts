@@ -235,7 +235,7 @@ export function installWebSocketGate(
         apply(send, backend, [data]);
       },
       close(code, reason) {
-        apply(close, backend, [code, reason]);
+        apply(close, backend, code === undefined ? [] : [code, reason]);
       },
     };
     current.backend.binaryType(current.binaryType);

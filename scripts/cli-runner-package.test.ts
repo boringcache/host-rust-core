@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
 import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   decodeWireMessage,
   encodeWireMessage,
@@ -22,7 +22,13 @@ beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "truapi-cli-package-"));
   const result = Bun.spawnSync(
     ["make", "cli-runner", `CLI_DIST_DIR=${directory}`],
-    { cwd: repository },
+    {
+      cwd: repository,
+      env: {
+        ...process.env,
+        PATH: `${dirname(process.execPath)}:${process.env.PATH}`,
+      },
+    },
   );
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
 });
@@ -73,7 +79,7 @@ it("resolves the packaged runner without a source checkout", async () => {
   );
   for (const args of [[], ["--preload", preload]]) {
     const result = Bun.spawnSync(
-      ["bun", ...args, join(directory, "runner.js")],
+      [process.execPath, ...args, join(directory, "runner.js")],
       {
         cwd: tmpdir(),
         env: { PATH: process.env.PATH },
@@ -154,7 +160,7 @@ it("authorizes a WebSocket round trip through the packaged browser runner", asyn
     });
   `,
   );
-  const child = Bun.spawn(["bun", join(directory, "runner.js")], {
+  const child = Bun.spawn([process.execPath, join(directory, "runner.js")], {
     cwd: tmpdir(),
     env: {
       PATH: process.env.PATH,
@@ -164,7 +170,6 @@ it("authorizes a WebSocket round trip through the packaged browser runner", asyn
       TRUAPI_FRAME_URL: `ws://127.0.0.1:${server.port}/frames`,
       TRUAPI_PRODUCT_ID: "package-test.dot",
       TRUAPI_SCRIPT: script,
-      TRUAPI_SCRIPT_MODE: "trusted",
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -198,7 +203,7 @@ it("authorizes a WebSocket round trip through the packaged browser runner", asyn
 it("ships a runnable browser installer with its dynamic dependencies", () => {
   const result = Bun.spawnSync(
     [
-      "bun",
+      process.execPath,
       join(directory, "node_modules/playwright-core/cli.js"),
       "--version",
     ],
@@ -231,7 +236,9 @@ it("ships a portable product builder that works without a checkout", () => {
     const result = await transform('const value: string = "browser";', { loader: 'ts' });
     console.log(result.code.trim());
     stop();`;
-  const result = Bun.spawnSync(["bun", "--eval", source], { cwd: tmpdir() });
+  const result = Bun.spawnSync([process.execPath, "--eval", source], {
+    cwd: tmpdir(),
+  });
   expect({
     status: result.exitCode,
     output: result.stdout.toString().trim(),
@@ -254,7 +261,7 @@ it("fails closed when an installed sandbox asset is missing", async () => {
   await writeFile(script, 'console.log("product must not run");');
   await rename(asset, backup);
   try {
-    const child = Bun.spawn(["bun", join(directory, "runner.js")], {
+    const child = Bun.spawn([process.execPath, join(directory, "runner.js")], {
       cwd: tmpdir(),
       env: {
         PATH: process.env.PATH,

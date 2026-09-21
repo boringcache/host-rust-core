@@ -21,6 +21,7 @@ One binary, `truapi-host`:
 | --- | --- |
 | `pairing-host` | Seedless host: serves product frames, emits pairing deeplinks, and can run product scripts. |
 | `signing-host` | Wallet-local host: owns signer identity, can run product scripts, decodes copied pairing QR images or accepts deeplinks, registers statement allowance on-chain, signs. |
+| `dev` | Run a local development product with the shared container loaded by a script tag. |
 | `install-browser` | Install the matching Chromium headless shell for sandboxed product scripts. |
 | `identity-check` | Probe the root and the network's `uid.<tld>` identity account for a registered username (read from the dotNS contracts on Asset Hub). |
 | `register-name` | Register a full-person username via `DotnsGateway.register_name` on Asset Hub, linked to a lite username or standalone with a chat key. |
@@ -59,7 +60,7 @@ and matching `playwright-core` and `esbuild-wasm` packages. Bun prepares scripts
 and runs the trusted launcher. Product code executes in a sandboxed Chromium
 browser with no Bun/Node filesystem, process, or environment access.
 
-Install Bun on `PATH`, then install the browser explicitly:
+Install Bun 1.4.0 or newer on `PATH`, then install the browser explicitly:
 
 ```bash
 truapi-host install-browser
@@ -75,9 +76,9 @@ unavailable; the runner never falls back to unrestricted execution.
 
 Product frames use a private, per-process WebSocket-over-Unix-domain-socket by
 default, so starting either host does not reserve a TCP port. Pass
-`--frame-listen 127.0.0.1:0` to expose an ordinary loopback WebSocket instead;
-this is required for external browser clients, which cannot open filesystem
-sockets. Sandboxed CLI scripts use the trusted launcher's private socket relay.
+`--frame-listen 127.0.0.1:0` to expose a loopback WebSocket for raw frame
+clients. Dev exposes the browser bridge on its `--port`; script execution uses
+a local frame relay when the Rust endpoint is a private Unix socket.
 
 ### Staying current
 
@@ -168,9 +169,12 @@ itself:
 )}
 ```
 
-That script installs the same `window.__HOST_API_PORT__` a native webview host
-injects, so the SDK adopts it with no product-side package, import, or
-environment variable. `--app-port` names the development server's port when it
+That script installs the SDK bridge and the shared `js/container` sandbox
+synchronously. Keep it before application scripts, without `async` or `defer`.
+The same container runs in `/script`: fetch, asynchronous XHR and WebSocket
+use Rust permission checks before native browser operations. Dev keeps its
+normal automatic approvals and the app server handles assets and hot reload.
+`--app-port` names the development server's port when it
 is not 3000, and the product id defaults to that origin, so the host and the
 product cannot disagree about who they are. `--port` changes the bridge and
 frame port, but the development-only tag must change to the same value.
@@ -192,8 +196,8 @@ bridge script, so the product tag is unchanged:
 truapi-host signing-host --frame-listen 127.0.0.1:9955 --product-id my-product.dot
 ```
 
-A product that would rather name the endpoint itself can skip the tag and call
-the SDK directly, before anything else touches the client:
+For an API connection without installing the container, a product can call
+the SDK directly before anything else touches the client:
 
 ```ts
 import { connectWebSocketHost } from "@parity/truapi/sandbox";
@@ -494,28 +498,22 @@ so its pairing runs only for the current process and `/devices` is unavailable.
 ## Writing a product script
 
 A product script is top-level JavaScript or TypeScript run as a browser ES
-module. The CLI uses the same `js/container` code as the native iOS host and
-the shared Rust Remote permission policy. In the CLI, the trusted launcher asks
-Rust to authorize the initial URL when Chromium intercepts an outgoing fetch or XHR.
-One approval covers the request, its CORS preflights and redirects, matching native
-hosts. XHR supports asynchronous requests with native headers and response types;
-synchronous XHR is unavailable. Browser CORS rules still apply.
+module. Scripts and `dev` load the same bootstrap and shared `js/container`
+implementation. Scripts run headlessly in Chromium; dev keeps its original
+app URL and blocking bootstrap tag.
 
-Permission prompts name the requested domains or capability and offer Allow once,
-Allow always and Deny. A domain grant covers every port on that host, including
-local services. Chromium's local-network permission is enabled for the synthetic
-product origin so approved local requests work; the launcher still checks their
-destination through Rust.
+The container checks Rust permissions for remote fetch and asynchronous XHR,
+and for WebSocket connections. Same-origin fetch/XHR need no remote grant.
+Rust decides Allow once, Allow always or Deny; domain grants cover all ports.
+Requests then use native browser behavior, including CORS, credentials,
+redirects and XHR progress events. Public SDK requests and private authorization
+share one product execution, so a one-use grant applies to the next operation.
 
-Remote WebSockets use the same domain permission. The trusted launcher opens each
-connection only after Rust approval and forwards text/binary messages and subprotocols.
-Allow once permits one connection, including later messages. Closing a pending socket
-cancels it. The launcher sends the product Origin; its sockets do not share browser
-cookies. URL credentials use Bun's preemptive Basic authentication rather than a
-browser's challenge response. `bufferedAmount` reports bytes waiting for the launcher,
-not its socket's remaining output buffer. Direct browser WebSockets stay blocked,
-so page code cannot bypass the launcher. WebRTC, WebTransport, workers and subframes
-are unavailable in this runner.
+This is API patching, not complete browser network isolation. Browser-generated
+requests such as hyperlink pings and resources, and fresh script contexts, can
+bypass these wrappers. The bootstrap must run before product code. Scripts
+have no Bun/Node filesystem, process or environment access. The shared container
+also restricts workers, storage and unsupported device capabilities.
 
 Imports must resolve inside the script's directory or a `node_modules` tree in
 that directory or an ancestor. Resolved symlinks must stay within these approved
@@ -836,8 +834,8 @@ cleans up a unique temporary Unix socket.
 
 ## Serving a dev server (one process, no terminal)
 
-`truapi-host dev` is the shorthand for this when the thing being supervised is a
-development server; reach for `--serve` when something else owns the process.
+`truapi-host dev` serves the browser bootstrap. Use `--serve` when a separate
+process needs the raw product-frame endpoint.
 
 `signing-host --serve` runs the host as a background service instead of a
 terminal UI, so a dev server or test harness can supervise it:

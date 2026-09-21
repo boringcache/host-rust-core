@@ -69,12 +69,14 @@ build: check-generated ## Build the Rust workspace and the TypeScript client.
 
 headless: check-generated ## Build the truapi-host CLI and generated TypeScript client.
 	# The client build shells out to tsc, which `ensure-generated.sh` looks for at
-	# the root or in the package. Install workspace deps when neither is present so
-	# this target works on a checkout that has not run `make setup`.
-	@[ -x node_modules/.bin/tsc ] || [ -x $(TRUAPI_PKG)/node_modules/.bin/tsc ] \
+	# the root or in the package. Browser assets also need the workspace dependencies.
+	@{ [ -x node_modules/.bin/tsc ] || [ -x $(TRUAPI_PKG)/node_modules/.bin/tsc ]; } \
+		&& [ -f node_modules/playwright-core/package.json ] \
+		&& [ -f node_modules/esbuild-wasm/package.json ] \
 		|| npm ci --ignore-scripts
 	cargo build -p truapi-host-cli
 	cd $(TRUAPI_PKG) && npm run build
+	bun scripts/build-cli-runner.ts "$(CLI_DIST_DIR)"
 
 install: headless ## Install the truapi-host CLI into Cargo's bin dir; use as `make headless install`.
 	# A prebuilt install and a cargo one shadow each other depending on PATH

@@ -193,16 +193,18 @@ cargo install \
 
 ### 3.3 Runtime dependencies
 
-Host-only commands need the installed Rust binary. Product scripts additionally
-need Bun on `PATH`, the matching Chromium headless shell, its host libraries,
-and working browser sandbox support. `truapi-host install-browser` installs
-the matching browser explicitly. `PLAYWRIGHT_BROWSERS_PATH` selects its cache
-for installation and execution. The Linux Rust binary uses musl; Chromium
-still needs a compatible glibc and its runtime libraries. Browser setup does
-not automatically change system sandbox policy or install OS packages.
+Host-only commands need the installed Rust binary. Dev also needs the bundled
+container and uses any existing browser. Product scripts require Bun 1.4.0
+or newer, the matching Chromium headless shell, its host libraries, and working
+browser sandbox support. `truapi-host install-browser` installs the matching
+browser explicitly. `PLAYWRIGHT_BROWSERS_PATH` selects its cache for
+installation and execution. The Linux Rust binary uses musl; Chromium still
+needs a compatible glibc and its runtime libraries. Browser setup does not
+automatically change system sandbox policy or install OS packages.
 
 A source build also needs `npm ci --ignore-scripts` at the repository root and
-the generated `@parity/truapi` TypeScript sources.
+the generated `@parity/truapi` TypeScript sources. `make headless` builds the
+SDK and CLI browser assets; `make cli-runner` refreshes those assets separately.
 
 The runner is resolved in this order: `TRUAPI_HOST_RUNNER`, then `runner.js`
 next to the running binary, then `js/runner.ts` in the source checkout
@@ -210,11 +212,12 @@ next to the running binary, then `js/runner.ts` in the source checkout
 fails instead of falling back to source code. After an update moves `current`,
 the running binary continues using the runner from its own version directory.
 
-A release archive ships `runner.js`, `sandbox-assets/{container.js,client.mjs,bootstrap.js}`,
-and matching `node_modules/{playwright-core,esbuild-wasm}` beside the binary.
-The browser assets use the existing `js/container` source and the same esbuild
-compiler used by native iOS packaging. The runtime builder is the portable
-WebAssembly package. Installed execution does not need a source checkout.
+A release archive ships `runner.js`, `sandbox-assets/` (combined bridge/container,
+browser SDK and script bootstrap), and matching
+`node_modules/{playwright-core,esbuild-wasm}` beside the binary. The browser
+assets use the existing `js/container` source and the same esbuild compiler used
+by native iOS packaging. The runtime builder is the portable WebAssembly
+package. Installed execution does not need a source checkout.
 
 Bun executes the trusted launcher and prepares product modules. Product code
 executes in Chromium by default. Missing browser assets, browser installation,
@@ -495,6 +498,11 @@ descendants. On CLI SIGINT or SIGTERM, cleanup reports status 130. Both paths
 send SIGTERM to the group, wait up to five seconds while reaping the direct
 child, then send SIGKILL and wait again if any group member remains. On
 non-Unix platforms the CLI stops and reaps the direct child.
+
+The first blocking bridge tag installs the shared `js/container` bundle before
+application code, with public SDK and private authorization channels sharing
+one Rust execution. Both `dev` and `/script` use that bundle. Dev preserves
+the app server URL, native assets and hot reload; no app proxy is involved.
 
 ## 7. Product identifiers and switching
 
@@ -801,18 +809,12 @@ Adjacent output is chunked at 256 lines or 64 KiB.
 
 ### 10.1 Execution contract
 
-A product script is a JavaScript or TypeScript ES module executed in a
-sandboxed Chromium context. This applies to `--script`, interactive `/script`,
-and `exec '/script ...'`. The trusted Bun runner:
-
-1. reads its required environment;
-2. bundles browser-compatible product imports without evaluating product code;
-3. opens one connection for product frames and authorization over the host's
-   Unix or TCP endpoint, with a 15-second connection timeout;
-4. starts Chromium with its process sandbox enabled and a fresh browser context;
-5. installs the shared container, MessagePort relay and browser SDK before
-   product code; and
-6. loads the product module from a synthetic product origin.
+A product script is a JavaScript or TypeScript ES module executed in the same
+shared container as `dev`. This applies to `--script`, interactive `/script`, and
+`exec '/script ...'`. The Bun launcher prepares the module, serves the shared
+bootstrap/container, opens it in sandboxed headless Chromium, forwards console output
+and waits for completion. Browser automation has no role in permission
+enforcement.
 
 Top-level module code is awaited. If the module's default export is a function,
 the runner calls and awaits it with the host context.
@@ -824,35 +826,22 @@ and unsupported module loaders fail preparation. `@parity/truapi` resolves to
 the browser SDK shipped with the host. Product preparation does not execute
 package hooks or compile-time product code.
 
-The container sends fetch and XHR intent through its private port. The trusted launcher
-intercepts the actual request and asks Rust to authorize its initial host on
-the product's existing connection. Chromium request IDs associate CORS preflights
-and redirects with the operation. One approval covers the entire operation,
-including redirects to other hosts, matching native fetch/XHR behavior.
-Aborting a request invalidates its pending authorization. XHR keeps native request
-headers, response types and events after authorization; synchronous XHR is unavailable.
-CORS remains browser-enforced. Remote WebSockets are opened by a trusted launcher broker after
-one Rust authorization per connection. The broker forwards text/binary messages and
-subprotocols, sends the product Origin and closes its connections at teardown. It
-does not share browser cookies. `bufferedAmount` tracks the relay queue rather than
-the launcher's socket buffer. Direct browser WebSockets remain blocked by CSP.
-Workers, subframes, WebRTC and WebTransport are unavailable in the CLI product realm. Product code has no Bun/Node filesystem,
-subprocess or host-environment access.
+The shared container performs the existing Rust permission checks before
+native fetch, asynchronous XHR and WebSocket operations. Same-origin fetch/XHR
+need no remote grant. A grant authorizes one HTTP request or one WebSocket
+connection and its messages. Public SDK calls and private authorization share
+one Rust execution, preserving Allow once, Allow always and Deny semantics.
+Native CORS, credentials, redirects, WebSocket Origin and XHR progress apply.
 
-The intent binding acknowledges well-formed Remote intents without consulting
-Rust. It lets the container reach the browser request without spending a grant
-twice; it is not an authorization decision. CDP and the WebSocket broker enforce
-consent outside the product realm. CLI browser tests exercise that enforcement;
-the shared container tests separately cover denial through its private port.
-
-Chromium's local-network permission is scoped to the synthetic product origin.
-Without it, even Rust-approved loopback requests fail. Each operation's initial host
-passes Rust authorization; host-scoped grants include all ports and the prompt
-states this. CSP restricts protocols and disables JavaScript evaluation, workers and frames;
-WebAssembly compilation remains available. CDP applies the destination permission check.
+Both CLI modes use the same API patching contract. It does not prevent every
+browser-generated request or fresh-context bypass. No CLI network broker,
+proxy or CDP permission implementation supplements the shared gates. Product
+scripts execute in Chromium and have no Bun/Node filesystem, subprocess or
+environment access. Dev requires the first blocking bootstrap tag before
+application code; an absent or failed tag cannot secure a plain app page.
 
 The browser execution phase times out after five minutes. Success, failure or
-timeout closes the browser and disposes the frame provider.
+timeout closes the browser, sandbox server and frame provider.
 
 `--trusted-script --script <path>` explicitly selects Bun execution for diagnostics
 that read host logs or write reports. It prints the selected mode and imports
@@ -908,8 +897,8 @@ configuration cannot run code before the browser sandbox starts.
 - Successful completion exits `0`.
 - A thrown error or rejected promise is printed as `[script error] ...` and
   exits `1`.
-- A browser execution timeout exits `1`. Both modes' 15-second product-socket
-  connection timeout exits `2`.
+- Browser execution and product-socket connection timeouts exit `1`.
+  Trusted mode retains exit `2` for its 15-second connection timeout.
 - Browser installation, startup or sandbox failures exit `1`.
 - Failure to locate the runner, canonicalize the script, or spawn Bun is a CLI
   error.
@@ -1616,11 +1605,11 @@ and non-loopback origins are rejected. Unix-socket connections and loopback TCP
 clients without `Origin` are treated as local non-browser clients.
 
 For a TCP listener, `GET /bootstrap.js` on the same port returns the development
-bridge as a plain HTTP JavaScript response with `no-store` and connection-close
+bridge and shared container as a plain HTTP JavaScript response with `no-store` and connection-close
 headers. Other HTTP paths return 404. The bridge embeds the endpoint that was
-actually bound, so `--port` and its generated WebSocket URL remain consistent.
-The HTTP response does not grant cross-origin access; browser frame access is
-enforced during the later WebSocket handshake.
+actually bound, so `--frame-listen` and its generated WebSocket URL remain
+consistent. The HTTP response does not grant cross-origin access; browser frame
+access is enforced during the later WebSocket handshake.
 
 Each accepted WebSocket:
 
@@ -2121,7 +2110,6 @@ These are part of the as-built specification:
 - non-loopback product listeners can bind but reject every TCP frame peer;
 - product text WebSocket frames are accepted as protocol bytes;
 - product-frame and chain outbound queues are unbounded;
-- browser bridge binary messages use JSON number arrays, so memory cost exceeds payload size; transport budgets are tracked in [#847](https://github.com/paritytech/host-rust-core/issues/847);
 - unknown chain genesis hashes fall back to People;
 - interactive child ANSI styling is stripped rather than parsed; and
 - pairing and signing state are local plaintext test state.

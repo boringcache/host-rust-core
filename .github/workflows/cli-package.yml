@@ -42,6 +42,8 @@ jobs:
           node-version: "22"
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
 
       # codegen.sh formats its generated Rust with `cargo +nightly fmt`, so the
       # nightly toolchain needs rustfmt, exactly as the release job installs it.
@@ -125,6 +127,8 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
 
       # The `cc` crate picks musl-gcc for a musl target; without it ring's C
       # sources link against the host glibc toolchain.

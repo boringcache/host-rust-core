@@ -8,11 +8,9 @@ import type { HostContext } from "./runner.ts";
 const runtime = globalThis as typeof globalThis & {
   __HOST_API_PORT__: MessagePort;
   __truapi_product_id__: string;
-  __truapi_complete__: (error: string | null) => Promise<void>;
+  __truapi_result?: { error: string | null };
 };
 
-const complete = runtime.__truapi_complete__;
-Reflect.deleteProperty(runtime, "__truapi_complete__");
 const productId = runtime.__truapi_product_id__;
 Reflect.deleteProperty(runtime, "__truapi_product_id__");
 runtime.truapi = createClient(
@@ -35,9 +33,10 @@ try {
   const product = await import(productURL);
   if (typeof product.default === "function")
     await product.default(runtime.host);
-  await complete(null);
+  runtime.__truapi_result = { error: null };
 } catch (error) {
-  await complete(
-    error instanceof Error ? (error.stack ?? error.message) : String(error),
-  );
+  runtime.__truapi_result = {
+    error:
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
+  };
 }

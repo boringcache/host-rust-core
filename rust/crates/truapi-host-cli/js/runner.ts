@@ -35,11 +35,11 @@ function requireEnv(name: string): string {
 async function main() {
   const frameUrl = requireEnv("TRUAPI_FRAME_URL");
   const productId = requireEnv("TRUAPI_PRODUCT_ID");
-  const scriptPath = requireEnv("TRUAPI_SCRIPT");
   const [mode, ...extraArguments] = process.argv.slice(2);
   if (extraArguments.length || (mode && mode !== "--trusted-script")) {
-    throw new Error("runner accepts only --trusted-script");
+    throw new Error("runner accepts --trusted-script");
   }
+  const scriptPath = requireEnv("TRUAPI_SCRIPT");
   if (mode === "--trusted-script") {
     if (process.env.TRUAPI_SCRIPT_CWD)
       process.chdir(process.env.TRUAPI_SCRIPT_CWD);

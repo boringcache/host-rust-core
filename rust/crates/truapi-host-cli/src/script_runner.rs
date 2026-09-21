@@ -58,7 +58,7 @@ const EMPTY_BUN_CONFIG: &str = if cfg!(windows) {
 };
 
 /// Locate the host-script runner.
-fn runner_path() -> PathBuf {
+pub fn runner_path() -> PathBuf {
     resolve_runner(
         std::env::var_os("TRUAPI_HOST_RUNNER"),
         std::env::current_exe().ok().as_deref(),

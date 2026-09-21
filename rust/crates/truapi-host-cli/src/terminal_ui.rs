@@ -49,13 +49,17 @@ const COMPOSER_HORIZONTAL_PADDING: u16 = 1;
 const QR_INDENT: usize = 2;
 const QR_QUIET_ZONE: usize = 4;
 
+/// Choices presented for an action or a permission request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalKind {
+    /// Approve or reject one action.
     Action,
+    /// Allow once, allow always, or deny a permission.
     Permission,
 }
 
 impl ApprovalKind {
+    /// Labels shown beside the approval prompt.
     pub fn choices(self) -> &'static str {
         match self {
             Self::Action => "[y] Approve   [n] Reject",
@@ -63,6 +67,7 @@ impl ApprovalKind {
         }
     }
 
+    /// Interpret an answer using the available choices.
     pub fn parse(self, input: &str) -> Option<PermissionDecision> {
         match self {
             Self::Action => parse_approval(input).map(|approved| {
@@ -631,6 +636,7 @@ impl UiHandle {
         });
     }
 
+    /// Ask the terminal owner for a serialized yes/no decision.
     pub async fn confirm(&self, action: impl Into<String>, detail: impl Into<String>) -> bool {
         self.decide(action, detail, ApprovalKind::Action).await != PermissionDecision::Deny
     }

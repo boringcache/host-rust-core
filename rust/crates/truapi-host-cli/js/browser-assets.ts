@@ -1,9 +1,33 @@
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface BrowserAssets {
   container: string;
   client: string;
   bootstrap: string;
+}
+
+let assets: Promise<BrowserAssets> | undefined;
+
+export function browserAssets(): Promise<BrowserAssets> {
+  return (assets ??= (async () => {
+    const directory = new URL("./sandbox-assets/", import.meta.url);
+    if (await Bun.file(new URL("container.js", directory)).exists()) {
+      const [container, client, bootstrap] = await Promise.all(
+        ["container.js", "client.mjs", "bootstrap.js"].map((name) =>
+          Bun.file(new URL(name, directory)).text(),
+        ),
+      );
+      return { container, client, bootstrap };
+    }
+    if (import.meta.url.endsWith("/runner.js"))
+      throw new Error(
+        "Sandbox assets are missing beside runner.js; reinstall truapi-host",
+      );
+    return buildBrowserAssets(
+      fileURLToPath(new URL("../../../../", import.meta.url)),
+    );
+  })());
 }
 
 export async function buildBrowserAssets(
@@ -31,7 +55,7 @@ export async function buildBrowserAssets(
   }
 
   const [container, client, bootstrap] = await Promise.all([
-    bundle("js/container/src/index.ts", "iife"),
+    bundle("rust/crates/truapi-host-cli/js/browser-sandbox.ts", "iife"),
     bundle("js/packages/truapi/src/index.ts", "esm"),
     bundle("rust/crates/truapi-host-cli/js/browser-bootstrap.ts", "esm", [
       "@parity/truapi",
