@@ -122,6 +122,17 @@ struct RustChatExecutionBridgeTests {
         #expect(api.sentMessages.isEmpty)
     }
 
+    /// The same validation `postMessage` applies: an empty id names no room.
+    @Test func createRoomRejectsAnEmptyRoom() async throws {
+        let api = RecordingChatMessaging()
+        let bridge = await makeBridge(api: api)
+
+        await #expect(throws: HostRejection.self) {
+            try await offPool { try bridge.createRoom(roomId: "", name: "n", icon: "") }
+        }
+        #expect(api.createdRooms.isEmpty)
+    }
+
     @Test func registerBotIsRejected() async throws {
         let api = RecordingChatMessaging()
         let bridge = await makeBridge(api: api)

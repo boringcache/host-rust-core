@@ -30,6 +30,12 @@ final class RustChatExecutionBridge: RustProductExecutionBridge, ChatHostBridge,
 
     func createRoom(roomId: String, name: String, icon: String) throws -> ChatRoomRegistrationStatus {
         logger.debug("[truapi:chat-bridge] createRoom \(roomId)")
+        // Same validation `postMessage` applies: an empty id names no room, and
+        // the chat identifier built from it would be malformed.
+        guard let roomId = roomId.nilIfEmpty else {
+            throw HostRejection.Rejected(reason: "a chat room needs an id")
+        }
+
         let api = chatMessaging
         let result = try awaitBlocking {
             try await api.createRoom(CreateRoomRequest(

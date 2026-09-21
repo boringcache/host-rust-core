@@ -160,6 +160,7 @@ private extension [Modifier] {
         var minHeight: CGFloat?
         var fillWidth = false
         var fillHeight = false
+        var opacity: CGFloat?
 
         for modifier in self {
             switch modifier {
@@ -190,11 +191,12 @@ private extension [Modifier] {
                 fillWidth = enabled
             case let .fillHeight(enabled):
                 fillHeight = enabled
-            // No slot on `CustomMessageWidgetNode.Modifiers`. `opacity` fails open —
-            // a node hidden with `opacity(0)` draws fully — but dropping the node
-            // would move everything around it, so the gap is left to close there.
-            case .opacity,
-                 .blendingMode:
+            case let .opacity(value):
+                // The core sends 0-255, SwiftUI takes 0-1.
+                opacity = CGFloat(value) / 255
+            // No slot on `CustomMessageWidgetNode.Modifiers`, and no compositing
+            // to apply it to: the node draws normally against what is behind it.
+            case .blendingMode:
                 continue
             }
         }
@@ -209,7 +211,8 @@ private extension [Modifier] {
             minWidth: minWidth,
             minHeight: minHeight,
             fillWidth: fillWidth,
-            fillHeight: fillHeight
+            fillHeight: fillHeight,
+            opacity: opacity
         )
     }
 }

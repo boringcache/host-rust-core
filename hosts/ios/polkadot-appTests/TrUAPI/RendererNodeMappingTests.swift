@@ -19,6 +19,27 @@ struct RendererNodeMappingTests {
         return widget.modifiers.padding
     }
 
+    private func opacityOfBox(_ modifiers: [Modifier]) throws -> CGFloat? {
+        let node = RendererNode.box(
+            modifiers: modifiers,
+            props: BoxProps(contentAlignment: nil),
+            children: []
+        )
+        let widget = try #require(node.toWidgetNode(resolver: resolver))
+        return widget.modifiers.opacity
+    }
+
+    @Test func opacityMapsTheCoreRangeOntoSwiftUI() throws {
+        #expect(try opacityOfBox([.opacity(0)]) == 0)
+        #expect(try opacityOfBox([.opacity(255)]) == 1)
+        #expect(try opacityOfBox([.opacity(128)]) == CGFloat(128) / 255)
+    }
+
+    /// No modifier is fully opaque, and the view applies `?? 1` to say so.
+    @Test func noOpacityModifierLeavesItUnset() throws {
+        #expect(try opacityOfBox([]) == nil)
+    }
+
     @Test func everyEdgeIsExplicit() throws {
         let padding = try paddingOfBox(Dimensions(top: 4, end: 8, bottom: 12, start: 16))
 

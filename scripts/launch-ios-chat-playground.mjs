@@ -157,7 +157,10 @@ const appGroup = capture("xcrun", [
   bundle,
   appGroupId(bundle),
 ]).trim();
-const userDataDatabase = resolve(appGroup, "CoreData/UserDataModel.sqlite");
+const userDataDatabaseV2 = resolve(appGroup, "CoreData/UserDataModel_v2.sqlite");
+const userDataDatabase = existsSync(userDataDatabaseV2)
+  ? userDataDatabaseV2
+  : resolve(appGroup, "CoreData/UserDataModel.sqlite");
 const chatIdentifier = `1:${productHost}:${roomId}`;
 const messageWatermark = existsSync(userDataDatabase)
   ? latestMessageId(userDataDatabase, chatIdentifier)

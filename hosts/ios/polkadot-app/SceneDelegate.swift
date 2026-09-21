@@ -130,6 +130,8 @@ extension SceneDelegate {
             ThemeSelectionStorage().setSelected()
             SettingsManager.shared.set(value: true, for: .truApiRuntimeEnabled)
 
+            // A fixed entropy, so a rerun lands on the same identity: every key it
+            // derives is publicly reproducible. Simulator-only and never funded.
             if (try? RootEntropyManager.shared.hasRootEntropy()) != true {
                 try? RootEntropyManager.shared.createRootEntropy(Data(repeating: 0x42, count: 16))
             }

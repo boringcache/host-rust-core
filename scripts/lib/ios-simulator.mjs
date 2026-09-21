@@ -4,8 +4,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-/** Development bundle id of the Polkadot iOS app. */
-export const DEFAULT_BUNDLE = "io.pcf.polkadotapp.develop";
+/** Development bundle id of the Polkadot iOS app: `APP_MAIN_BUNDLE` in `hosts/ios/Configs/base.debug.xcconfig`. */
+export const DEFAULT_BUNDLE = "io.parity.polkadotapp.develop";
 
 /** Default DerivedData location of the sibling polkadot-app-ios-v2 checkout. */
 export function defaultAppPath(repoRoot) {
@@ -15,11 +15,9 @@ export function defaultAppPath(repoRoot) {
   );
 }
 
-/** App-group container id matching the app bundle's configuration. */
+/** App-group container id: the entitlements declare `group.$(APP_MAIN_BUNDLE)`. */
 export function appGroupId(bundle) {
-  return bundle.endsWith(".develop")
-    ? "group.pcf.polkadotapp.develop"
-    : "group.pcf.polkadotapp";
+  return `group.${bundle}`;
 }
 
 /** Read one key from a plist; undefined when the file or key is missing. */
@@ -135,13 +133,16 @@ export function selectSimulatorFromList(simulatorList, requested) {
 
 export function bootAndInstallApp(app) {
   const device = selectSimulator();
-  run(
+  // Only for watching the run: Xcode 27 no longer ships Simulator.app inside
+  // Xcode, and the device boots, installs and screenshots headless without it.
+  const opened = spawnSync(
     "open",
     ["-a", "Simulator", "--args", "-CurrentDeviceUDID", device.udid],
-    {
-      stdio: "ignore",
-    },
+    { stdio: "ignore" },
   );
+  if (opened.status !== 0) {
+    console.warn("Simulator.app not found; running the device headless.");
+  }
   if (device.state !== "Booted") {
     run("xcrun", ["simctl", "boot", device.udid]);
   }

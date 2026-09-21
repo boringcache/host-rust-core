@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { selectSimulatorFromList } from "./ios-simulator.mjs";
+import {
+  DEFAULT_BUNDLE,
+  appGroupId,
+  selectSimulatorFromList,
+} from "./ios-simulator.mjs";
 
 const simulatorList = {
   devices: {
@@ -53,4 +57,12 @@ test("the default falls back to a booted iPhone", () => {
   };
 
   assert.equal(selectSimulatorFromList(withoutPreparedE2E)?.udid, "iphone-26");
+});
+
+test("the app group follows the bundle id, as the entitlements declare it", () => {
+  assert.equal(
+    appGroupId("io.parity.polkadotapp.develop"),
+    "group.io.parity.polkadotapp.develop",
+  );
+  assert.equal(appGroupId(DEFAULT_BUNDLE), `group.${DEFAULT_BUNDLE}`);
 });
