@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -28,6 +29,7 @@ import {
   readPlistValue,
   run,
   runAsync,
+  userDataDatabase,
   waitFor,
 } from "./lib/ios-simulator.mjs";
 
@@ -157,13 +159,10 @@ const appGroup = capture("xcrun", [
   bundle,
   appGroupId(bundle),
 ]).trim();
-const userDataDatabaseV2 = resolve(appGroup, "CoreData/UserDataModel_v2.sqlite");
-const userDataDatabase = existsSync(userDataDatabaseV2)
-  ? userDataDatabaseV2
-  : resolve(appGroup, "CoreData/UserDataModel.sqlite");
 const chatIdentifier = `1:${productHost}:${roomId}`;
-const messageWatermark = existsSync(userDataDatabase)
-  ? latestMessageId(userDataDatabase, chatIdentifier)
+const initialDatabase = userDataDatabase(appGroup);
+const messageWatermark = existsSync(initialDatabase)
+  ? latestMessageId(initialDatabase, chatIdentifier)
   : 0;
 
 const productServer = await startProductServer(
@@ -223,7 +222,7 @@ try {
 
   if (expectDiagnosis) {
     const report = await waitForTextPrefix(
-      userDataDatabase,
+      appGroup,
       chatIdentifier,
       messageWatermark,
       CHAT_DIAGNOSIS_HEADING,
@@ -234,14 +233,14 @@ try {
   } else {
     if (expectedStartupMessage) {
       await waitForTextPrefix(
-        userDataDatabase,
+        appGroup,
         chatIdentifier,
         messageWatermark,
         expectedStartupMessage,
       );
     }
     await waitForTextPrefix(
-      userDataDatabase,
+      appGroup,
       chatIdentifier,
       messageWatermark,
       expectedReply,
@@ -376,9 +375,11 @@ function latestMessageId(database, identifier) {
   return Number.parseInt(value, 10) || 0;
 }
 
-function waitForTextPrefix(database, identifier, afterMessageId, prefix) {
+function waitForTextPrefix(appGroup, identifier, afterMessageId, prefix) {
   return waitFor(
     () => {
+      // Re-resolved per poll: the app may migrate to a new store on launch.
+      const database = userDataDatabase(appGroup);
       if (!existsSync(database)) {
         return undefined;
       }
