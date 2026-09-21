@@ -64,6 +64,8 @@ requests after a bounded deadline; pass `requestTimeoutMs` to `createTransport` 
 
 See [`js/packages/truapi/README.md`](js/packages/truapi/README.md) for the full client reference.
 
+The [permission model](docs/rfcs/0002-permission-model.md) separates outbound domain access from `OpenUrl` external navigation and requires `Notifications` for push delivery. Hosts preserve the user's `AllowOnce`, `AllowAlways`, or `Deny` choice; Rust owns one-use grants for Rust-backed executions.
+
 ## Repository layout
 
 ```
@@ -263,11 +265,12 @@ reaches it through a development-only `<script>` tag:
 ```
 
 The host serves that script itself, so the page needs no package, no imports,
-and no environment variables. It is the same script native webview hosts inject,
-so it installs the same `window.__HOST_API_PORT__`, the SDK adopts it unchanged,
-and a page whose socket dies gets a fresh port rather than needing a reload. TCP frame
-connections are accepted only from loopback peers, and browser WebSocket
-origins must also name localhost or a loopback IP. WebSocket is not subject to
+and no environment variables. It shares the native hosts' bootstrap and preserves
+an existing `window.__HOST_API_PORT__`. If its socket disconnects, it publishes a
+fresh port so the SDK can reconnect without a page reload. App resume preserves
+connections that are still opening. TCP frame connections are accepted only from
+loopback peers, and browser WebSocket origins must also name localhost or a
+loopback IP. WebSocket is not subject to
 CORS, and confirmations here are auto-approved.
 
 The CLI owns the wrapped command's process group on Unix. On shutdown it sends
@@ -297,6 +300,7 @@ where each tree came from and at which revision.
 ```bash
 scripts/refresh-host-import.sh status ios     # how far behind, and what differs
 scripts/refresh-host-import.sh refresh ios    # take the new tree, re-apply adaptations
+scripts/refresh-host-import.sh backport ios   # what this tree owes the source
 ```
 
 `refresh` replaces the tree with the source's, re-applies this repository's
@@ -307,6 +311,15 @@ did not apply or has been adopted upstream.
 
 A clean apply is staged for review. A conflicted one is left unmerged, so git
 refuses to commit it until someone decides which side is right.
+
+`refresh` moves changes one way, from the source into this tree. `backport`
+answers the other direction: of everything this tree has changed, which is app
+code the source does not have. The rest, the CI actions and the manifests that
+resolve the core from here, exists because the tree lives in this repository,
+and is listed per host in `hosts/imports.json` under `infrastructure`.
+
+`--patch <file>` writes the owed changes with the `hosts/<host>/` prefix
+stripped, so they apply at the root of the source repository.
 
 ### Working on the iOS host
 
@@ -362,6 +375,20 @@ Installing it needs the device's UDID in the ad-hoc provisioning profile, which
 is Apple bookkeeping rather than CI. The workflows that register a device and
 regenerate the profile are held until the cutover, tracked on #764; the device
 preview itself is tracked on #681.
+
+### An Android build that installs on a phone
+
+Label a pull request `android-device-build` and `android-device-preview.yml`
+attaches an installable APK to the run. Android needs no provisioning, so it
+installs on any phone rather than only on registered devices, and it is signed
+with the shared develop key so a new build replaces the last one rather than
+asking to be uninstalled first.
+
+It builds the flavour that ships. The other one substitutes stubs for Google
+auth, Firebase auth, push and backup, so a preview built from it cannot sign in.
+A pull request opened from a fork cannot reach the configuration and signing key
+this needs, and is told so rather than handed a build that misleads. Push the
+branch to this repository to get one.
 
 ### Building the standalone iOS host app
 

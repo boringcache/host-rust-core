@@ -10,11 +10,9 @@ pub const PATH: &str = "/bootstrap.js";
 /// renders it for every host. Products reference this from a development-only
 /// `<script>` tag and need no other host-specific code.
 ///
-/// The frame socket carries no session token, and a plain browser tab has no
-/// lockdown container to read the WebRTC policy, so both are rendered empty and
-/// permissive.
+/// The development frame socket requires no session token.
 pub fn script(frame_url: &str) -> String {
-    truapi_server::bootstrap::script(frame_url, "", true)
+    truapi_server::bootstrap::script(frame_url, "")
 }
 
 /// HTTP URL the bridge script is served from, for a frame endpoint that has

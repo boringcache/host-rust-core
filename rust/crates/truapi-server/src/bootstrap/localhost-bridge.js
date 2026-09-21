@@ -1,18 +1,15 @@
 (function() {
   var endpoint = { url: __TRUAPI_BRIDGE_URL__, token: __TRUAPI_BRIDGE_TOKEN__ };
 
-  // A second injection would install a manager competing with the live one.
-  if (window.__truapi_localhost) return;
+  if (window.__HOST_API_PORT__ || window.__truapi_localhost) return;
 
   var bridgeUrl = endpoint.url;
 
   var RETRY_BASE_MS = 250;
-  // Under the SDK's 20s wait for a port, so a rebuild already in progress
-  // always finds one before it gives up.
+  // Keep retries within the SDK's 20s wait for a replacement port.
   var RETRY_MAX_MS = 5000;
   var VACANCY_POLL_MS = 50;
-  // 20s of polling, which is how long the SDK itself waits for a port. Past
-  // that the rebuild we would be publishing for has already given up.
+  // Stop polling when the SDK's 20s port wait has expired.
   var VACANCY_MAX_POLLS = 400;
 
   var live = null;
@@ -21,10 +18,8 @@
   var timer = null;
   var vacancyPolls = 0;
 
-  // The core builds one product runtime per connection, so a port owns its
-  // socket for life: a reconnect publishes a new port rather than redialling
-  // under the old one, whose queued frames and request ids belong to a runtime
-  // that no longer exists.
+  // Each socket has its own core runtime, so frames and request ids cannot
+  // move from a retired port to its replacement.
   function createConnection() {
     var socket = null;
     var started = false;
@@ -52,11 +47,10 @@
         started = true;
 
         try {
-          // The captured URL, not `endpoint.url`: the endpoint object is
-          // reachable from product script, and the container admits exactly
-          // the string it read at load time.
+          // Product code can mutate endpoint.url; the container only admits
+          // the original URL.
           socket = new WebSocket(bridgeUrl);
-        } catch (error) {
+        } catch {
           retire(connection);
           return;
         }
@@ -98,16 +92,14 @@
       port: port,
       retired: false,
       stale: function() {
-        return started && (socket === null || socket.readyState !== WebSocket.OPEN);
+        return socket !== null && socket.readyState >= WebSocket.CLOSING;
       }
     };
 
     return connection;
   }
 
-  // The SDK reports a dead pipe through `onmessageerror`; a real MessagePort
-  // never fires it for that reason, but it is the only close channel a port
-  // has and every shipped product already listens on it.
+  // The SDK uses onmessageerror as the port's close signal.
   function retire(connection) {
     if (connection.retired) return;
     connection.retired = true;
@@ -115,8 +107,7 @@
 
     var notify = connection.port.onmessageerror;
     if (typeof notify === "function") {
-      // Re-entrant: the SDK's cleanup closes this port, which closes this
-      // socket again. The flag above is what stops that recursing.
+      // SDK cleanup closes the socket and can re-enter retire.
       notify();
     }
 
@@ -135,9 +126,7 @@
     timer = null;
     if (paused || live !== null) return;
 
-    // An SDK that could not drop the port it refused still holds it. Writing
-    // over it would hand that same SDK a port it has already rejected, so wait
-    // for the vacancy instead.
+    // The SDK must release its old port before adopting a replacement.
     if (window.__HOST_API_PORT__ !== undefined) {
       if (vacancyPolls < VACANCY_MAX_POLLS) {
         vacancyPolls += 1;
@@ -186,7 +175,6 @@
   }
 
   window.__truapi_localhost = endpoint;
-  window.__truapi_policy__ = { webRtcAllowed: __TRUAPI_WEBRTC_ALLOWED__ };
   window.__HOST_WEBVIEW_MARK__ = true;
   // Assigned once: a product may wrap these and chain to the original, so a
   // later reassignment would silently drop its handler.

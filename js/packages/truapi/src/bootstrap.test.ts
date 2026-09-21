@@ -1,25 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
-/**
- * The bootstrap every native host injects, read from the one source the Rust
- * renderer embeds. Testing the shipped bytes is the point: the logic used to
- * live in a Swift string and a Kotlin string that had already drifted apart.
- */
 const SOURCE = readFileSync(
-    fileURLToPath(
-        new URL(
-            "../../../../rust/crates/truapi-server/src/bootstrap/localhost-bridge.js",
-            import.meta.url,
-        ),
+    new URL(
+        "../../../../rust/crates/truapi-server/src/bootstrap/localhost-bridge.js",
+        import.meta.url,
     ),
     "utf8",
 );
 
 const BRIDGE_URL = "ws://127.0.0.1:9955/?t=token";
 
-/** The shape the bootstrap publishes on `window.__HOST_API_PORT__`. */
 interface HostPort {
     onmessage: ((event: { data: Uint8Array }) => void) | null;
     onmessageerror: (() => void) | null;
@@ -28,12 +19,10 @@ interface HostPort {
     close(): void;
 }
 
-/** Only the globals the bootstrap reads or writes. */
 interface BootstrapWindow {
     __HOST_API_PORT__?: HostPort;
     __HOST_WEBVIEW_MARK__?: boolean;
     __truapi_localhost?: { url: string; token: string };
-    __truapi_policy__?: { webRtcAllowed: boolean };
     __pauseConnections__?: () => void;
     __resumeConnections__?: () => void;
     dispatchEvent(event: { type: string }): boolean;
@@ -63,7 +52,6 @@ class FakeSocket {
 
     constructor(readonly url: string) {}
 
-    /** The bridge accepting the connection. */
     open(): void {
         this.readyState = FakeSocket.OPEN;
         this.onopen?.();
@@ -73,7 +61,6 @@ class FakeSocket {
         this.sent.push(frame);
     }
 
-    /** Both a local `close()` and the peer going away land here, as they do on a real socket. */
     close(): void {
         if (this.readyState === FakeSocket.CLOSED) return;
         this.readyState = FakeSocket.CLOSED;
@@ -81,10 +68,9 @@ class FakeSocket {
     }
 }
 
-function installBootstrap() {
+function installBootstrap(existingPort?: HostPort) {
     const source = SOURCE.replace("__TRUAPI_BRIDGE_URL__", JSON.stringify(BRIDGE_URL))
-        .replace("__TRUAPI_BRIDGE_TOKEN__", JSON.stringify("token"))
-        .replace("__TRUAPI_WEBRTC_ALLOWED__", "false");
+        .replace("__TRUAPI_BRIDGE_TOKEN__", JSON.stringify("token"));
 
     const sockets: FakeSocket[] = [];
     const readyEvents: string[] = [];
@@ -104,6 +90,7 @@ function installBootstrap() {
     }
 
     const win: BootstrapWindow = {
+        __HOST_API_PORT__: existingPort,
         dispatchEvent(event) {
             readyEvents.push(event.type);
             return true;
@@ -149,11 +136,7 @@ function installBootstrap() {
             }
         },
 
-        /**
-         * Adopt the published port exactly as `createMessagePortProvider` and
-         * `getClientSync` do together: install the handlers, start it, and on a
-         * reported close drop the global so a rebuild cannot re-adopt the dead one.
-         */
+        // SDK cleanup closes the port before clearing its global reference.
         adopt(received: Uint8Array[] = []): HostPort {
             const port = win.__HOST_API_PORT__;
             if (!port) throw new Error("the bootstrap published no port");
@@ -169,18 +152,48 @@ function installBootstrap() {
 }
 
 describe("localhost bridge bootstrap", () => {
-    it("publishes the endpoint, the policy and the webview mark at document start", () => {
+    it("preserves a port supplied by another host", () => {
+        const original = installBootstrap();
+        const port = original.win.__HOST_API_PORT__;
+        const host = installBootstrap(port);
+
+        expect({
+            port: host.win.__HOST_API_PORT__,
+            endpoint: host.win.__truapi_localhost,
+            events: host.readyEvents,
+        }).toEqual({ port, endpoint: undefined, events: [] });
+    });
+
+    it("preserves queued requests when resuming before the socket opens", () => {
+        const host = installBootstrap();
+        const port = host.adopt();
+        port.postMessage(Uint8Array.of(1, 2, 3));
+
+        host.win.__pauseConnections__?.();
+        host.win.__resumeConnections__?.();
+        host.sockets[0]!.open();
+
+        expect({
+            port: host.win.__HOST_API_PORT__,
+            sent: host.sockets[0]!.sent,
+            events: host.readyEvents,
+        }).toEqual({
+            port,
+            sent: [Uint8Array.of(1, 2, 3)],
+            events: ["truapi-native-ready"],
+        });
+    });
+
+    it("publishes the endpoint and the webview mark at document start", () => {
         const host = installBootstrap();
 
         expect({
             endpoint: host.win.__truapi_localhost,
-            policy: host.win.__truapi_policy__,
             mark: host.win.__HOST_WEBVIEW_MARK__,
             published: host.win.__HOST_API_PORT__ !== undefined,
             events: host.readyEvents,
         }).toEqual({
             endpoint: { url: BRIDGE_URL, token: "token" },
-            policy: { webRtcAllowed: false },
             mark: true,
             published: true,
             events: ["truapi-native-ready"],
@@ -277,11 +290,6 @@ describe("localhost bridge bootstrap", () => {
         expect(host.delays).toEqual([250, 500, 1000, 2000, 4000, 5000, 5000, 5000]);
     });
 
-    /**
-     * Both hosts already call these on app lifecycle and they are no-ops in rust
-     * mode today, so a foregrounded product waits for a socket error instead of
-     * recovering at once.
-     */
     it("redials on resume without waiting out the backoff, and stays down while paused", () => {
         const host = installBootstrap();
         host.adopt();
