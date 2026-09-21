@@ -5,11 +5,16 @@
 // without anything failing — the bundle would still build, still load, and
 // simply have no signing host in it.
 import { describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { wasmIsBuilt } from "./require-wasm.js";
 
+const packageRoot = dirname(
+  fileURLToPath(new URL("../../package.json", import.meta.url)),
+);
 const testingGlue = fileURLToPath(
   new URL("../../dist/wasm/testing/truapi_server.d.ts", import.meta.url),
 );
@@ -50,5 +55,27 @@ suite("testing wasm bundle", () => {
     expect(readFileSync(webGlue, "utf8")).not.toContain(
       "setGrantAllowancesUnchecked",
     );
+  });
+
+  it("publishes the wasm without its precompressed sidecars", () => {
+    // `.wasm.gz` and `.wasm.br` are for a host app's static server to serve.
+    // Nothing in the package resolves them and no bundler reads them, so in
+    // the tarball they were 23MB every consumer downloaded and never opened.
+    // Checked against the real file list rather than the `files` field, so an
+    // exclusion dropped there fails here too.
+    const listed: { path: string }[] = JSON.parse(
+      execFileSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], {
+        cwd: packageRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    )[0].files;
+    const paths = listed.map((file) => file.path);
+
+    expect(paths.filter((path) => /\.wasm\.(gz|br)$/.test(path))).toEqual([]);
+    // The bundles themselves must still ship, so an exclusion widened to
+    // `*.wasm*` is a failure here rather than a package that loads nothing.
+    expect(paths).toContain("dist/wasm/testing/truapi_server_bg.wasm");
+    expect(paths).toContain("dist/wasm/web/truapi_server_bg.wasm");
   });
 });

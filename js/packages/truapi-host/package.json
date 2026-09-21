@@ -73,6 +73,8 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.wasm.gz",
+    "!dist/**/*.wasm.br",
     "README.md",
     "LICENSE"
   ],
