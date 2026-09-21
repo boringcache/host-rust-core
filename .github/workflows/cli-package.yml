@@ -1,7 +1,7 @@
 # Builds and packages the prebuilt truapi-host archives for macOS arm64 and
-# Linux (x86_64 and arm64). The Linux binary targets musl; the browser runtime
-# still requires its supported host libraries. Every archive lands in the run's
-# artifact store as `cli-<target>`; release-cli.yml is what publishes them.
+# Linux (x86_64 and arm64). The Linux legs target musl so one artifact per
+# architecture runs on any distro. Every archive lands in the run's artifact
+# store as `cli-<target>`; release-cli.yml is what publishes them.
 name: cli-package
 
 on:
@@ -73,15 +73,18 @@ jobs:
           npm ci --ignore-scripts
           ./scripts/codegen.sh
 
-      - name: Bundle the runner
+      - name: Bundle and test the runner
         run: |
           make cli-runner
-          tar -czf target/runner-bundle.tar.gz -C target/dist runner.js sandbox-assets node_modules
+          npm run typecheck:cli
+          bun test js/container/src rust/crates/truapi-host-cli/js/sandbox-bridge.test.ts scripts/cli-runner-package.test.ts
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runner-bundle
-          path: target/runner-bundle.tar.gz
+          path: |
+            target/dist/runner.js
+            target/dist/sandbox-assets/container.js
           if-no-files-found: error
 
       # `codegen.sh` above has just produced these, and carrying them beats
@@ -141,12 +144,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: runner-bundle
-          path: target
-
-      - name: Unpack the runner and browser assets
-        run: |
-          mkdir -p target/dist
-          tar -xzf target/runner-bundle.tar.gz -C target/dist
+          path: target/dist
 
       # `make cli-dist` runs `check-generated` first, which refuses to proceed
       # without these. Untracked since #551, so a fresh checkout has none.
@@ -185,36 +183,20 @@ jobs:
             || { echo "::error::binary reports '${reported}'"; exit 1; }
           archive="target/dist/truapi-host-${VERSION}-${{ matrix.target }}.tar.gz"
           tar -tzf "${archive}" > "${RUNNER_TEMP}/cli-archive-files"
-          for asset in runner.js sandbox-assets/container.js sandbox-assets/client.mjs sandbox-assets/bootstrap.js node_modules/playwright-core/cli.js node_modules/playwright-core/browsers.json node_modules/esbuild-wasm/esbuild.wasm; do
+          for asset in runner.js sandbox-assets/container.js; do
             grep -Fqx "${asset}" "${RUNNER_TEMP}/cli-archive-files" \
               || { echo "::error::archive is missing ${asset}"; exit 1; }
           done
           mkdir -p "${RUNNER_TEMP}/truapi-host-package"
           tar -xzf "${archive}" -C "${RUNNER_TEMP}/truapi-host-package"
 
-      - name: Install browser runtime dependencies
-        if: runner.os == 'Linux'
-        run: bun "${RUNNER_TEMP}/truapi-host-package/node_modules/playwright-core/cli.js" install-deps chromium
-
-      - name: Smoke-test the packaged sandbox
+      - name: Smoke-test the packaged runner
         env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/truapi-browsers
           TRUAPI_HOST_NO_UPDATE: "1"
         run: |
           set -euo pipefail
           package="${RUNNER_TEMP}/truapi-host-package"
-          "${package}/truapi-host" install-browser
-          if [ "${RUNNER_OS}" = "Linux" ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || true)" = "1" ]; then
-            cat > "${RUNNER_TEMP}/truapi-browser-apparmor" <<EOF
-          abi <abi/4.0>,
-          include <tunables/global>
-          profile truapi-cli-release "${PLAYWRIGHT_BROWSERS_PATH}/**/chrome-headless-shell" flags=(unconfined) {
-            userns,
-          }
-          EOF
-            sudo apparmor_parser -r "${RUNNER_TEMP}/truapi-browser-apparmor"
-          fi
-          printf '%s\n' 'assert(typeof Bun === "undefined"); assert(typeof process === "undefined"); console.log("sandbox-ok");' > "${RUNNER_TEMP}/sandbox-smoke.ts"
+          printf '%s\n' 'assert(typeof Bun !== "undefined"); assert(typeof process !== "undefined"); console.log("sandbox-ok");' > "${RUNNER_TEMP}/sandbox-smoke.ts"
           if ! "${package}/truapi-host" pairing-host --script "${RUNNER_TEMP}/sandbox-smoke.ts" --base-path "${RUNNER_TEMP}/sandbox-state" > "${RUNNER_TEMP}/sandbox-smoke.log" 2>&1; then
             cat "${RUNNER_TEMP}/sandbox-smoke.log"
             exit 1

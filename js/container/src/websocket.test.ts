@@ -126,8 +126,9 @@ describe('WebSocket connection permission', () => {
     expect(connections[0]!.closeArguments).toEqual([]);
   });
 
-  it('connects only after consent and reuses that consent for all messages on one socket', () => {
+  it.each(['browser', 'script'])('connects only after consent and reuses it for all messages in %s', (runtime) => {
     const { win, requests, connections } = gated();
+    if (runtime === 'script') delete win.document;
     const socket = new win.WebSocket('https://API.EXAMPLE/chat', ['chat']);
     expect([
       socket.readyState,

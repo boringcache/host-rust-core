@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
-import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -11,10 +11,9 @@ import {
   VersionedRemotePermissionResponse,
   VersionedRemotePermissionError,
 } from "@parity/truapi";
+import { PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION } from "../js/packages/truapi/src/generated/wire-table.ts";
 
 const repository = resolve(import.meta.dir, "..");
-const dependencies = (await Bun.file(join(repository, "package.json")).json())
-  .devDependencies;
 let directory: string;
 
 beforeAll(async () => {
@@ -34,30 +33,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
-});
-
-it("ships each browser asset and the matching browser driver", async () => {
-  const files = [
-    "runner.js",
-    "sandbox-assets/container.js",
-    "sandbox-assets/client.mjs",
-    "sandbox-assets/bootstrap.js",
-    "node_modules/playwright-core/cli.js",
-    "node_modules/playwright-core/browsers.json",
-    "node_modules/esbuild-wasm/esbuild.wasm",
-  ];
-  const sizes = await Promise.all(
-    files.map(async (file) => (await readFile(join(directory, file))).length),
-  );
-  expect(sizes.every((size) => size > 0)).toBe(true);
-  const manifest = await Bun.file(
-    join(directory, "node_modules/playwright-core/package.json"),
-  ).json();
-  expect(manifest.version).toBe(dependencies["playwright-core"]);
-  const builder = await Bun.file(
-    join(directory, "node_modules/esbuild-wasm/package.json"),
-  ).json();
-  expect(builder.version).toBe(dependencies["esbuild-wasm"]);
 });
 
 it("resolves the packaged runner without a source checkout", async () => {
@@ -84,8 +59,12 @@ it("resolves the packaged runner without a source checkout", async () => {
   }
 });
 
-it("runs a TypeScript product with authorized WebSocket access from an isolated package", async () => {
+it("runs installed TypeScript with host access and shared web permissions", async () => {
   const authorizations: unknown[] = [];
+  const decisions: boolean[] = [];
+  const requests: string[] = [];
+  let granted = false;
+  let connections = 0;
   const server = Bun.serve<{ frames: boolean }>({
     hostname: "127.0.0.1",
     port: 0,
@@ -96,9 +75,13 @@ it("runs a TypeScript product with authorized WebSocket access from an isolated 
         })
       )
         return;
-      return new Response(null, { status: 400 });
+      requests.push(new URL(request.url).pathname);
+      return new Response("http-ok");
     },
     websocket: {
+      open(socket) {
+        if (socket.data.frames) connections++;
+      },
       message(socket, message) {
         if (!socket.data.frames) {
           socket.send(message);
@@ -107,9 +90,18 @@ it("runs a TypeScript product with authorized WebSocket access from an isolated 
         const request = decodeWireMessage(
           new Uint8Array(message as Buffer),
         )._unsafeUnwrap();
-        authorizations.push(
-          VersionedRemotePermissionRequest.dec(request.payload.value),
-        );
+        let allowed = true;
+        if (
+          request.payload.methodId ===
+          PERMISSIONS_AUTHORIZE_REMOTE_PERMISSION.method
+        ) {
+          allowed = granted;
+          granted = false;
+          decisions.push(allowed);
+          authorizations.push(
+            VersionedRemotePermissionRequest.dec(request.payload.value),
+          );
+        } else granted = true;
         socket.send(
           encodeWireMessage({
             ...request,
@@ -123,7 +115,7 @@ it("runs a TypeScript product with authorized WebSocket access from an isolated 
                 )
                 .enc({
                   success: true,
-                  value: { tag: "V1", value: { granted: true } },
+                  value: { tag: "V1", value: { granted: allowed } },
                 }),
             },
           })._unsafeUnwrap(),
@@ -135,8 +127,23 @@ it("runs a TypeScript product with authorized WebSocket access from an isolated 
   await writeFile(
     script,
     `
-    assert(typeof process === 'undefined' && typeof Bun === 'undefined');
-    const expected: string = 'packaged-websocket-ok';
+    import { readFileSync, writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    assert(Object.getOwnPropertyDescriptor(globalThis, 'fetch').configurable === false);
+    const expected: string = process.env.PACKAGED_TEST_VALUE!;
+    const report = join(import.meta.dir, 'report.txt');
+    writeFileSync(report, expected);
+    assert(readFileSync(report, 'utf8') === expected);
+    async function allowOnce() {
+      assert((await truapi.permissions.requestRemotePermission({
+        permission: { tag: 'Remote', value: { domains: ['127.0.0.1'] } },
+      }))._unsafeUnwrap().granted);
+    }
+    await allowOnce();
+    assert(await (await fetch('http://127.0.0.1:${server.port}/allowed')).text() === 'http-ok');
+    try { await fetch('http://127.0.0.1:${server.port}/denied'); throw new Error('grant reused'); }
+    catch (error) { assert(error instanceof TypeError); }
+    await allowOnce();
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket('ws://127.0.0.1:${server.port}/echo');
       socket.onopen = () => socket.send(expected);
@@ -154,9 +161,7 @@ it("runs a TypeScript product with authorized WebSocket access from an isolated 
     cwd: tmpdir(),
     env: {
       PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH,
-      PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH,
+      PACKAGED_TEST_VALUE: "packaged-websocket-ok",
       TRUAPI_FRAME_URL: `ws://127.0.0.1:${server.port}/frames`,
       TRUAPI_PRODUCT_ID: "package-test.dot",
       TRUAPI_SCRIPT: script,
@@ -171,17 +176,36 @@ it("runs a TypeScript product with authorized WebSocket access from an isolated 
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
-    expect({ status, output, authorizations }, error).toEqual({
+    expect(
+      {
+        status,
+        output,
+        report: await readFile(join(directory, "report.txt"), "utf8").catch(
+          () => null,
+        ),
+        requests,
+        authorizations,
+        decisions,
+        connections,
+        container:
+          (await readFile(join(directory, "sandbox-assets/container.js")))
+            .length > 0,
+      },
+      error,
+    ).toEqual({
       status: 0,
       output: "packaged-websocket-ok\n",
-      authorizations: [
-        {
-          tag: "V1",
-          value: {
-            permission: { tag: "Remote", value: { domains: ["127.0.0.1"] } },
-          },
+      report: "packaged-websocket-ok",
+      requests: ["/allowed"],
+      decisions: [true, false, true],
+      connections: 1,
+      container: true,
+      authorizations: Array(3).fill({
+        tag: "V1",
+        value: {
+          permission: { tag: "Remote", value: { domains: ["127.0.0.1"] } },
         },
-      ],
+      }),
     });
   } finally {
     clearTimeout(timeout);
@@ -189,66 +213,3 @@ it("runs a TypeScript product with authorized WebSocket access from an isolated 
     server.stop(true);
   }
 }, 20_000);
-
-it("ships a runnable browser installer with its dynamic dependencies", () => {
-  const result = Bun.spawnSync(
-    [
-      process.execPath,
-      join(directory, "node_modules/playwright-core/cli.js"),
-      "--version",
-    ],
-    { cwd: tmpdir() },
-  );
-  expect({
-    status: result.exitCode,
-    output: result.stdout.toString().trim(),
-  }).toEqual({
-    status: 0,
-    output: `Version ${dependencies["playwright-core"]}`,
-  });
-});
-
-it("fails closed when an installed sandbox asset is missing", async () => {
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request, server) {
-      if (server.upgrade(request)) return;
-      return new Response(null, { status: 400 });
-    },
-    websocket: { message() {} },
-  });
-  const asset = join(directory, "sandbox-assets/container.js");
-  const backup = `${asset}.backup`;
-  const script = join(directory, "product.ts");
-  await writeFile(script, 'console.log("product must not run");');
-  await rename(asset, backup);
-  try {
-    const child = Bun.spawn([process.execPath, join(directory, "runner.js")], {
-      cwd: tmpdir(),
-      env: {
-        PATH: process.env.PATH,
-        TRUAPI_FRAME_URL: `ws://127.0.0.1:${server.port}`,
-        TRUAPI_PRODUCT_ID: "package-test.dot",
-        TRUAPI_SCRIPT: script,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [status, output, error] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    expect({ status, output, error }).toEqual({
-      status: 1,
-      output: "",
-      error: expect.stringContaining(
-        "Sandbox assets are missing; run make cli-runner in a source checkout, or reinstall truapi-host",
-      ),
-    });
-  } finally {
-    await rename(backup, asset);
-    server.stop(true);
-  }
-});

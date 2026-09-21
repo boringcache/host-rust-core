@@ -1,13 +1,17 @@
-// Product scripts run in the shared browser container by default.
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
-import { wsProvider } from "./ws-provider.ts";
 import {
   createClient,
   createTransport,
   type ProductAccountId,
   type TrUApiClient,
 } from "../../../../js/packages/truapi/src/index.ts";
+import { createPermissionAuthorization } from "../../../../js/container/src/network-transport.ts";
+import { installFetchGate } from "../../../../js/container/src/network.ts";
+import { installWebSocketGate } from "../../../../js/container/src/websocket.ts";
+import { installXhrGate } from "../../../../js/container/src/xhr.ts";
+import { reportLockdownFailures } from "../../../../js/container/src/freeze.ts";
+import { wsProvider } from "./ws-provider.ts";
 
 /// The host context injected alongside `truapi`. It only exposes what a script
 /// can't get from `truapi` alone: the product id the host serves, so product
@@ -37,13 +41,11 @@ function requireEnv(name: string): string {
   return value;
 }
 
-async function runTrustedScript(
-  frameUrl: string,
-  productId: string,
-  scriptPath: string,
-): Promise<void> {
+async function main() {
+  const frameUrl = requireEnv("TRUAPI_FRAME_URL");
+  const productId = requireEnv("TRUAPI_PRODUCT_ID");
+  const scriptPath = requireEnv("TRUAPI_SCRIPT");
   const provider = wsProvider(frameUrl);
-  const client = createClient(createTransport(provider));
   const context: HostContext = {
     productId,
     productAccount: (index = 0) => ({
@@ -51,7 +53,7 @@ async function runTrustedScript(
       derivationIndex: { tag: "Index", value: index },
     }),
   };
-  globalThis.truapi = client;
+  globalThis.truapi = createClient(createTransport(provider));
   globalThis.host = context;
   globalThis.assert = (condition: unknown, ...message: unknown[]) => {
     if (condition) return;
@@ -64,6 +66,24 @@ async function runTrustedScript(
       .join(" ");
     throw new Error(detail || "assertion failed");
   };
+
+  const NativeMessageEvent = MessageEvent;
+  const port = {
+    postMessage: provider.postMessage.bind(provider),
+    onmessage: null as ((event: MessageEvent) => void) | null,
+    onmessageerror: null as (() => void) | null,
+  };
+  provider.subscribe((data) =>
+    port.onmessage?.(new NativeMessageEvent("message", { data })),
+  );
+  provider.subscribeClose?.(() => port.onmessageerror?.());
+  Object.assign(globalThis, { __truapi_network_port__: port });
+  const authorization = createPermissionAuthorization(globalThis);
+  installFetchGate(globalThis, authorization.network);
+  installWebSocketGate(globalThis, authorization.network);
+  installXhrGate(globalThis, authorization.network);
+  reportLockdownFailures();
+
   const timer = setTimeout(() => {
     console.error(`[runner] timed out connecting to ${frameUrl}`);
     process.exit(2);
@@ -71,32 +91,13 @@ async function runTrustedScript(
   try {
     await provider.opened;
     clearTimeout(timer);
+    if (process.env.TRUAPI_SCRIPT_CWD)
+      process.chdir(process.env.TRUAPI_SCRIPT_CWD);
     const module = await import(pathToFileURL(scriptPath).href);
     if (typeof module.default === "function") await module.default(context);
   } finally {
     clearTimeout(timer);
     provider.dispose();
-  }
-}
-
-async function main() {
-  const frameUrl = requireEnv("TRUAPI_FRAME_URL");
-  const productId = requireEnv("TRUAPI_PRODUCT_ID");
-  const [mode, ...extraArguments] = process.argv.slice(2);
-  if (extraArguments.length || (mode && mode !== "--trusted-script")) {
-    throw new Error("runner accepts --trusted-script");
-  }
-  const scriptPath = requireEnv("TRUAPI_SCRIPT");
-  if (mode === "--trusted-script") {
-    if (process.env.TRUAPI_SCRIPT_CWD)
-      process.chdir(process.env.TRUAPI_SCRIPT_CWD);
-    console.error(
-      "[runner] Trusted script mode: running with host Bun capabilities",
-    );
-    await runTrustedScript(frameUrl, productId, scriptPath);
-  } else {
-    const { runSandboxScript } = await import("./sandbox-runner.ts");
-    await runSandboxScript(frameUrl, productId, scriptPath);
   }
 }
 

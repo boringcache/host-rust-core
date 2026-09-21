@@ -159,7 +159,7 @@ wait_for_auth_session_clear() {
 TRUAPI_HOST_NO_UPDATE=1 NO_COLOR=1 "$BIN" pairing-host \
   --product-id "$PRODUCT_ID" \
   --network "$NETWORK" \
-  --trusted-script --script "$SCRIPT" \
+  --script "$SCRIPT" \
   --base-path "$PAIRING_BASE" \
   --auto-accept >"$PAIRING_LOG" 2>&1 &
 PAIRING_PID=$!

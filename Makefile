@@ -69,10 +69,9 @@ build: check-generated ## Build the Rust workspace and the TypeScript client.
 
 headless: check-generated ## Build the truapi-host CLI and generated TypeScript client.
 	# The client build shells out to tsc, which `ensure-generated.sh` looks for at
-	# the root or in the package. Browser assets also need the workspace dependencies.
-	@{ [ -x node_modules/.bin/tsc ] || [ -x $(TRUAPI_PKG)/node_modules/.bin/tsc ]; } \
-		&& [ -f node_modules/playwright-core/package.json ] \
-		&& [ -f node_modules/esbuild-wasm/package.json ] \
+	# the root or in the package. Install workspace deps when neither is present so
+	# this target works on a checkout that has not run `make setup`.
+	@[ -x node_modules/.bin/tsc ] || [ -x $(TRUAPI_PKG)/node_modules/.bin/tsc ] \
 		|| npm ci --ignore-scripts
 	cargo build -p truapi-host-cli
 	cd $(TRUAPI_PKG) && npm run build
@@ -93,7 +92,8 @@ install: headless ## Install the truapi-host CLI into Cargo's bin dir; use as `m
 # The layout here is what scripts/truapi-host-installer.sh expects to download.
 CLI_INSTALLER_URL := https://raw.githubusercontent.com/paritytech/host-rust-core/main/scripts/truapi-host-installer.sh
 CLI_DIST_DIR := target/dist
-# Published Linux binaries use musl; Chromium has separate host library requirements.
+# Default to the triple that is actually published, not the rustc host: the
+# Linux releases are musl so one artifact per architecture runs anywhere.
 CLI_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p' | sed 's/-linux-gnu$$/-linux-musl/')
 CLI_VERSION ?= $(shell awk -F'"' '/^version = /{print $$2; exit}' rust/crates/truapi-host-cli/Cargo.toml)
 CLI_ARCHIVE = truapi-host-$(CLI_VERSION)-$(CLI_TARGET).tar.gz
@@ -103,7 +103,7 @@ CLI_STAGE = $(CLI_DIST_DIR)/$(CLI_TARGET)
 SHA256 := $(shell command -v sha256sum >/dev/null 2>&1 && echo "sha256sum" || echo "shasum -a 256")
 
 # Generated SDK sources are needed before bundling. CI builds the runner,
-# browser assets and driver once, then reuses them in every target archive.
+# dev container once, then reuses them in every target archive.
 $(CLI_RUNNER):
 	bun scripts/build-cli-runner.ts "$(CLI_DIST_DIR)"
 
@@ -116,8 +116,8 @@ cli-dist: check-generated $(CLI_RUNNER) ## Package truapi-host for CLI_TARGET in
 	rm -rf $(CLI_STAGE)
 	mkdir -p $(CLI_STAGE)
 	cp target/$(CLI_TARGET)/release/truapi-host $(CLI_RUNNER) $(CLI_STAGE)/
-	cp -R $(CLI_DIST_DIR)/sandbox-assets $(CLI_DIST_DIR)/node_modules $(CLI_STAGE)/
-	tar -czf $(CLI_DIST_DIR)/$(CLI_ARCHIVE) -C $(CLI_STAGE) truapi-host runner.js sandbox-assets node_modules
+	cp -R $(CLI_DIST_DIR)/sandbox-assets $(CLI_STAGE)/
+	tar -czf $(CLI_DIST_DIR)/$(CLI_ARCHIVE) -C $(CLI_STAGE) truapi-host runner.js sandbox-assets
 	cd $(CLI_DIST_DIR) && $(SHA256) $(CLI_ARCHIVE) > $(CLI_ARCHIVE).sha256
 	@echo "packaged $(CLI_DIST_DIR)/$(CLI_ARCHIVE)"
 

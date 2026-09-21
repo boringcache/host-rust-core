@@ -41,7 +41,7 @@ run_phase() {
     --product-config "$fixtures/peopl.paseo.json" \
     --product-config "$fixtures/dim2.paseo.json" \
     --auto-accept \
-    --trusted-script --script "$script"
+    --script "$script"
 }
 
 run_phase write peopl.paseo

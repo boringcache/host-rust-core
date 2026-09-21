@@ -18,6 +18,7 @@ import {
   PERMISSIONS_AUTHORIZE_DEVICE_PERMISSION,
 } from '@parity/truapi/wire-table';
 import { createPermissionAuthorization } from './network-transport.js';
+import { installFetchGate } from './network.js';
 
 const build = await Bun.build({
   entrypoints: [new URL('./index.ts', import.meta.url).pathname],
@@ -254,6 +255,20 @@ function browser(
 }
 
 describe('container fetch authorization', () => {
+  it('requires permission for every origin when the runtime has no page URL', async () => {
+    const runtime: typeof globalThis = Object.create(globalThis);
+    const requested: string[] = [];
+    installFetchGate(runtime, (url, decide) => {
+      requested.push(url);
+      decide(false);
+      return () => {};
+    });
+    for (const url of ['https://product.example/', 'https://api.example/']) {
+      await expect(runtime.fetch(url)).rejects.toThrow('Network access is not allowed');
+    }
+    expect(requested).toEqual(['https://product.example/', 'https://api.example/']);
+  });
+
   it('uses one Remote decision per WebSocket connection over either private transport', async () => {
     for (const transport of ['port', 'socket'] as const) {
       const authorized: string[] = [];

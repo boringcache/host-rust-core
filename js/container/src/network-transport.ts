@@ -44,12 +44,12 @@ interface PendingRequest {
   expected: Uint8Array;
   frame: Uint8Array;
   decide: (allowed: boolean) => void;
-  deadline: number;
+  deadline: ReturnType<typeof setTimeout>;
   next?: PendingRequest;
 }
 
 export function createPermissionAuthorization(
-  win: Window & typeof globalThis,
+  win: typeof globalThis,
 ): {
   network: NetworkAuthorization;
   webRtc: WebRtcAuthorization | false;

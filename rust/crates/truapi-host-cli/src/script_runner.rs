@@ -1,4 +1,5 @@
-//! Launches product scripts in the browser sandbox through a trusted Bun runner.
+//! Runs a user host-script under `bun`, driving a host through the injected
+//! `truapi` global.
 //!
 //! The Rust CLI owns the flow: it starts the host, then spawns `js/runner.ts`
 //! (which connects the `@parity/truapi` client to the host and evaluates the
@@ -36,7 +37,9 @@ impl ScriptHostRole {
     }
 }
 
-const SCRATCH_TEMPLATE: &str = r#"// Scripts run in a browser sandbox and can import browser-compatible packages.
+const SCRATCH_TEMPLATE: &str = r#"#!/usr/bin/env bun
+
+// Scripts can use packages installed next to the script or in a parent project.
 
 const result = await truapi.account.getUserId();
 if (!result.isOk()) {
@@ -50,7 +53,6 @@ console.log('user id', result.value);
 /// `@parity/truapi` compiled in, so a downloaded install runs product scripts
 /// without a source checkout.
 const PACKAGED_RUNNER: &str = "runner.js";
-const BROWSER_INSTALLER: &str = "node_modules/playwright-core/cli.js";
 const EMPTY_BUN_CONFIG: &str = if cfg!(windows) {
     "--config=NUL"
 } else {
@@ -96,51 +98,6 @@ fn packaged_runner(executable: &Path) -> Option<PathBuf> {
     }
     let runner = directory.join(PACKAGED_RUNNER);
     runner.is_file().then_some(runner)
-}
-
-fn browser_installer(runner: &Path) -> Result<PathBuf> {
-    let directory = runner.parent().context("runner has no parent directory")?;
-    let installer = directory.join(BROWSER_INSTALLER);
-    if installer.is_file() {
-        return Ok(installer);
-    }
-    if runner
-        .file_name()
-        .is_none_or(|name| name != PACKAGED_RUNNER)
-    {
-        for ancestor in directory.ancestors().skip(1) {
-            let installer = ancestor.join(BROWSER_INSTALLER);
-            if installer.is_file() {
-                return Ok(installer);
-            }
-        }
-    }
-    anyhow::bail!(
-        "browser installer missing beside {}; reinstall truapi-host, or run \
-         `npm ci --ignore-scripts` in a source checkout",
-        runner.display()
-    )
-}
-
-/// Prepare the Chromium runtime matching this installation's runner.
-pub async fn install_browser() -> Result<()> {
-    let installer = browser_installer(&runner_path())?;
-    let status = bun_command(&installer, &std::env::current_dir()?)?
-        .args(["install", "chromium", "--only-shell"])
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .status()
-        .await
-        .context("could not start the browser installer; install Bun and ensure it is on PATH")?;
-    if !status.success() {
-        anyhow::bail!(
-            "browser installation failed ({status}); resolve the installer error and retry \
-             `truapi-host install-browser`"
-        );
-    }
-    Ok(())
 }
 
 /// Create a durable, uniquely-named TypeScript scratch file seeded with the
@@ -228,9 +185,8 @@ pub async fn run(
     product_id: &str,
     script: &Path,
     host_role: ScriptHostRole,
-    trusted_script: bool,
 ) -> Result<ExitStatus> {
-    let mut command = command(frame_url, product_id, script, host_role, trusted_script)?;
+    let mut command = command(frame_url, product_id, script, host_role)?;
     terminal_ui::output_event(SystemEvent::ScriptStarted);
     command
         .status()
@@ -246,7 +202,7 @@ pub async fn run_captured(
     ui: UiHandle,
     host_role: ScriptHostRole,
 ) -> Result<ExitStatus> {
-    let mut command = command(frame_url, product_id, script, host_role, false)?;
+    let mut command = command(frame_url, product_id, script, host_role)?;
     terminal_ui::output_event(SystemEvent::ScriptStarted);
     command
         .stdout(Stdio::piped())
@@ -283,7 +239,6 @@ fn command(
     product_id: &str,
     script: &Path,
     host_role: ScriptHostRole,
-    trusted_script: bool,
 ) -> Result<Command> {
     let runner = runner_path();
     if !runner.exists() {
@@ -302,9 +257,6 @@ fn command(
         .env("TRUAPI_PRODUCT_ID", product_id)
         .env("TRUAPI_SCRIPT", &script)
         .env("TRUAPI_CLI_HOST_ROLE", host_role.as_env_value());
-    if trusted_script {
-        command.arg("--trusted-script");
-    }
     Ok(command)
 }
 
@@ -521,7 +473,7 @@ console.log(JSON.stringify({
     }
 
     #[test]
-    fn scratch_script_describes_the_browser_contract() -> Result<()> {
+    fn scratch_script_starts_as_a_bun_script_with_dependency_free_example() -> Result<()> {
         let temporary = tempfile::tempdir()?;
 
         let script = create_scratch_script(temporary.path())?;
@@ -529,7 +481,9 @@ console.log(JSON.stringify({
 
         assert_eq!(
             contents,
-            r#"// Scripts run in a browser sandbox and can import browser-compatible packages.
+            r#"#!/usr/bin/env bun
+
+// Scripts can use packages installed next to the script or in a parent project.
 
 const result = await truapi.account.getUserId();
 if (!result.isOk()) {
@@ -543,74 +497,38 @@ console.log('user id', result.value);
     }
 
     #[test]
-    fn browser_installer_uses_the_runner_version_without_an_ancestor_fallback() -> Result<()> {
-        let install = tempfile::tempdir()?;
-        let parent_installer = install.path().join(BROWSER_INSTALLER);
-        fs::create_dir_all(parent_installer.parent().unwrap())?;
-        fs::write(&parent_installer, "wrong version")?;
-        let version = install.path().join("versions/current");
-        fs::create_dir_all(&version)?;
-        let runner = version.join(PACKAGED_RUNNER);
-        assert!(browser_installer(&runner).is_err());
-
-        let matching_installer = version.join(BROWSER_INSTALLER);
-        fs::create_dir_all(matching_installer.parent().unwrap())?;
-        fs::write(&matching_installer, "matching version")?;
-        assert_eq!(browser_installer(&runner)?, matching_installer);
-        Ok(())
-    }
-
-    #[test]
-    fn source_browser_installer_resolves_the_checkout_dependency() -> Result<()> {
-        let checkout = tempfile::tempdir()?;
-        let installer = checkout.path().join(BROWSER_INSTALLER);
-        fs::create_dir_all(installer.parent().unwrap())?;
-        fs::write(&installer, "source installer")?;
-        let runner = checkout
-            .path()
-            .join("rust/crates/truapi-host-cli/js/runner.ts");
-        assert_eq!(browser_installer(&runner)?, installer);
-        Ok(())
-    }
-
-    #[test]
     fn host_scripts_are_run_by_bun() -> Result<()> {
         let temporary = tempfile::tempdir()?;
         let script = temporary.path().join("script.ts");
         fs::write(&script, "console.log('hello');\n")?;
 
         let runner = runner_path().canonicalize()?;
-        for trusted_script in [false, true] {
-            let command = command(
-                "ws://127.0.0.1:1234",
-                "example.dot",
-                &script,
-                ScriptHostRole::SigningHost,
-                trusted_script,
-            )?;
-            let command = command.as_std();
-            let arguments = command.get_args().collect::<Vec<_>>();
-            let mut expected = vec![
+        let command = command(
+            "ws://127.0.0.1:1234",
+            "example.dot",
+            &script,
+            ScriptHostRole::SigningHost,
+        )?;
+        let command = command.as_std();
+        assert_eq!(command.get_program(), std::ffi::OsStr::new("bun"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
                 std::ffi::OsStr::new(EMPTY_BUN_CONFIG),
                 std::ffi::OsStr::new("--no-env-file"),
                 std::ffi::OsStr::new("--no-macros"),
                 std::ffi::OsStr::new("--no-install"),
                 std::ffi::OsStr::new("run"),
                 runner.as_os_str(),
-            ];
-            if trusted_script {
-                expected.push(std::ffi::OsStr::new("--trusted-script"));
-            }
-            assert_eq!(command.get_program(), std::ffi::OsStr::new("bun"));
-            assert_eq!(arguments, expected);
-            assert_eq!(command.get_current_dir(), runner.parent());
-            assert_eq!(
-                command
-                    .get_envs()
-                    .find_map(|(key, value)| { (key == "TRUAPI_CLI_HOST_ROLE").then_some(value) }),
-                Some(Some(std::ffi::OsStr::new("signing-host")))
-            );
-        }
+            ]
+        );
+        assert_eq!(command.get_current_dir(), runner.parent());
+        assert_eq!(
+            command
+                .get_envs()
+                .find_map(|(key, value)| { (key == "TRUAPI_CLI_HOST_ROLE").then_some(value) }),
+            Some(Some(std::ffi::OsStr::new("signing-host")))
+        );
         Ok(())
     }
 

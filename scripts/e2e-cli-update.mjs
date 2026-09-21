@@ -17,7 +17,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -77,14 +77,6 @@ async function main() {
   const environment = {
     ...process.env,
     ...installEnvironment(home, release.baseUrl),
-    PLAYWRIGHT_BROWSERS_PATH:
-      process.env.PLAYWRIGHT_BROWSERS_PATH ||
-      (process.platform === "darwin"
-        ? join(homedir(), "Library/Caches/ms-playwright")
-        : join(
-            process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
-            "ms-playwright",
-          )),
   };
 
   try {
@@ -117,20 +109,11 @@ async function main() {
       existsSync(join(root, `versions/${version}/runner.js`)),
       true,
     );
-    for (const asset of [
-      "sandbox-assets/container.js",
-      "sandbox-assets/client.mjs",
-      "sandbox-assets/bootstrap.js",
-      "node_modules/playwright-core/cli.js",
-      "node_modules/playwright-core/browsers.json",
-      "node_modules/esbuild-wasm/esbuild.wasm",
-    ]) {
-      check(
-        `the installed package includes ${asset}`,
-        existsSync(join(root, `versions/${version}`, asset)),
-        true,
-      );
-    }
+    check(
+      "the dev container ships beside the runner",
+      existsSync(join(root, `versions/${version}/sandbox-assets/container.js`)),
+      true,
+    );
     // The checkout's runner imports @parity/truapi by relative path. Running the
     // packaged one from an unrelated directory proves the client is bundled in,
     // so a downloaded install needs no source tree: it reaches its own env check
@@ -148,7 +131,7 @@ async function main() {
     const script = join(home, "script.ts");
     writeFileSync(
       script,
-      'assert(typeof Bun === "undefined"); assert(typeof process === "undefined"); console.log("installed runner reached");\n',
+      'assert(typeof Bun !== "undefined"); assert(typeof process !== "undefined"); console.log("installed runner reached");\n',
     );
     const scriptRun = await run(
       entrypoint,
@@ -239,16 +222,6 @@ async function main() {
     check(
       "the version it was updated from is still on disk",
       existsSync(join(root, `versions/${version}/truapi-host`)),
-      true,
-    );
-    check(
-      "the running version keeps its matching browser driver after an update",
-      existsSync(
-        join(
-          root,
-          `versions/${version}/node_modules/playwright-core/browsers.json`,
-        ),
-      ),
       true,
     );
 
