@@ -1,21 +1,14 @@
-name: BoringCache rolling validation
-run-name: host-rust-core rolling validation at ${{ github.sha }}
+name: BoringCache proxy startup diagnostics
+run-name: Released CLI proxy diagnostics at ${{ github.sha }}
 
 on:
   workflow_dispatch:
-    inputs:
-      series:
-        description: Cache series seeded by the cold and warm validation
-        required: false
-        default: parity-ios-core-20260921-a
-        type: string
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
-  group: host-rust-core-boringcache-validation
+  group: host-rust-core-proxy-diagnostics
   cancel-in-progress: false
 
 env:
@@ -24,22 +17,62 @@ env:
   SCCACHE_IDLE_TIMEOUT: "0"
 
 jobs:
-  commit:
-    name: ${{ matrix.provider }} commit
-    if: github.repository == 'boringcache/host-rust-core' && github.ref == 'refs/heads/boringcache-validation'
-    runs-on: macos-26
-    timeout-minutes: 45
+  diagnostics:
+    if: github.repository == 'boringcache/host-rust-core' && github.ref == 'refs/heads/pr/proxy-startup-diagnostics'
+    name: Runner sample ${{ matrix.sample }}
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
-        provider: [GitHub, BoringCache]
+        sample: [1, 2, 3]
+    runs-on: macos-26
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/boringcache-validation
+      - uses: ./hosts/ios/.github/actions/install
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          provider: ${{ matrix.provider }}
-          phase: commit
-          series: ${{ inputs.series }}
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2
+        with:
+          toolchain: nightly
+          components: rustfmt
+      - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        with:
+          tool: sccache@0.17.0
+      - name: Install released CLI and verify checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/released-cli"
+          cd "$RUNNER_TEMP/released-cli"
+          curl --fail --location --retry 3 --silent --show-error \
+            -o boringcache-macos-universal \
+            https://github.com/boringcache/cli/releases/download/v1.31.0/boringcache-macos-universal
+          printf '%s  %s\n' \
+            44056f5675b9632e3130bcc62fe16b7bf7c583afdfb85fb6b4ece6d6b41f5041 \
+            boringcache-macos-universal | shasum -a 256 --check
+          chmod +x boringcache-macos-universal
+          ./boringcache-macos-universal --version
+          cd "$GITHUB_WORKSPACE"
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+      - name: Measure fresh proxy startups against the existing tag
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_PROXY_DIAGNOSTICS_RESTORE_TOKEN }}
+        run: |
+          python3 .github/boringcache-proxy-diagnostics.py \
+            --binary "$RUNNER_TEMP/released-cli/boringcache-macos-universal" \
+            --output "$RUNNER_TEMP/proxy-diagnostics"
+      - name: Retain diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: proxy-startup-diagnostics-${{ matrix.sample }}
+          path: ${{ runner.temp }}/proxy-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
