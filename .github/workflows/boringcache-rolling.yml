@@ -27,7 +27,7 @@ jobs:
   commit:
     name: ${{ matrix.provider }} commit
     if: github.repository == 'boringcache/host-rust-core' && github.ref == 'refs/heads/boringcache-validation'
-    runs-on: macos-26-xlarge
+    runs-on: macos-26
     timeout-minutes: 45
     strategy:
       fail-fast: false
