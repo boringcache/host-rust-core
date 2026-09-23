@@ -34,10 +34,11 @@ use crate::host_logic::sso::messages::{RemoteMessage, SsoRequestOutcome};
 use crate::host_logic::worker::WorkerLedger;
 use crate::runtime::sso_service::Dispatch;
 use crate::runtime::{
-    ActionChannel, DEFAULT_REMOTE_AUTHORITY_RESPONSE_TIMEOUT, LocalActivation, PairedSsoPeer,
-    PairingHostRole, ProductAuthority, ProductRuntimeHost, ResponderExit, RuntimeServices,
-    SigningHostRole, SigningHostSsoService, disconnect_paired_host, establish_pairing,
-    notify_pairing_allowance_allocation, notify_pairing_failed, respond_to_pairing, resume_pairing,
+    ActionChannel, DEFAULT_REMOTE_AUTHORITY_RESPONSE_TIMEOUT, DevicePairingObserver,
+    LocalActivation, PairedSsoPeer, PairingHostRole, ProductAuthority, ProductRuntimeHost,
+    ResponderExit, RuntimeServices, SigningHostRole, SigningHostSsoService, disconnect_paired_host,
+    establish_pairing, notify_pairing_allowance_allocation, notify_pairing_failed,
+    respond_to_pairing, resume_pairing,
 };
 use crate::subscription::{HostInitiatedSubscriptionManager, Spawner};
 use crate::transport::Transport;
@@ -58,51 +59,7 @@ pub trait FrameSink: Send + Sync {
 /// the frame path and must not fail the operation that produced the event, so a
 /// slow, absent, or crashed debugger only loses the trace, never a session.
 pub trait DebugSink: Send + Sync {
-    /// Hand one event to the sink.
-    ///
-    /// Must not block, and must not panic: `emit` is called from inside the
-    /// inbound and outbound frame paths, so a panic here would otherwise unwind
-    /// into a live dispatch. The core contains a panic at both tap sites
-    /// ([`emit_debug`]) rather than trusting the contract, because the trait is
-    /// public and implementable out-of-repo, and because the profiles that can
-    /// unwind are exactly the ones a developer runs: the workspace defines no
-    /// `[profile.dev]`, so `dev` keeps Cargo's default `panic = "unwind"`, and an
-    /// out-of-repo or test sink can be installed under it. (The only in-repo
-    /// installer is the wasm host, which cannot unwind at all; `truapi-host-cli`
-    /// installs no sink.) Serialize and enqueue only; never do fallible work
-    /// that can `unwrap`/panic on the caller's thread.
-    ///
-    /// The two halves of that contract are NOT equally enforced, and the asymmetry
-    /// is deliberate rather than an oversight. Panics are contained: both tap sites
-    /// go through [`emit_debug`], which wraps the call in `catch_unwind`. Blocking
-    /// is caller-enforced only - nothing here bounds how long `emit` may take.
-    ///
-    /// It is not enforced HERE, at the trait boundary, and that is a choice worth
-    /// stating precisely rather than dressing up. A bounded queue drained by a
-    /// spawned task does solve the realistic case: it bounds per-frame work to a
-    /// serialize-and-push and converts an overloaded debugger into counted trace
-    /// loss. `WsDebugSink` does exactly that, and `services.spawner` is in hand
-    /// where the sink transport is built, so the core could impose it.
-    ///
-    /// What it does not solve is a sink that never yields at all - on wasm32 the
-    /// drain needs the same single-threaded event loop the tap is blocking, so a
-    /// truly hung `emit` stalls regardless. The trait therefore requires the sink to
-    /// own that queue rather than wrapping every sink in one here, which would add a
-    /// hop to the frame path for every well-behaved implementation to defend against
-    /// a case it still cannot fix.
-    ///
-    /// So the cost is stated rather than papered over. Whatever thread installs a
-    /// sink is the thread a hung one blocks, and it blocks all of that thread's
-    /// work: every channel, and the outbound path too, which taps synchronously
-    /// inside `Transport::send` while a dispatch is live. Tap ordering buys nothing
-    /// against a hang; it only decides whether a corrupt frame is still observed.
-    ///
-    /// In practice the wasm sink is installed from a Web Worker entry point, so the
-    /// blast radius is that worker rather than the page - but that is CONVENTION,
-    /// not enforcement: nothing gates sink installation on worker scope, and the
-    /// raw wasm glue is publicly exported, so a main-thread consumer can install one
-    /// and hang the page. A sink that may be slow must own its own queue and return
-    /// immediately.
+    /// Hand one event to the sink. Serialize and enqueue only; never block.
     fn emit(&self, event: DebugEvent);
 }
 
@@ -568,6 +525,14 @@ pub struct SigningHostRuntime {
 }
 
 impl SigningHostRuntime {
+    /// Answer resource allocation as granted without performing it.
+    ///
+    /// For test hosts only, with the `test-host` feature enabled.
+    #[cfg(feature = "test-host")]
+    pub fn set_grant_allowances_unchecked(&self, granted: bool) {
+        self.signing_host.set_grant_allowances_unchecked(granted);
+    }
+
     /// Build a long-lived signing-host runtime around a platform implementation.
     /// Chat is answered `Unsupported`; [`Self::with_chat_platform`] serves it.
     #[instrument(skip_all, fields(runtime.method = "signing_host_runtime.new"))]
@@ -638,6 +603,17 @@ impl SigningHostRuntime {
     #[instrument(skip_all, fields(runtime.method = "signing_host_runtime.set_pocket_platform"))]
     pub fn set_pocket_platform(&self, platform: Arc<dyn PocketPlatform>) -> bool {
         self.services.install_pocket_platform(platform)
+    }
+
+    /// Install the host's [`DevicePairingObserver`], told whenever a device
+    /// finishes pairing with this signing host.
+    ///
+    /// Set-once, so the surface that announces a new device cannot change
+    /// hands between two pairings. Returns whether this call installed it.
+    /// Call it before answering any pairing deeplink.
+    #[instrument(skip_all, fields(runtime.method = "signing_host_runtime.set_device_pairing_observer"))]
+    pub fn set_device_pairing_observer(&self, observer: Arc<dyn DevicePairingObserver>) -> bool {
+        self.services.install_device_pairing_observer(observer)
     }
 
     /// Build a product-facing runtime from this signing host.
@@ -1048,8 +1024,8 @@ pub struct HostAdmin {
 }
 
 impl HostAdmin {
-    /// Test-only access to the product-facing runtime this handle wraps.
-    #[cfg(test)]
+    /// Access the execution's product-facing capabilities and permission grants.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(crate) fn product_runtime(&self) -> &Arc<ProductRuntimeHost> {
         &self.product_runtime
     }
@@ -1616,13 +1592,14 @@ impl SinkTransport {
         // under this guard can unwind, the body being an
         // `Option<(ChannelId, Arc<..>)>` clone.
         //
-        // Two independent reasons that poisoner is already unreachable in what
-        // ships, neither of them the profile. `wasm.rs` is the ONLY non-test
-        // `set_debug_sink` caller in the repo (`truapi-host-cli` installs no sink
-        // at all): the wasm32 target cannot unwind, AND that call site builds a
-        // fresh `SinkTransport` per `product_runtime()` and installs at most once
-        // on it, so `previous` is always `None` and there is no destructor to run
-        // under the lock regardless of profile.
+        // That poisoner is unreachable in what ships, and not because of the
+        // profile. There are two non-test `set_debug_sink` callers: `wasm.rs`, on a
+        // target that cannot unwind, and `truapi-host-cli`'s `DebugTappedRuntime`
+        // behind `--debugger`, which can. Both share the property that actually
+        // closes the hole: each builds a fresh `SinkTransport` per
+        // `product_runtime()` and installs at most once on it, so `previous` is
+        // always `None` and there is no destructor to run under the lock, whatever
+        // the profile or target.
         //
         // The recovery is kept regardless, because this guard sits on the per-frame
         // path in both directions and outside `emit_debug`'s `catch_unwind`, so any
@@ -3310,6 +3287,38 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    /// A second installer must not take over the announcement between two
+    /// pairings.
+    #[test]
+    fn the_device_pairing_observer_is_installed_once() {
+        use truapi_platform::{HostInfo, PlatformInfo, SigningHostConfig};
+
+        struct Inert;
+        impl crate::DevicePairingObserver for Inert {
+            fn device_paired(&self, _device: crate::PairedSsoPeer) {}
+        }
+
+        let config = SigningHostConfig::new(
+            HostInfo {
+                name: "Polkadot Mobile".to_string(),
+                icon: None,
+                version: None,
+                platform: truapi::latest::HostPlatform::Unknown,
+            },
+            PlatformInfo::default(),
+            [0; 32],
+            [0xbb; 32],
+            [0xcc; 32],
+            "paseo".to_string(),
+        )
+        .expect("signing host config is valid");
+        let runtime =
+            SigningHostRuntime::new(Arc::new(StubPlatform::default()), config, test_spawner());
+
+        assert!(runtime.set_device_pairing_observer(Arc::new(Inert)));
+        assert!(!runtime.set_device_pairing_observer(Arc::new(Inert)));
     }
 
     #[test]

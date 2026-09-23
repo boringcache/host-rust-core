@@ -7,7 +7,7 @@ on:
       series:
         description: Cache series seeded by the cold and warm validation
         required: false
-        default: parity-ios-core-20260921-a
+        default: parity-ios-core-20260923-a
         type: string
 
 permissions:

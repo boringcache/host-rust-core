@@ -12,7 +12,7 @@ on:
       series:
         description: Cache series shared by cold, warm, and rolling jobs
         required: false
-        default: parity-ios-core-20260921-a
+        default: parity-ios-core-20260923-a
         type: string
 
 permissions:

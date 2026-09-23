@@ -23,6 +23,9 @@ runs:
         set -euo pipefail
         mkdir -p "$RUNNER_TEMP/validation"
         source_commit=$(cat .github/boringcache-source)
+        if ! git cat-file -e "$source_commit^{commit}"; then
+          git fetch --no-tags https://github.com/paritytech/host-rust-core.git "$source_commit"
+        fi
         git cat-file -e "$source_commit^{commit}"
         git diff --exit-code "$source_commit" -- . \
           ':!.boringcache.toml' \
@@ -97,9 +100,9 @@ runs:
     - name: Configure BoringCache sccache storage
       id: cache
       if: inputs.provider == 'BoringCache'
-      uses: boringcache/one@9ca311f9b247835b3cc87639321c79bac8018145 # v1.31.0
+      uses: boringcache/one@476c7df90bc1e7c2c4066aa7eb31cc057ef7f8d1 # v1.32.0
       with:
-        cli-version: v1.31.0
+        cli-version: v1.32.0
         mode: sccache
         trust-policy: ${{ inputs.phase == 'warm' && 'restore' || 'publish' }}
         fail-on-cache-error: true
